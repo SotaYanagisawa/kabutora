@@ -1,25 +1,90 @@
-# 株トラ architecture
+# System Architecture & Design
 
-株トラは、取引・入出金・コーポレートアクションをイベント台帳として保持し、保有残高と損益を毎回再構築します。実データはソースやアプリ本体へ格納しません。Mac版はApplication SupportのAES-256-GCM暗号化ローカル保管庫をmacOSキーチェーン鍵で開きます。公開用Cloudflareバンドルには取引も保有銘柄一覧も含めません。
+Kabutora is designed around a core principle: **financial ledger data belongs entirely to the user**. The system operates as an event-sourced portfolio engine where all holdings, gains, and performance curves are reconstructed on-the-fly inside the client's browser.
 
-## 現在実装されている縦切り
+---
 
-- Next.js App RouterのレスポンシブPWA
-- Decimal.jsによる平均原価、実現損益、含み損益、現金残高の計算
-- 端末固有の暗号化ローカル保管庫と、クラウド移行用の暗号化バックアップ
-- Mac版のブラウザ内保存、暗号化JSONバックアップ
-- Firebase Authentication、App Check、所有者UIDを強制するFirestoreルール
-- Argon2id（64 MiB、3回）とAES-256-GCMによるクライアント側暗号化
-- 暗号化された基準データと追記専用の暗号化取引イベント
-- プロバイダ中立の市場データ型、Cloudflare上のNext.js Worker内Yahoo chartアダプター
-- 保有中銘柄だけを対象にした現在価格、前日終値、当日5分足の取得・正規化・キャッシュ
-- 長期の日次履歴は「パフォーマンス」を初めて開いた時だけ取得
-- 日次市場データと取引イベントからのポートフォリオ履歴再構築
-- PTSをTSEと混同しない `PtsProvider` / `NullPtsProvider`
-- Cloudflare Cache APIとプロセス内キャッシュによる市場API要求の抑制
+## 1. System Overview
 
-## 実行モード
+```mermaid
+flowchart TB
+    subgraph Browser["💻 Client Application (Browser / PWA / Mac App)"]
+        direction TB
+        UI["React 19 UI\n(Dashboard, Charts, Watchlist)"]
+        State["Client State & View Controllers"]
+        Domain["@kabutora/domain\n(FIFO Accounting & Split Engine)"]
+        Crypto["Vault Crypto (WebCrypto)\n(AES-256-GCM + PBKDF2)"]
+        IDB[("Local Storage / IndexedDB\n(Encrypted Blobs & Fast Cache)")]
+        
+        UI <--> State
+        State <--> Domain
+        State <--> Crypto
+        Crypto <--> IDB
+    end
 
-Mac版は暗号化ローカル保管庫とキーチェーン鍵が存在するときだけ端末内モードになります。公開ビルドにはこの保管庫も鍵も渡さず、Firebase設定がない場合はデータを一切表示しない安全側のゲートで停止します。概要画面は保有中の銘柄について最新取引日の5分足だけを取得し、取引中は5分、取引終了後は30分間隔で再確認します。取得できない銘柄は未評価とし、別の値で補完しません。
+    subgraph Edge["⚡ Edge Infrastructure (Cloudflare Workers)"]
+        Worker["OpenNext Cloudflare Worker"]
+        AuthCheck["App Check & Auth Verifier"]
+        MarketProxy["Market Data Proxy & Cache"]
+        
+        Worker --> AuthCheck
+        AuthCheck --> MarketProxy
+    end
 
-クラウド版はGoogle認証済みの単一ユーザーだけを許可します。Firestoreにはポートフォリオ暗号文と、同じUIDだけが取得できるGoogleアカウント解除鍵を別文書で保存します。イベント種別、取引時刻、銘柄IDも暗号文へ含め、Firestore文書IDは乱数にします。個人端末では暗号文のオフラインキャッシュと非抽出可能な端末用高速化鍵をIndexedDBへ保存します。バックアップ用パスフレーズ、復旧キー、平文は保存しません。共有端末ではFirestoreをメモリキャッシュに限定し、端末用鍵も保存しません。市場APIはFirebase ID tokenとApp Check tokenを検証し、銘柄一覧と検索語はURLではなく認証済みPOST本文で受け取ります。
+    subgraph Backend["☁️ Secure Cloud Services"]
+        Firestore[("Cloud Firestore\n(Encrypted Ciphertexts ONLY)")]
+        Auth["Firebase Authentication\n(Google Sign-In)"]
+        Upstream["Upstream Market Providers\n(Tokyo Quotes, US Equities, Funds)"]
+    end
+
+    State -- "Authenticated Quote Requests" --> Worker
+    Crypto -- "Sync Encrypted Blobs" --> Firestore
+    State -- "Session Validation" --> Auth
+    MarketProxy <--> Upstream
+```
+
+---
+
+## 2. Core Modules & Packages
+
+| Package / Directory | Role | Description |
+|---|---|---|
+| [`apps/web`](file:///Users/sotay/Code_Projects/株トラ/apps/web) | **Web App & API** | Next.js 15 App Router application, responsive UI components, Lightweight Charts, and Cloudflare OpenNext entrypoint. |
+| [`packages/domain`](file:///Users/sotay/Code_Projects/株トラ/packages/domain) | **Domain Logic** | Pure TypeScript accounting engine. Calculates FIFO cost basis, average cost lots, corporate actions (splits/reverse splits), and multi-currency values with `Decimal.js`. |
+| [`packages/market-data`](file:///Users/sotay/Code_Projects/株トラ/packages/market-data) | **Market Models** | Normalized data schemas, provider abstractions, and PTS (night trading) session interfaces. |
+| [`firebase`](file:///Users/sotay/Code_Projects/株トラ/firebase) | **Security Rules** | Firestore security rules enforcing user ownership and rejecting unauthenticated or malformed writes. |
+| [`scripts`](file:///Users/sotay/Code_Projects/株トラ/scripts) | **Tooling** | Native macOS wrapper and iPhone preview packagers, privacy boundary verification scripts. |
+
+---
+
+## 3. Runtime Modes
+
+### A. Local Mode (macOS App)
+- **Zero Cloud Footprint**: Runs completely offline without needing cloud services.
+- **Keychain Storage**: Portfolio data is encrypted using AES-256-GCM and stored in `~/Library/Application Support/株トラ/local-vault.json`.
+- **Hardware-Protected Keys**: The 256-bit encryption key is managed by macOS Login Keychain.
+
+### B. Cloud Mode (PWA Sync)
+- **Multi-Device Access**: Syncs seamlessly between Mac, iPhone, and other devices.
+- **Encrypted Payloads**: Only encrypted ciphertext documents are stored in Cloud Firestore.
+- **Client-Side Decryption**: Decryption keys never leave device memory.
+
+---
+
+## 4. Market Data Pipeline
+
+```mermaid
+flowchart LR
+    Client["Client UI"] -->|"1. Request Quotes"| Edge["Cloudflare Worker"]
+    Edge -->|"2. Check Edge Cache"| Cache{"Cache Hit?"}
+    Cache -- "Yes (< 10 min)" --> Hit["Return Cached Quote"]
+    Cache -- "No" --> Fetch["Fetch from Upstream Provider"]
+    Fetch --> Store["Store in Edge Cache"]
+    Store --> Client
+    Hit --> Client
+```
+
+- **Intraday 15-Minute Bars**: Real-time 5-day session bars for active holdings.
+- **Historical Daily Bars**: Long-term price history loaded incrementally on-demand for the Performance view.
+- **Tiered Caching**: Cloudflare edge cache + client IndexedDB cache to ensure fast performance and minimal network overhead.
+

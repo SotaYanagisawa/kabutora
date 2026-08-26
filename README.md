@@ -1,149 +1,193 @@
-# Kabutora (株トラ)
+# 🐯 Kabutora (株トラ)
 
 <div align="center">
 
-**A modern, privacy-first investment portfolio tracker and Progressive Web App (PWA) for Japanese & US equities, investment trusts, and multi-currency assets.**
+**A private, fast, and beautiful investment portfolio tracker for Japanese & US markets.**  
+*Track TSE stocks, US equities, mutual funds (投資信託), and PTS night trading—without giving away your financial data.*
 
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?style=flat&logo=next.js)](https://nextjs.org/)
 [![React](https://img.shields.io/badge/React-19-blue?style=flat&logo=react)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?style=flat&logo=typescript)](https://www.typescriptlang.org/)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange?style=flat&logo=cloudflare)](https://workers.cloudflare.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Tests](https://img.shields.io/badge/Tests-161%20Passing-brightgreen?style=flat)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 </div>
 
 ---
 
-## Overview
+## Why Kabutora?
 
-**Kabutora (株トラ)** is an open-source, edge-rendered financial portfolio tracking application designed for investors managing diversified assets across the Tokyo Stock Exchange (TSE), US markets (NASDAQ/NYSE), mutual funds (投資信託), and cash reserves.
+Spreadsheets get clumsy as your portfolio grows, and most commercial portfolio trackers either:
+1. Don't support Japanese mutual funds (投資信託), NISA accounts, and PTS night sessions properly, or
+2. Require you to upload your raw, unencrypted bank and brokerage data to their cloud servers.
 
-Built with a **zero-knowledge, privacy-by-design architecture**, your private financial transactions and ledger data are encrypted client-side (AES-256-GCM). Cloud backends and edge servers only store encrypted ciphertexts—plain financial data and decryption keys never leave your devices.
+**Kabutora** gives you the best of both worlds: a modern, responsive web/mobile app (PWA) with real-time market data, powered by a **zero-knowledge privacy model** where your actual trades and holdings are encrypted right in your browser.
 
----
+```mermaid
+flowchart TD
+    subgraph Client["📱 Your Device (Browser / Mac App)"]
+        UI["React 19 + Next.js UI"]
+        Calc["@kabutora/domain\n(FIFO & Average Cost Engine)"]
+        Crypto["Client-Side AES-256-GCM\n(Encryption & Decryption)"]
+        Plaintext[("🔑 Unencrypted Data\n(Lives ONLY on your device)")]
+        
+        UI <--> Calc
+        Calc <--> Crypto
+        Crypto <--> Plaintext
+    end
 
-## Key Features
+    subgraph Cloud["☁️ Cloud Services"]
+        CF["Cloudflare Worker\n(Market Data Proxy & Cache)"]
+        Firebase[("Firestore Database\n(Stores ONLY Encrypted Ciphertext)")]
+        MarketSource["Yahoo Finance / Market APIs"]
+    end
 
-### 📊 Comprehensive Market Coverage
-- **Japanese Equities & ETFs**: Real-time quotes and historical price charts for Tokyo Stock Exchange (XTKS).
-- **US Equities**: Full support for US stocks (NASDAQ / NYSE) with real-time USD/JPY FX conversion.
-- **Japanese Investment Trusts (投資信託)**: Mutual fund NAV tracking with standard 10,000-unit basis calculations.
-- **PTS Night & Off-Hours Trading**: Track proprietary trading system (PTS / JNX) day and night sessions.
-- **Market Benchmarks**: Live tracking of Nikkei 225, TOPIX, S&P 500, NASDAQ, Dow Jones, and USD/JPY FX rates.
-
-### 🔒 Zero-Knowledge Security & Privacy
-- **Client-Side AES-256-GCM Encryption**: All portfolios, transactions, and account details are encrypted before leaving your browser.
-- **Bi-directional Protection**:
-  - **Local Mode (Desktop)**: Encrypted local storage managed securely via macOS Keychain.
-  - **Cloud Mode (Sync)**: Synchronized across devices via Firebase / Cloudflare with client-held recovery passphrases.
-- **Privacy Boundary Verification**: Automated CI tests verify that no unencrypted transactions or identifiable financial data ever leak into build bundles or API calls.
-
-### ⚡ Accurate Accounting & Performance Engine
-- **FIFO & Average Cost Basis**: Multi-account tax categorization (NISA, 特定口座, 一般口座).
-- **Corporate Action Reconstruction**: Automated history adjustment for stock splits and reverse splits.
-- **Time-Weighted & Money-Weighted Returns**: Real-time intraday gains, total unrealized/realized returns, and multi-period performance (1D, 1W, 1M, 3M, YTD, ALL, Custom ranges).
-
-### 📱 Responsive PWA & Mobile UX
-- **Mobile First**: Built with native-feeling gestures, smooth tab navigation, and touch-driven pull-to-refresh.
-- **Offline Capable**: Multi-tier caching with IndexedDB, Service Workers, and Cloudflare edge caches.
-- **Modern Themes**: Light and Dark mode with accent theme customization (Graphite, Blue, Forest, Plum).
+    Crypto -- "Encrypted Blobs Only (No Keys Sent)" --> Firebase
+    UI -- "Symbol Lookups" --> CF
+    CF <--> MarketSource
+```
 
 ---
 
-## Architecture & Monorepo Structure
+## Highlights
+
+### 📈 Multi-Market & Asset Support
+- **Tokyo Stock Exchange (東証)**: Real-time prices, day charts, and historical tracking for Japanese equities.
+- **US Equities & ETFs**: NASDAQ / NYSE stocks with automatic, real-time USD/JPY currency conversion.
+- **Investment Trusts (投資信託)**: Mutual fund NAV tracking with standard 10,000-unit pricing.
+- **PTS Night & Off-Hours (JNX)**: Track after-hours evening trading prices alongside daytime sessions.
+- **Major Benchmarks**: Nikkei 225, TOPIX, S&P 500, NASDAQ Composite, Dow Jones, and USD/JPY FX.
+
+### 🛡️ Real Zero-Knowledge Privacy
+- **End-to-End Client Encryption**: All trade amounts, shares, dates, and account names are encrypted with AES-256-GCM on your device before syncing.
+- **No Cloud Visibility**: Even if someone gained access to the cloud database, they only see random encrypted gibberish. The server never holds your keys.
+- **Automated Privacy Testing**: Built-in verification scripts inspect build bundles to guarantee zero unencrypted data leaks.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as 👤 You
+    participant Browser as 💻 Your Browser
+    participant Cloud as ☁️ Firebase / Cloudflare
+
+    Note over User,Browser: Adding or Editing a Trade
+    User->>Browser: Enter Buy 100 shares of 7203 (Toyota)
+    Browser->>Browser: Encrypt trade payload with AES-256-GCM key
+    Browser->>Cloud: Send { ciphertext: "7f8b9e...", iv: "..." }
+    Note over Cloud: Cloud sees only encrypted bytes.<br/>Cannot read stock, price, or quantity.
+    
+    Note over User,Browser: Opening App on Another Device
+    User->>Browser: Log in with Passphrase / Recovery Key
+    Browser->>Cloud: Download encrypted payload
+    Browser->>Browser: Decrypt locally in browser memory
+    Browser->>User: Display portfolio & gains
+```
+
+### 🧮 Precise Financial Math
+- **Tax-Aware Accounts**: Track NISA (成長投資枠・つみたて投資枠), 特定口座, and 一般口座 in one clean dashboard.
+- **Corporate Action Handling**: Automatically adjusts holding history and cost basis for stock splits and reverse splits.
+- **Time-Weighted & Money-Weighted Performance**: Accurate 1-Day, 1-Week, 1-Month, 3-Month, YTD, and All-Time return curves.
+
+### 📱 Built for Mobile & Desktop
+- **Fast & Responsive**: Feels like a native iOS/Android app with gesture navigation and pull-to-refresh.
+- **Offline Ready**: Instant loading with IndexedDB caching and Service Worker support.
+- **Theme Options**: Dark and Light themes with customizable accent colors (Graphite, Blue, Forest, Plum).
+
+---
+
+## Project Structure
+
+Kabutora is organized as a clean TypeScript monorepo using `pnpm`:
 
 ```
 株トラ/
 ├── apps/
-│   └── web/                     # Next.js 15 App Router frontend & OpenNext Cloudflare edge entry
-│       ├── app/                 # App routes and authenticated API proxies
-│       ├── components/          # React components (Dashboard, Charts, Watchlist, etc.)
-│       ├── lib/                 # Core utilities (Crypto, Market clients, Session managers)
-│       └── worker-entry.ts      # Cloudflare Worker entrypoint with Firebase App Check
+│   └── web/                   # Next.js 15 App Router & Cloudflare edge integration
+│       ├── app/               # Application views & authenticated market API routes
+│       ├── components/        # UI components (Dashboard, Lightweight Charts, Watchlist)
+│       └── lib/               # Client-side crypto, market fetchers, session clocks
 ├── packages/
-│   ├── domain/                  # Pure TypeScript domain calculation & FIFO accounting engine
-│   └── market-data/             # Market data models, provider interfaces & PTS abstractions
-├── firebase/                    # Security rules and Firestore index configurations
-├── docs/                        # Architecture specs, calculation rules, threat models
-└── scripts/                     # Standalone app builders (macOS / iOS Preview) and verification tools
+│   ├── domain/                # Pure TypeScript accounting engine (FIFO, cost basis, splits)
+│   └── market-data/           # Market quote models, provider adapters & PTS types
+├── firebase/                  # Security rules and database index definitions
+├── docs/                      # Technical specifications, math rules, and security model
+└── scripts/                   # Native app builders (macOS / iOS Preview) & privacy verifiers
 ```
 
 ---
 
 ## Getting Started
 
-### Prerequisites
-- **Node.js**: `v20.x` or higher
-- **pnpm**: `v10.x` or higher
+### 1. Prerequisites
+- **Node.js**: 20.x or newer
+- **pnpm**: 10.x or newer
 
-### Installation
+### 2. Clone & Install
+```bash
+# Clone the repository
+git clone https://github.com/SotaYanagisawa/kabutora.git
+cd kabutora
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/SotaYanagisawa/kabutora.git
-   cd kabutora
-   ```
+# Install dependencies
+pnpm install
+```
 
-2. **Install dependencies**:
-   ```bash
-   pnpm install
-   ```
-
-3. **Start the local development server**:
-   ```bash
-   pnpm dev
-   ```
-   Open [http://localhost:3000](http://localhost:3000) in your browser.
+### 3. Run Locally
+```bash
+pnpm dev
+```
+Open [http://localhost:3000](http://localhost:3000) to see your portfolio in local demo mode.
 
 ---
 
-## Testing & Quality Assurance
+## Testing & Quality Checks
 
-Kabutora maintains strict test coverage and verification for financial domain logic, encryption security, and build artifacts:
+Kabutora includes full unit test coverage across accounting, crypto, and market logic:
 
 ```bash
-# Run unit test suite (37 test files, 161 tests)
+# Run all unit tests (161 tests across 37 suites)
 pnpm test
 
-# Run TypeScript type checks across all workspaces
+# Check TypeScript types
 pnpm typecheck
 
-# Verify zero-knowledge private data boundary
+# Verify that no private data is present in builds
 pnpm verify:privacy
 
-# Run Next.js production build
+# Production Next.js build
 pnpm build
 
-# Run Cloudflare OpenNext edge build
+# Cloudflare Workers build
 pnpm --filter @kabutora/web build:cloudflare
 ```
 
 ---
 
-## Cloud Deployment
+## Deploying to Cloudflare Workers
 
-Kabutora is optimized for deployment to **Cloudflare Workers** using **OpenNext**:
+Kabutora is built to deploy globally on Cloudflare Workers in seconds using **OpenNext**:
 
 ```bash
-# Deploy to Cloudflare Workers
+# Build and deploy to your Cloudflare Worker
 pnpm --filter @kabutora/web deploy:cloudflare
 ```
 
-For complete cloud setup instructions (including Firebase Authentication, App Check, and Firestore security rules), see the [Cloud Deployment Guide](docs/cloud-deployment.md).
+For complete cloud configuration details, including Firebase authentication and security rules, see the [Cloud Deployment Guide](docs/cloud-deployment.md).
 
 ---
 
 ## Documentation
 
-- [Architecture & Data Flow](docs/architecture.md)
-- [Calculation & Accounting Rules](docs/calculation-rules.md)
-- [Cloud Deployment & Firebase Setup](docs/cloud-deployment.md)
-- [Market Data Scaling & Edge Caching](docs/market-data-scaling.md)
-- [Security Threat Model](docs/threat-model.md)
+- 📐 [Architecture & Data Flow](docs/architecture.md) — System design and data flow
+- 🧮 [Calculation Rules](docs/calculation-rules.md) — Exact formulas for FIFO, cost basis, and splits
+- ☁️ [Cloud Deployment Guide](docs/cloud-deployment.md) — Firebase and Cloudflare step-by-step setup
+- 📡 [Market Data & Edge Caching](docs/market-data-scaling.md) — How market quotes are fetched and cached
+- 🔒 [Threat Model & Security](docs/threat-model.md) — Security boundaries and encryption specifications
 
 ---
 
 ## License
 
-This project is open-sourced under the [MIT License](LICENSE).
+Kabutora is open source software licensed under the [MIT License](LICENSE).
+

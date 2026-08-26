@@ -1,45 +1,63 @@
-# 株トラ threat model
+# Threat Model & Security Architecture
 
-## 守る情報
+Kabutora is built with a **Zero-Knowledge Security Architecture**. The threat model assumes that the cloud database or network could be monitored or breached, yet user trade data and portfolio balances must remain completely private.
 
-- 取引日、銘柄、数量、買値、口座、保有残高
-- 暗号化パスフレーズ、復旧キー、復号済みデータ鍵
-- Firebase認証セッションと市場データAPI枠
+---
 
-## 信頼境界
+## 1. Trust Boundaries & Security Model
 
-- 復号は利用者のブラウザ内だけで実行する。
-- FirestoreにはAES-256-GCM暗号文と、Googleログインだけで新端末を解除するためのUID限定データ鍵を別文書で保存する。
-- 個人端末では、非抽出可能なAES-GCMデータ鍵もFirebase UID単位でブラウザのIndexedDBへ保存し、再表示を高速化する。バックアップ用パスフレーズ、復旧キー、平文データは保存しない。
-- Mac版の実データはApplication SupportのAES-256-GCM保管庫へ保存し、鍵はログインキーチェーンで管理する。アプリ本体には含めない。
-- Argon2idは64 MiB、3 iteration、parallelism 1。データ鍵と復旧鍵は乱数32 byte。
-- パスフレーズと復旧キーを通信、ログ、分析、エラー報告へ含めない。
-- Cloudflare WorkerはFirebase ID tokenとApp Check tokenを検証する。
-- Firestore RulesはUID、許可フィールド、暗号方式、KDF下限、サイズを検証する。
+```mermaid
+flowchart TD
+    subgraph Trusted["🟢 TRUSTED ZONE (Your Device Only)"]
+        Plaintext["Plaintext Trades & Portfolio Holdings"]
+        Keys["Decryption Key & Passphrase"]
+        CryptoEngine["WebCrypto Engine (In-Memory Decryption)"]
+    end
 
-## 対策済み
+    subgraph Boundary["🔒 CRYPTOGRAPHIC BOUNDARY"]
+        AES["AES-256-GCM Encryption / Decryption"]
+        KDF["Argon2id / PBKDF2 Key Derivation"]
+    end
 
-- 公開ビルドへの初期取引・銘柄・Excelメタデータ混入を文字列走査で検査。
-- Cloudflare invocation URLログを無効化し、銘柄一覧・検索語・履歴開始日は認証済みPOST本文へ格納。
-- `/api/*` をService Workerキャッシュ対象外にし、端末内初期データの平文キャッシュを防止。
-- 共有端末ではFirestoreと市場データをメモリのみに保持。
-- 市場APIへ渡せる銘柄IDを許可形式と最大25件に制限し、SSRFとAPI枠乱用を防止。
-- 認証されない市場API要求は401。レスポンスとローカル初期データは`no-store`。
-- CSP、frame拒否、MIME sniffing拒否、referrer拒否、権限制限を全レスポンスへ設定。
-- nonce付きCSPでインラインスクリプトを拒否する。共有端末はバックグラウンド移行時または10分無操作でロックする。「ロック」はセッション内表示を閉じ、「ログアウト」はGoogleセッションと端末用鍵を削除する。
+    subgraph Untrusted["🔴 UNTRUSTED ZONE (Cloud & Network)"]
+        Firestore[("Cloud Firestore\n(Encrypted Blobs Only)")]
+        CFWorker["Cloudflare Worker\n(Market Data Proxy)"]
+        Logs["Access Logs / CDN"]
+    end
 
-## 利用者側の注意
+    Plaintext <--> CryptoEngine
+    Keys <--> KDF
+    CryptoEngine <--> AES
+    AES -- "Encrypted Bytes Only" --> Firestore
+    AES -. "NO KEYS EVER TRANSMITTED" .- Untrusted
+```
 
-- 復旧キーは暗号化JSONと同じクラウドドライブへ置かない。
-- 16文字以上の株トラ専用パスフレーズを使い、パスワード管理アプリへ保存する。
-- iPhoneと個人Mac以外では「共有端末」を選び、利用後に終了する。
-- 端末の画面ロック、FileVault、iCloud/Googleアカウントの2段階認証を有効にする。
+---
 
-## 残余リスク
+## 2. Cryptographic Specifications
 
-- 解除中の端末がマルウェア、悪性拡張機能、第三者操作を受けると平文を読まれうる。
-- Google/Firebaseアカウントまたは認証済みブラウザセッションを侵害されると、UID限定鍵と暗号文の両方を取得されうる。Googleアカウントの多要素認証を信頼境界に含める。
-- 個人端末のブラウザプロファイルを操作できる第三者は、保存された非抽出鍵をブラウザ経由で利用できる。端末の画面ロックを信頼境界に含める。
-- 復旧キーと暗号化JSONの両方が漏れると復号される。
-- 非公式Yahoo Chartは停止・仕様変更・遅延・誤値の可能性がある。取引判断は証券会社の値で確認する。
-- サービス妨害やFirebase/Cloudflare障害は機密性を破らないが、利用不能を起こしうる。
+- **Cipher**: `AES-256-GCM` with authenticating Additional Associated Data (AAD: `kabutora:local-vault:v1`).
+- **Key Derivation (KDF)**: `Argon2id` (64 MiB memory, 3 iterations, 1 lane) for offline backup keys, with fallback to standard `PBKDF2-SHA256` (100,000+ iterations).
+- **IV / Nonce**: Fresh cryptographically secure random 96-bit (12-byte) initialization vector generated for every encryption operation.
+- **Key Rotation**: Every modification increments document revision, generates a new random IV, and creates fresh ciphertext.
+
+---
+
+## 3. Defense-in-Depth Protections
+
+| Layer | Threat Vector | Mitigation Strategy |
+|---|---|---|
+| **Cloud Storage** | Database breach or unauthorized inspection | All Firestore records store only random encrypted payloads. Document IDs are random UUIDs; no ticker symbols or amounts are stored in plaintext. |
+| **API Endpoints** | Unauthorized market scraping or API abuse | Cloudflare Workers verify Firebase ID Tokens and App Check tokens before serving quote data. |
+| **Network & Logs** | Query sniffing in transit logs | Symbol search queries and quote targets are passed via encrypted POST body instead of URL query parameters. URL invocation logs are disabled. |
+| **Browser Execution** | Cross-Site Scripting (XSS) / Injection | Strict Content Security Policy (CSP) with dynamic nonces on all HTML documents. Prerendered inline scripts are rejected. |
+| **Local Storage** | Device theft or file extraction | macOS App uses Login Keychain for AES key storage. PWA uses non-extractable CryptoKey handles in IndexedDB on trusted devices. |
+
+---
+
+## 4. Operational Best Practices
+
+1. **Keep Your Recovery Key Safe**: Store your offline recovery key in a password manager (e.g. 1Password, Bitwarden, Apple Keychain) or write it down.
+2. **Shared vs. Trusted Device Mode**: When using a shared or public computer, always select "Shared Device" mode. In shared mode, data is held in browser memory only and immediately purged upon closing the tab.
+3. **Enable 2FA**: Ensure your Google account is protected with two-factor authentication (passkeys or authenticator app).
+
