@@ -1,9 +1,0 @@
-{
-  "name": "@kabutora/market-worker",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Reserved workspace. Market routes are deployed with the authenticated OpenNext Worker.",
-  "dependencies": {
-    "@kabutora/market-data": "workspace:*"
-  }
-}

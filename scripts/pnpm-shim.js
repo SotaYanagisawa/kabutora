@@ -5,17 +5,24 @@ const path = require("path");
 
 const args = process.argv.slice(2);
 
+function getEnv() {
+  const localBin = path.resolve(process.cwd(), "node_modules/.bin");
+  const parentBin = path.resolve(process.cwd(), "../../node_modules/.bin");
+  const rootBin = path.resolve(__dirname, "../node_modules/.bin");
+  const pathParts = [localBin, parentBin, rootBin, process.env.PATH || ""].filter(Boolean);
+  return { ...process.env, PATH: pathParts.join(path.delimiter) };
+}
+
 // Handle `pnpm exec <command> ...`
 if (args[0] === "exec") {
   const cmd = args[1];
   const restArgs = args.slice(2);
-  // Look for bin in current node_modules/.bin or parent node_modules/.bin
   const localBin = path.resolve(process.cwd(), "node_modules/.bin", cmd);
   const parentBin = path.resolve(process.cwd(), "../../node_modules/.bin", cmd);
   const rootBin = path.resolve(__dirname, "../node_modules/.bin", cmd);
   const binToRun = fs.existsSync(localBin) ? localBin : (fs.existsSync(parentBin) ? parentBin : (fs.existsSync(rootBin) ? rootBin : cmd));
   try {
-    execSync(`${binToRun} ${restArgs.map(a => `"${a}"`).join(" ")}`, { stdio: "inherit", env: process.env });
+    execSync(`${binToRun} ${restArgs.map(a => `"${a}"`).join(" ")}`, { stdio: "inherit", env: getEnv() });
     process.exit(0);
   } catch (err) {
     process.exit(err.status || 1);
@@ -31,7 +38,7 @@ if (args[0] === "--filter" && args[1] === "@kabutora/web") {
     if (pkg.scripts && pkg.scripts[scriptName]) {
       process.chdir(path.dirname(pkgPath));
       try {
-        execSync(pkg.scripts[scriptName], { stdio: "inherit", env: process.env });
+        execSync(pkg.scripts[scriptName], { stdio: "inherit", env: getEnv() });
         process.exit(0);
       } catch (err) {
         process.exit(err.status || 1);
@@ -47,7 +54,7 @@ if (fs.existsSync(localPkgPath)) {
   const pkg = JSON.parse(fs.readFileSync(localPkgPath, "utf8"));
   if (pkg.scripts && pkg.scripts[scriptName]) {
     try {
-      execSync(pkg.scripts[scriptName], { stdio: "inherit", env: process.env });
+      execSync(pkg.scripts[scriptName], { stdio: "inherit", env: getEnv() });
       process.exit(0);
     } catch (err) {
       process.exit(err.status || 1);

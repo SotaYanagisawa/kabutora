@@ -19,5 +19,7 @@ kabutora-transactions.csv
 kabutora-recovery-key-*.txt
 kabutora-encrypted-*.json
 firestore-debug.log
+*.log
+*.tsbuildinfo
 .firebase
 .pnpm-store

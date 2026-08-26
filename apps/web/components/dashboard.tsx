@@ -644,7 +644,6 @@ export default function Dashboard({ seed, initialServerTimeMs, initialMarketSess
     const preferenceStorage = allowPersistentMarketCache ? localStorage : sessionStorage;
     const savedTheme = localStorage.getItem("kabutora-theme");
     const savedAccent = localStorage.getItem("kabutora-accent") as AccentTheme | null;
-    const savedCustomSecurities = null;
     const savedAutoRefresh = localStorage.getItem("kabutora-auto-refresh");
     const savedUpdateFrequency = Number(localStorage.getItem("kabutora-update-frequency"));
     const savedDisplayCurrency = localStorage.getItem("kabutora-display-currency") as DisplayCurrency | null;
@@ -690,9 +689,6 @@ export default function Dashboard({ seed, initialServerTimeMs, initialMarketSess
     setAcknowledgedActionIds(savedAcknowledgedActions);
     setReadNotificationIds(savedReadNotifications);
     setNotificationHistory(savedNotificationHistory);
-    if (savedCustomSecurities) {
-      try { setCustomSecurities(JSON.parse(savedCustomSecurities)); } catch { localStorage.removeItem("kabutora-custom-securities-v1"); }
-    }
     let cancelled = false;
     const hydrateMarketData = async () => {
       let hasUsableCachedMarket = false;
