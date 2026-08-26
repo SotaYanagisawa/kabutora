@@ -1,0 +1,24 @@
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  output: "standalone",
+  poweredByHeader: false,
+  transpilePackages: ["@kabutora/domain", "@kabutora/market-data"],
+  experimental: {
+    optimizePackageImports: ["lucide-react"],
+  },
+  async headers() {
+    return [{
+      source: "/((?!__/auth|__/firebase).*)",
+      headers: [
+        { key: "Referrer-Policy", value: "no-referrer" },
+        { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
+        { key: "X-Content-Type-Options", value: "nosniff" },
+        { key: "X-Frame-Options", value: "DENY" },
+        { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
+        { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
+      ],
+    }];
+  },
+};
+
+export default nextConfig;

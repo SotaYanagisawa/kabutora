@@ -1,0 +1,19 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+overrides:
+  postcss: "^8.5.23"
+  sharp: "^0.35.2"
+onlyBuiltDependencies:
+  - "@firebase/util"
+  - esbuild
+  - protobufjs
+  - sharp
+  - workerd
+allowBuilds:
+  "@firebase/util": true
+  esbuild: true
+  protobufjs: true
+  re2: set this to true or false
+  sharp: true
+  workerd: true

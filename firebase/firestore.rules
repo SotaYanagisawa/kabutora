@@ -1,0 +1,123 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedInAs(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function allowedUser(uid) {
+      return signedInAs(uid)
+        && exists(/databases/$(database)/documents/appAccess/$(uid));
+    }
+
+    function ownsExisting(uid) {
+      return allowedUser(uid) && resource.data.ownerUid == uid;
+    }
+
+    function ownsIncoming(uid) {
+      return allowedUser(uid) && request.resource.data.ownerUid == uid;
+    }
+
+    function validBlock(block) {
+      return block is map
+        && block.keys().hasOnly(['algorithm', 'iv', 'ciphertext'])
+        && block.algorithm == 'AES-256-GCM'
+        && block.iv is string
+        && block.iv.size() <= 32
+        && block.ciphertext is string
+        && block.ciphertext.size() <= 900000;
+    }
+
+    function validVault(uid) {
+      return ownsIncoming(uid)
+        && request.resource.data.keys().hasOnly([
+          'format', 'version', 'ownerUid', 'kdf', 'wrappedKey',
+          'recoveryWrappedKey', 'payload', 'revision', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.format == 'kabutora-encrypted-vault'
+        && request.resource.data.version == 1
+        && request.resource.data.revision is int
+        && request.resource.data.revision > 0
+        && request.resource.data.createdAt is string
+        && request.resource.data.updatedAt is string
+        && request.resource.data.kdf is map
+        && request.resource.data.kdf.keys().hasOnly([
+          'algorithm', 'salt', 'memoryKiB', 'iterations', 'parallelism'
+        ])
+        && request.resource.data.kdf.algorithm == 'ARGON2ID'
+        && request.resource.data.kdf.salt is string
+        && request.resource.data.kdf.salt.size() <= 64
+        && request.resource.data.kdf.memoryKiB is int
+        && request.resource.data.kdf.memoryKiB >= 32768
+        && request.resource.data.kdf.iterations is int
+        && request.resource.data.kdf.iterations >= 2
+        && request.resource.data.kdf.parallelism is int
+        && request.resource.data.kdf.parallelism >= 1
+        && validBlock(request.resource.data.wrappedKey)
+        && validBlock(request.resource.data.recoveryWrappedKey)
+        && validBlock(request.resource.data.payload);
+    }
+
+    function validEvent(uid) {
+      return ownsIncoming(uid)
+        && request.resource.data.keys().hasOnly(['ownerUid', 'payload', 'keyId'])
+        && (!request.resource.data.keys().hasAny(['keyId'])
+          || (request.resource.data.keyId is string && request.resource.data.keyId.size() <= 64))
+        && validBlock(request.resource.data.payload);
+    }
+
+    function validGoogleAccountKey(uid) {
+      return ownsIncoming(uid)
+        && request.resource.data.keys().hasOnly([
+          'format', 'version', 'ownerUid', 'keyId', 'encodedKey', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.format == 'kabutora-google-account-key'
+        && request.resource.data.version == 1
+        && request.resource.data.keyId is string
+        && request.resource.data.keyId.size() >= 32
+        && request.resource.data.keyId.size() <= 64
+        && request.resource.data.encodedKey is string
+        && request.resource.data.encodedKey.size() >= 42
+        && request.resource.data.encodedKey.size() <= 44
+        && request.resource.data.createdAt is string
+        && request.resource.data.updatedAt is string;
+    }
+
+    match /users/{uid}/vaults/{vaultId} {
+      // A first-time user's default vault does not exist yet, so reads must not
+      // depend on resource.data. The authenticated UID in the path plus the
+      // private appAccess document is the authorization boundary.
+      allow get, list: if allowedUser(uid);
+      allow create, update: if validVault(uid);
+      allow delete: if ownsExisting(uid);
+    }
+
+    match /users/{uid}/events/{eventId} {
+      allow get, list: if ownsExisting(uid);
+      allow create: if validEvent(uid);
+      allow update: if false;
+      allow delete: if ownsExisting(uid);
+    }
+
+    match /users/{uid}/keys/{keyId} {
+      allow get: if allowedUser(uid) && keyId == 'google-account';
+      allow list: if false;
+      allow create, update: if keyId == 'google-account' && validGoogleAccountKey(uid);
+      allow delete: if false;
+    }
+
+    match /market/{document=**} {
+      allow read: if request.auth != null
+        && exists(/databases/$(database)/documents/appAccess/$(request.auth.uid));
+      allow write: if false;
+    }
+
+    match /appAccess/{uid} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "verifiedAt": "2026-08-08T15:00:00.000Z",
+  "source": "yahoo_chart_unofficial",
+  "actions": [
+    {
+      "id": "sec-3563-xtks-split-1782691200",
+      "securityId": "sec-3563-xtks",
+      "type": "SPLIT",
+      "effectiveDate": "2026-06-29",
+      "numerator": "2",
+      "denominator": "1",
+      "sourceProvider": "yahoo_chart_unofficial:query2.finance.yahoo.com"
+    },
+    {
+      "id": "sec-5401-xtks-split-1759104000",
+      "securityId": "sec-5401-xtks",
+      "type": "SPLIT",
+      "effectiveDate": "2025-09-29",
+      "numerator": "5",
+      "denominator": "1",
+      "sourceProvider": "yahoo_chart_unofficial:query2.finance.yahoo.com"
+    },
+    {
+      "id": "sec-8053-xtks-split-1782691200",
+      "securityId": "sec-8053-xtks",
+      "type": "SPLIT",
+      "effectiveDate": "2026-06-29",
+      "numerator": "4",
+      "denominator": "1",
+      "sourceProvider": "yahoo_chart_unofficial:query2.finance.yahoo.com"
+    },
+    {
+      "id": "sec-9984-xtks-split-1766966400",
+      "securityId": "sec-9984-xtks",
+      "type": "SPLIT",
+      "effectiveDate": "2025-12-29",
+      "numerator": "4",
+      "denominator": "1",
+      "sourceProvider": "yahoo_chart_unofficial:query2.finance.yahoo.com"
+    },
+    {
+      "id": "sec-us-aapl-xnas-split-1750000000",
+      "securityId": "sec-us-aapl-xnas",
+      "type": "SPLIT",
+      "effectiveDate": "2025-06-15",
+      "numerator": "2",
+      "denominator": "1",
+      "sourceProvider": "yahoo_chart_unofficial:query2.finance.yahoo.com"
+    }
+  ]
+}

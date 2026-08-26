@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kabutora",
+  "main": "worker-entry.ts",
+  "workers_dev": true,
+  "preview_urls": false,
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "vars": {
+    "KABUTORA_REQUIRE_AUTH": "true",
+    "KABUTORA_REQUIRE_APP_CHECK": "true"
+  },
+  "secrets": {
+    "required": [
+      "FIREBASE_PROJECT_ID",
+      "FIREBASE_PROJECT_NUMBER",
+      "FIREBASE_WEB_APP_ID",
+      "KABUTORA_ALLOWED_UID"
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1,
+    "logs": {
+      "invocation_logs": false
+    }
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "portfolio": {
+    "id": "portfolio-demo",
+    "name": "デモポートフォリオ",
+    "baseCurrency": "JPY",
+    "defaultCostBasisMethod": "AVERAGE",
+    "includeCash": true,
+    "includeExtendedHours": false
+  },
+  "accounts": [
+    {
+      "id": "account-demo-jp",
+      "name": "デモ証券 日本株",
+      "broker": "デモ証券",
+      "accountType": "taxable",
+      "country": "JP",
+      "defaultCurrency": "JPY"
+    },
+    {
+      "id": "account-demo-us",
+      "name": "デモ証券 米国株",
+      "broker": "デモ証券",
+      "accountType": "taxable",
+      "country": "US",
+      "defaultCurrency": "USD"
+    }
+  ],
+  "securities": [
+    {
+      "id": "sec-7203-xtks",
+      "canonicalSymbol": "7203",
+      "displaySymbol": "7203",
+      "providerSymbols": { "yahoo": "7203.T" },
+      "name": "トヨタ自動車",
+      "assetType": "stock",
+      "country": "JP",
+      "exchangeMic": "XTKS",
+      "exchangeName": "東京証券取引所",
+      "currency": "JPY",
+      "timezone": "Asia/Tokyo"
+    },
+    {
+      "id": "sec-us-aapl-xnas",
+      "canonicalSymbol": "AAPL",
+      "displaySymbol": "AAPL",
+      "providerSymbols": { "yahoo": "AAPL" },
+      "name": "Apple",
+      "assetType": "stock",
+      "country": "US",
+      "exchangeMic": "XNAS",
+      "exchangeName": "NASDAQ",
+      "currency": "USD",
+      "timezone": "America/New_York"
+    }
+  ],
+  "transactions": [
+    {
+      "id": "demo-jp-buy",
+      "portfolioId": "portfolio-demo",
+      "accountId": "account-demo-jp",
+      "securityId": "sec-7203-xtks",
+      "type": "BUY",
+      "tradeDate": "2025-04-01T06:00:00.000Z",
+      "quantity": "100",
+      "pricePerShare": "2500",
+      "tradeCurrency": "JPY",
+      "grossAmount": "250000",
+      "source": "demo_fixture",
+      "original": { "sheet": "Demo", "row": 1, "ticker": "7203.T", "name": "トヨタ自動車", "action": "BUY", "broker": "デモ証券", "nisa": "N" },
+      "createdAt": "2025-04-01T06:00:00.000Z",
+      "updatedAt": "2025-04-01T06:00:00.000Z",
+      "version": 1
+    },
+    {
+      "id": "demo-us-buy",
+      "portfolioId": "portfolio-demo",
+      "accountId": "account-demo-us",
+      "securityId": "sec-us-aapl-xnas",
+      "type": "BUY",
+      "tradeDate": "2025-04-01T13:30:00.000Z",
+      "quantity": "10",
+      "pricePerShare": "200",
+      "tradeCurrency": "USD",
+      "grossAmount": "2000",
+      "source": "demo_fixture",
+      "original": { "sheet": "Demo", "row": 2, "ticker": "AAPL", "name": "Apple", "action": "BUY", "broker": "デモ証券", "nisa": "N" },
+      "createdAt": "2025-04-01T13:30:00.000Z",
+      "updatedAt": "2025-04-01T13:30:00.000Z",
+      "version": 1
+    }
+  ],
+  "importWarnings": []
+}

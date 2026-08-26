@@ -1,0 +1,65 @@
+#!/bin/zsh
+
+set -u
+
+KABUTORA_CONTENTS="${0:A:h:h}"
+KABUTORA_RESOURCES="$KABUTORA_CONTENTS/Resources"
+KABUTORA_SERVER="$(find "$KABUTORA_RESOURCES/app" -path '*/apps/web/server.js' -print -quit)"
+if [[ -z "$KABUTORA_SERVER" ]]; then
+  KABUTORA_SERVER="$(find "$KABUTORA_RESOURCES/app" -name server.js -print -quit)"
+fi
+
+KABUTORA_URL="http://127.0.0.1:31415"
+KABUTORA_LOG="/tmp/kabutora-server.log"
+KABUTORA_PID_FILE="/tmp/kabutora-server.pid"
+KABUTORA_BUILD_FILE="/tmp/kabutora-server-build"
+KABUTORA_BUILD_ID="$(<"${KABUTORA_SERVER:h}/.next/BUILD_ID")"
+KABUTORA_VAULT="$HOME/Library/Application Support/株トラ/local-vault.json"
+KABUTORA_KEYCHAIN_SERVICE="jp.kabutora.local-vault"
+KABUTORA_KEYCHAIN_ACCOUNT="$(/usr/bin/id -un)"
+
+if /usr/bin/curl --silent --fail --max-time 1 "$KABUTORA_URL" >/dev/null 2>&1; then
+  KABUTORA_ACTIVE_BUILD="$(<"$KABUTORA_BUILD_FILE" 2>/dev/null || true)"
+  if [[ "$KABUTORA_ACTIVE_BUILD" == "$KABUTORA_BUILD_ID" ]]; then
+    /usr/bin/open "$KABUTORA_URL"
+    exit 0
+  fi
+
+  KABUTORA_OLD_PID="$(/usr/sbin/lsof -tiTCP:31415 -sTCP:LISTEN 2>/dev/null | /usr/bin/head -n 1)"
+  if [[ "$KABUTORA_OLD_PID" == <-> ]]; then
+    /bin/kill "$KABUTORA_OLD_PID" 2>/dev/null || true
+    for KABUTORA_STOP_ATTEMPT in {1..30}; do
+      if ! /usr/bin/curl --silent --fail --max-time 1 "$KABUTORA_URL" >/dev/null 2>&1; then
+        break
+      fi
+      /bin/sleep 0.1
+    done
+  fi
+fi
+
+if ! /usr/bin/curl --silent --fail --max-time 1 "$KABUTORA_URL" >/dev/null 2>&1; then
+  if [[ ! -f "$KABUTORA_VAULT" ]]; then
+    print -u2 "Encrypted local portfolio was not found."
+    exit 1
+  fi
+  KABUTORA_LOCAL_KEY="$(/usr/bin/security find-generic-password -s "$KABUTORA_KEYCHAIN_SERVICE" -a "$KABUTORA_KEYCHAIN_ACCOUNT" -w 2>/dev/null || true)"
+  if [[ -z "$KABUTORA_LOCAL_KEY" ]]; then
+    print -u2 "The local portfolio encryption key was not found in Keychain."
+    exit 1
+  fi
+  cd "${KABUTORA_SERVER:h}"
+  (
+    for KABUTORA_ATTEMPT in {1..50}; do
+      if /usr/bin/curl --silent --fail --max-time 1 "$KABUTORA_URL" >/dev/null 2>&1; then
+        /usr/bin/open "$KABUTORA_URL"
+        exit 0
+      fi
+      /bin/sleep 0.1
+    done
+  ) &
+  print -r -- "$$" >| "$KABUTORA_PID_FILE"
+  print -r -- "$KABUTORA_BUILD_ID" >| "$KABUTORA_BUILD_FILE"
+  exec /usr/bin/env PORT=31415 HOSTNAME=127.0.0.1 KABUTORA_LOCAL_VAULT_PATH="$KABUTORA_VAULT" KABUTORA_LOCAL_VAULT_KEY="$KABUTORA_LOCAL_KEY" "$KABUTORA_RESOURCES/node" "$KABUTORA_SERVER" >>"$KABUTORA_LOG" 2>&1
+fi
+
+/usr/bin/open "$KABUTORA_URL"
