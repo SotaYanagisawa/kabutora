@@ -13,8 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { DisplayCurrency, RemoteQuote, SearchSecurity, MarketStatus } from "./dashboard";
-import { alignIntradayToQuote, marketTimeLabel } from "@/lib/chart-presentation";
-import { DailyFundSparkline, IntradaySparkline } from "./dashboard/charts";
+import { marketTimeLabel } from "@/lib/chart-presentation";
 import WatchlistSearchOverlay from "./watchlist-search-overlay";
 
 type WatchlistCategory = "ALL" | "JP" | "US" | "FUNDS_INDEXES";
@@ -95,18 +94,10 @@ const WatchlistTableRow = memo(function WatchlistTableRow({
   const effectiveCurrency = item.currency;
   const dayDiff = rawPrice != null && rawPrevious != null ? rawPrice - rawPrevious : null;
   const dayPercent = rawPrice != null && rawPrevious ? rawPrice / rawPrevious - 1 : null;
-  const isFund = isFundSecurity(item);
   const stockMic = quote?.exchangeMic || item.exchangeMic;
   const stockTz = item.timezone;
   const stockCurrency = item.currency;
   const stockCountry = item.country;
-  const effectiveIntraday = alignIntradayToQuote(
-    intraday,
-    quote?.marketTimestamp,
-    rawPrice,
-    item.id,
-    quote?.provider,
-  );
 
   return (
     <tr
@@ -131,33 +122,6 @@ const WatchlistTableRow = memo(function WatchlistTableRow({
           {item.displaySymbol} · {marketDisplayName(item)}
           {quote ? ` · ${marketTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency, stockCountry)}` : ""}
         </span>
-      </td>
-
-      <td className="sparkline-col">
-        {isFund ? (
-          <DailyFundSparkline
-            bars={dailyHistory.length >= 2 ? dailyHistory : effectiveIntraday.map((bar) => ({
-              securityId: bar.securityId,
-              date: bar.timestamp.slice(0, 10),
-              close: bar.price,
-              provider: bar.provider,
-            }))}
-            currency={effectiveCurrency as DisplayCurrency}
-          />
-        ) : (
-          <IntradaySparkline
-            bars={effectiveIntraday}
-            previousClose={rawPrevious}
-            positive={dayDiff != null ? dayDiff >= 0 : true}
-            currency={effectiveCurrency as DisplayCurrency}
-            exchangeMic={stockMic}
-            timeZone={stockTz}
-            stockCurrency={stockCurrency}
-            country={stockCountry}
-            asOf={quote?.marketTimestamp}
-            currentTime={currentTime}
-          />
-        )}
       </td>
 
       <td className="price-col">
@@ -326,7 +290,6 @@ export default function WatchlistView({
               >
                 ウォッチリスト {sortBy === "NAME_ASC" && <span className="sort-arrow active" aria-hidden="true">↓</span>}
               </button>
-              <span className="mobile-header-label">推移</span>
               <button
                 type="button"
                 className={`mobile-sort-btn right ${sortBy === "PRICE_DESC" || sortBy === "DAY_GAIN_DESC" || sortBy === "DAY_GAIN_ASC" ? "active" : ""}`}
@@ -346,7 +309,6 @@ export default function WatchlistView({
                   <th className={`sortable ${sortBy === "NAME_ASC" ? "active-sort" : ""}`} onClick={() => setSortBy(sortBy === "NAME_ASC" ? "DEFAULT" : "NAME_ASC")}>
                     ウォッチリスト {sortBy === "NAME_ASC" && <span className="sort-arrow active" aria-hidden="true">↓</span>}
                   </th>
-                  <th style={{ textAlign: "center" }}>推移</th>
                   <th className={`sortable ${sortBy === "PRICE_DESC" ? "active-sort" : ""}`} onClick={() => setSortBy(sortBy === "PRICE_DESC" ? "DEFAULT" : "PRICE_DESC")}>
                     現在値 {sortBy === "PRICE_DESC" && <span className="sort-arrow active" aria-hidden="true">↓</span>}
                   </th>

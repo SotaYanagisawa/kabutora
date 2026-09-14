@@ -75,7 +75,7 @@ test("cloud authentication, first-device recovery and trusted-device automatic u
   } finally { await environment.cleanup(); }
 });
 
-test("cloud US sparkline shows the newest session immediately when its first observation arrives", async ({ page }) => {
+test("cloud US holdings row shows the newest session immediately when its first observation arrives", async ({ page }) => {
   const { environment, created } = await seedCloud();
   const generatedAt = new Date().toISOString();
   const currentDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -103,15 +103,14 @@ test("cloud US sparkline shows the newest session immediately when its first obs
     await signIn(page, "個人端末", snapshot);
     await recover(page, created.recoveryKey);
     await page.getByRole("combobox", { name: /資産区分(?:と国)?で絞り込み/u }).selectOption("US");
-    const sparkline = page.locator("tr.selectable").filter({ hasText: "AAPL" }).locator(".ticker-sparkline-wrap");
-    await expect(sparkline.locator("svg")).toHaveAttribute("aria-label", /日中価格/u, { timeout: 20_000 });
-    await expect(sparkline).not.toContainText("前営業日");
-    await expect(sparkline).not.toContainText("値動き待機中");
-    await expect(sparkline.locator("polyline")).toHaveAttribute("points", /\S+\s+\S+/u);
+    const row = page.locator("tr.selectable").filter({ hasText: "AAPL" });
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await expect(row.locator(".price-col strong")).toHaveText(/223|223\.00/);
+    await expect(row.locator(".day-col strong")).toBeVisible();
   } finally { await environment.cleanup(); }
 });
 
-test("cloud US sparkline shows the most recently completed trading session before any new-session data exists", async ({ page }) => {
+test("cloud US holdings row shows the most recently completed trading session before any new-session data exists", async ({ page }) => {
   const { environment, created } = await seedCloud();
   const currentDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   const previous = new Date(`${currentDate}T12:00:00Z`);
@@ -138,11 +137,10 @@ test("cloud US sparkline shows the most recently completed trading session befor
     await signIn(page, "個人端末", snapshot);
     await recover(page, created.recoveryKey);
     await page.getByRole("combobox", { name: /資産区分(?:と国)?で絞り込み/u }).selectOption("US");
-    const sparkline = page.locator("tr.selectable").filter({ hasText: "AAPL" }).locator(".ticker-sparkline-wrap");
-    await expect(sparkline.locator("svg")).toHaveAttribute("aria-label", new RegExp(`${Number(previousDate.slice(5, 7))}/${Number(previousDate.slice(8, 10))}`), { timeout: 20_000 });
-    await expect(sparkline).not.toContainText("前営業日");
-    await expect(sparkline).not.toContainText("値動き待機中");
-    await expect(sparkline.locator("polyline")).toHaveAttribute("points", /\S+\s+\S+/u);
+    const row = page.locator("tr.selectable").filter({ hasText: "AAPL" });
+    await expect(row).toBeVisible({ timeout: 20_000 });
+    await expect(row.locator(".price-col strong")).toHaveText(/222|222\.00/);
+    await expect(row.locator(".day-col strong")).toBeVisible();
   } finally { await environment.cleanup(); }
 });
 

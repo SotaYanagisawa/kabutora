@@ -1,10 +1,9 @@
 import { useBrowserPreferences } from "../browser-preferences";
 import { memo, useEffect, useMemo, useState } from "react";
 import { canonicalDomainSecurityId, type IntradayBar, type MarketBar } from "@kabutora/domain";
-import { alignIntradayToQuote, marketDateTimeLabel, marketTimeLabel } from "@/lib/chart-presentation";
+import { marketDateTimeLabel, marketTimeLabel } from "@/lib/chart-presentation";
 import { marketDisplayName } from "@/lib/market-label";
-import { isUsSecurity, shouldShowDailyFundTrend, type PortfolioFilter } from "@/lib/portfolio-filter";
-import { DailyFundSparkline, IntradaySparkline } from "./charts";
+import { isUsSecurity, type PortfolioFilter } from "@/lib/portfolio-filter";
 import { freshnessLabel, HIDDEN_AMOUNT } from "./constants";
 import {
   compactMoney,
@@ -130,7 +129,6 @@ export function HoldingsTable({
         <button type="button" className={`mobile-sort-btn ${sortBy === "NAME_ASC" ? "active" : ""}`} onClick={() => setSortBy("NAME_ASC")}>
           銘柄 {sortIndicator("NAME_ASC")}
         </button>
-        <span className="mobile-header-label">推移</span>
         <button type="button" className={`mobile-sort-btn right ${sortBy === "DAY_DESC" ? "active" : ""}`} onClick={() => setSortBy("DAY_DESC")}>
           前日比 {sortIndicator("DAY_DESC")}
         </button>
@@ -151,7 +149,6 @@ export function HoldingsTable({
             <th className={`sortable ${sortBy === "NAME_ASC" ? "active-sort" : ""}`} onClick={() => setSortBy("NAME_ASC")}>
               銘柄 {sortIndicator("NAME_ASC")}
             </th>
-            <th style={{ textAlign: "center" }}>推移</th>
             <th className={`sortable ${sortBy === "PRICE_DESC" ? "active-sort" : ""}`} onClick={() => setSortBy("PRICE_DESC")}>
               現在値 {sortIndicator("PRICE_DESC")}
             </th>
@@ -227,7 +224,6 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   const dayPercent = price != null && previous ? price / previous - 1 : null;
   const gain = holding.unrealizedGain == null ? null : Number(holding.unrealizedGain);
   const gainPercent = gain != null && Number(holding.totalCost) ? gain / Number(holding.totalCost) : null;
-  const showDailyFundTrend = isFundSecurity(sec, holding.securityId) || shouldShowDailyFundTrend(sec, marketFilter);
   const stockMic = quote?.exchangeMic || sec?.exchangeMic || (isUs ? "XNAS" : "XTKS");
   const stockTz = sec?.timezone || (isUs ? "America/New_York" : "Asia/Tokyo");
   const stockCurrency = sec?.nativeCurrency ?? quote?.currency ?? sec?.currency ?? rowCurrency;
@@ -235,21 +231,6 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   const secName = sec?.name || sec?.displaySymbol || holding.securityId;
   const secLegalName = sec?.legalName || secName;
   const secDisplaySymbol = sec?.displaySymbol || holding.securityId.replace(/^sec-(?:us-|jp-)?/i, "").toUpperCase();
-  const quotePriceForSparkline = useMemo(() => {
-    if (holding.currentPrice == null) return null;
-    if (rowCurrency === stockCurrency) return holding.currentPrice;
-    if (!intraday.length) return holding.currentPrice;
-    const existing = intraday.find((bar) => bar.timestamp === quote?.marketTimestamp);
-    if (existing) return existing.price;
-    return intraday.at(-1)?.price ?? holding.currentPrice;
-  }, [holding.currentPrice, intraday, quote?.marketTimestamp, rowCurrency, stockCurrency]);
-  const effectiveIntraday = useMemo(() => alignIntradayToQuote(
-    intraday,
-    quote?.marketTimestamp,
-    quotePriceForSparkline,
-    holding.securityId,
-    quote?.provider,
-  ), [intraday, quote?.marketTimestamp, quotePriceForSparkline, holding.securityId, quote?.provider]);
   const weightVal = holding.summaryMarketValue ?? holding.marketValue;
 
   return (
@@ -273,36 +254,6 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
             ? ` · ${marketTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency, stockCountry)}`
             : ""}
         </span>
-      </td>
-      <td className="sparkline-col">
-        {showDailyFundTrend ? (
-          <DailyFundSparkline
-            bars={
-              dailyHistory.length >= 2
-                ? dailyHistory
-                : effectiveIntraday.map((bar) => ({
-                    securityId: bar.securityId,
-                    date: bar.timestamp.slice(0, 10),
-                    close: bar.price,
-                    provider: bar.provider,
-                  }))
-            }
-            currency={rowCurrency}
-          />
-        ) : (
-          <IntradaySparkline
-            bars={effectiveIntraday}
-            previousClose={previous}
-            positive={Number(day ?? 0) >= 0}
-            currency={rowCurrency}
-            exchangeMic={stockMic}
-            timeZone={stockTz}
-            stockCurrency={stockCurrency}
-            country={stockCountry}
-            asOf={quote?.marketTimestamp}
-            currentTime={currentTime}
-          />
-        )}
       </td>
       <td className="price-col">
         <strong>{maybeMoney(holding.currentPrice, rowCurrency)}</strong>
