@@ -2,12 +2,19 @@ import { describe, expect, it } from "vitest";
 import {
   applySplit,
   calculateAverageCostPortfolio,
+  calculateDividendIncome,
+  canonicalDomainSecurityId,
   deriveSplitAdjustedTransactions,
   deriveTransactionPositionSnapshots,
+  domainSecurityIdVariants,
+  matchSecurityId,
   reconstructPortfolioHistory,
   reconstructSecurityHistory,
+  type DistributionEvent,
+  type LedgerTransaction,
   type SecurityQuote,
 } from "./index";
+
 
 const security: SecurityQuote = {
   id: "sec-a",
@@ -131,6 +138,114 @@ describe("average cost portfolio", () => {
   });
 });
 
+describe("dividend income", () => {
+  it("uses the quantity held before ex-date trades and keeps account entitlements separate", () => {
+    const transactions = [
+      { id: "buy-before", accountId: "taxable", securityId: "sec-a", type: "BUY" as const, tradeDate: "2026-01-02", quantity: "10", pricePerShare: "100", grossAmount: "1000" },
+      { id: "sell-on-ex", accountId: "taxable", securityId: "sec-a", type: "SELL" as const, tradeDate: "2026-03-10", quantity: "4", pricePerShare: "150", grossAmount: "600" },
+      { id: "buy-on-ex", accountId: "nisa", securityId: "sec-a", type: "BUY" as const, tradeDate: "2026-03-10", quantity: "5", pricePerShare: "150", grossAmount: "750" },
+    ];
+    const result = calculateDividendIncome(transactions, [{
+      id: "sec-a-div-20260310",
+      securityId: "sec-a",
+      type: "CASH_DIVIDEND",
+      exDate: "2026-03-10",
+      paymentDate: "2026-04-01",
+      amountPerUnit: "12.5",
+      currency: "JPY",
+      sourceProvider: "fixture",
+      confidence: "reported",
+    }]);
+
+    expect(result.receipts).toEqual([expect.objectContaining({
+      accountId: "taxable",
+      eligibleQuantity: "10",
+      grossAmount: "125",
+      recognitionDate: "2026-04-01",
+    })]);
+    expect(result.totalIncome).toBe("125");
+  });
+
+  it("applies splits before entitlement and handles fund distributions per 10,000 units exactly", () => {
+    const result = calculateDividendIncome(
+      [{ id: "buy", accountId: "fund", securityId: "sec-blackrock", type: "BUY", tradeDate: "2026-01-02", quantity: "25000", pricePerShare: "16000", grossAmount: "40000" }],
+      [{
+        id: "blackrock-20260825",
+        securityId: "sec-blackrock",
+        type: "FUND_DISTRIBUTION",
+        exDate: "2026-08-25",
+        amountPerUnit: "130",
+        distributionUnit: "10000",
+        currency: "JPY",
+        sourceProvider: "fixture",
+        confidence: "official",
+      }],
+      [{ id: "split", securityId: "sec-blackrock", type: "SPLIT", effectiveDate: "2026-08-25", numerator: "2", denominator: "1", sourceProvider: "fixture" }],
+    );
+
+    expect(result.receipts[0]).toMatchObject({ eligibleQuantity: "50000", grossAmount: "650" });
+  });
+
+  it("calculates dividends across multiple different stocks with canonical security matching", () => {
+    const transactions = [
+      { id: "buy-toyota", accountId: "acc-jp", securityId: "sec-7203", type: "BUY" as const, tradeDate: "2025-01-01", quantity: "100", pricePerShare: "2000", grossAmount: "200000" },
+      { id: "buy-ntt", accountId: "acc-jp", securityId: "sec-9432-xtks", type: "BUY" as const, tradeDate: "2025-01-01", quantity: "1000", pricePerShare: "160", grossAmount: "160000" },
+      { id: "buy-vym", accountId: "acc-us", securityId: "sec-us-vym", type: "BUY" as const, tradeDate: "2025-01-01", quantity: "50", pricePerShare: "120", grossAmount: "6000" },
+      { id: "buy-aapl", accountId: "acc-us", securityId: "sec-us-aapl-xnas", type: "BUY" as const, tradeDate: "2025-01-01", quantity: "20", pricePerShare: "200", grossAmount: "4000" },
+    ];
+    const distributions = [
+      { id: "div-toyota", securityId: "sec-7203-xtks", type: "CASH_DIVIDEND" as const, exDate: "2025-03-27", amountPerUnit: "35", currency: "JPY", sourceProvider: "fixture", confidence: "official" as const },
+      { id: "div-ntt", securityId: "sec-9432", type: "CASH_DIVIDEND" as const, exDate: "2025-03-27", amountPerUnit: "2.6", currency: "JPY", sourceProvider: "fixture", confidence: "official" as const },
+      { id: "div-vym", securityId: "sec-us-vym-arcx", type: "CASH_DIVIDEND" as const, exDate: "2025-03-20", amountPerUnit: "0.95", currency: "USD", sourceProvider: "fixture", confidence: "official" as const },
+      { id: "div-aapl", securityId: "sec-us-aapl", type: "CASH_DIVIDEND" as const, exDate: "2025-02-14", amountPerUnit: "0.25", currency: "USD", sourceProvider: "fixture", confidence: "official" as const },
+    ];
+
+    const summary = calculateDividendIncome(transactions, distributions);
+    expect(summary.receipts).toHaveLength(4);
+    expect(summary.bySecurity["sec-7203"]).toBe("3500");
+    expect(summary.bySecurity["sec-9432-xtks"]).toBe("2600");
+    expect(summary.bySecurity["sec-us-vym"]).toBe("47.5");
+    expect(summary.bySecurity["sec-us-aapl-xnas"]).toBe("5");
+    expect(summary.totalsByCurrency).toEqual({ JPY: "6100", USD: "52.5" });
+  });
+
+  it("ignores zero distributions and imported payments, and prefers official duplicate events", () => {
+    const transactions = [
+      { id: "buy", accountId: "a", securityId: "sec-a", type: "BUY" as const, tradeDate: "2025-01-01", quantity: "10", pricePerShare: "100", grossAmount: "1000" },
+      { id: "payment", accountId: "a", securityId: "sec-a", type: "DIVIDEND" as const, tradeDate: "2025-04-01", quantity: null, pricePerShare: null, grossAmount: "80" },
+    ];
+    const summary = calculateDividendIncome(transactions, [
+      { id: "zero", securityId: "sec-a", type: "CASH_DIVIDEND", exDate: "2025-02-01", amountPerUnit: "0", currency: "JPY", sourceProvider: "reported", confidence: "reported" },
+      { id: "reported", securityId: "sec-a", type: "CASH_DIVIDEND", exDate: "2025-03-01", amountPerUnit: "5", currency: "JPY", sourceProvider: "reported", confidence: "reported" },
+      { id: "official", securityId: "sec-a", type: "CASH_DIVIDEND", exDate: "2025-03-01", amountPerUnit: "6", currency: "JPY", sourceProvider: "official", confidence: "official" },
+    ]);
+
+    expect(summary.receipts).toHaveLength(1);
+    expect(summary.receipts[0]).toMatchObject({ distributionId: "official", grossAmount: "60" });
+    expect(summary.totalIncome).toBe("60");
+  });
+
+  it("adds distributions to realized and total gain without pretending they are current cash", () => {
+    const result = calculateAverageCostPortfolio(
+      [{ id: "buy", accountId: "a", securityId: "sec-a", type: "BUY", tradeDate: "2026-01-02", quantity: "10", pricePerShare: "100", grossAmount: "1000" }],
+      [security],
+      [],
+      [{ id: "div", securityId: "sec-a", type: "CASH_DIVIDEND", exDate: "2026-02-01", amountPerUnit: "5", currency: "JPY", sourceProvider: "fixture", confidence: "reported" }],
+      "2026-08-07",
+    );
+
+    expect(result).toMatchObject({
+      cashValue: "0",
+      capitalRealizedGain: "0",
+      distributionIncome: "50",
+      realizedGain: "50",
+      unrealizedGain: "500",
+      totalGain: "550",
+    });
+    expect(result.holdings[0]).toMatchObject({ distributionIncome: "50", realizedGain: "50" });
+  });
+});
+
 describe("portfolio history", () => {
   it("reconstructs valuation only from remote market bars", () => {
     const points = reconstructPortfolioHistory(
@@ -144,6 +259,28 @@ describe("portfolio history", () => {
     expect(points.map((point) => point.totalValue)).toEqual(["1100", "1200"]);
     expect(points.map((point) => point.costBasis)).toEqual(["1000", "1000"]);
     expect(points.map((point) => point.unrealizedGain)).toEqual(["100", "200"]);
+  });
+
+  it("adds recognized dividends to the total-return series while preserving market value", () => {
+    const points = reconstructPortfolioHistory(
+      [{ id: "1", accountId: "a", securityId: "sec-a", type: "BUY", tradeDate: "2026-01-02", quantity: "10", pricePerShare: "100", grossAmount: "1000" }],
+      [{ ...security, quote: undefined }],
+      [
+        { securityId: "sec-a", date: "2026-01-02", close: "100", provider: "fixture" },
+        { securityId: "sec-a", date: "2026-01-03", close: "95", provider: "fixture" },
+      ],
+      [],
+      "2026-01-03",
+      [{ id: "div", securityId: "sec-a", type: "CASH_DIVIDEND", exDate: "2026-01-03", amountPerUnit: "10", currency: "JPY", sourceProvider: "fixture", confidence: "reported" }],
+    );
+
+    expect(points.at(-1)).toMatchObject({
+      totalValue: "950",
+      totalReturnValue: "1050",
+      distributionIncome: "100",
+      realizedGain: "100",
+      totalGain: "50",
+    });
   });
 
   it("reconstructs a complete graph for a 50-security portfolio", () => {
@@ -209,6 +346,59 @@ describe("portfolio history", () => {
     expect(points).toHaveLength(371);
     expect(points.every((point, index) => index === 0 || new Date(`${point.date}T00:00:00Z`).getTime() - new Date(`${points[index - 1].date}T00:00:00Z`).getTime() === 86_400_000)).toBe(true);
   });
+
+  it("handles multi-year history with split, partial sell, and dividends incrementally", () => {
+    const transactions: LedgerTransaction[] = [
+      { id: "buy-1", accountId: "a", securityId: "sec-a", type: "BUY", tradeDate: "2023-01-10", quantity: "100", pricePerShare: "1000", grossAmount: "100000" },
+      { id: "sell-1", accountId: "a", securityId: "sec-a", type: "SELL", tradeDate: "2023-06-15", quantity: "40", pricePerShare: "1500", grossAmount: "60000" },
+      { id: "buy-2", accountId: "a", securityId: "sec-a", type: "BUY", tradeDate: "2024-02-01", quantity: "50", pricePerShare: "800", grossAmount: "40000" },
+    ];
+    const corporateActions: CorporateAction[] = [
+      { id: "split-1", securityId: "sec-a", type: "SPLIT", effectiveDate: "2023-09-01", numerator: "2", denominator: "1", sourceProvider: "fixture" },
+    ];
+    const distributions: DistributionEvent[] = [
+      { id: "div-1", securityId: "sec-a", type: "CASH_DIVIDEND", exDate: "2023-12-01", amountPerUnit: "25", currency: "JPY", sourceProvider: "fixture", confidence: "official" },
+    ];
+    const bars: MarketBar[] = [
+      { securityId: "sec-a", date: "2023-01-10", close: "1000", provider: "fixture" },
+      { securityId: "sec-a", date: "2023-06-15", close: "1500", provider: "fixture" },
+      { securityId: "sec-a", date: "2023-09-01", close: "750", provider: "fixture" },
+      { securityId: "sec-a", date: "2023-12-01", close: "800", provider: "fixture" },
+      { securityId: "sec-a", date: "2024-02-01", close: "800", provider: "fixture" },
+      { securityId: "sec-a", date: "2024-06-01", close: "900", provider: "fixture" },
+    ];
+
+    const points = reconstructPortfolioHistory(
+      transactions,
+      [{ id: "sec-a", displaySymbol: "A", name: "Alpha", exchangeMic: "XTKS" }],
+      bars,
+      corporateActions,
+      "2024-06-01",
+      distributions,
+    );
+
+    // Initial buy: 100 shares @ 1000 = 100,000 cost basis
+    expect(points[0].date).toBe("2023-01-10");
+    expect(points[0].costBasis).toBe("100000");
+    expect(points[0].totalValue).toBe("100000");
+
+    // After partial sell of 40 shares: 60 shares remaining, cost basis 60,000. Realized gain = 60000 - 40000 = 20,000
+    const pointAfterSell = points.find((p) => p.date === "2023-06-15");
+    expect(pointAfterSell?.costBasis).toBe("60000");
+    expect(pointAfterSell?.capitalRealizedGain).toBe("20000");
+
+    // After 2:1 split: 60 shares become 120 shares, cost basis remains 60,000. Price 750 -> 120 * 750 = 90,000
+    const pointAfterSplit = points.find((p) => p.date === "2023-09-01");
+    expect(pointAfterSplit?.costBasis).toBe("60000");
+    expect(pointAfterSplit?.totalValue).toBe("90000");
+
+    // Final point
+    const finalPoint = points.at(-1);
+    expect(finalPoint?.date).toBe("2024-06-01");
+    // 120 shares from before + 50 new shares = 170 shares @ 900 = 153,000
+    expect(finalPoint?.totalValue).toBe("153000");
+    expect(finalPoint?.costBasis).toBe("100000");
+  });
 });
 
 describe("security history", () => {
@@ -263,7 +453,7 @@ describe("splits", () => {
 
   it("adjusts all historical transactions (both open and closed positions) to split-adjusted units", () => {
     const rawTrades = [
-      { id: "buy-old", accountId: "a", securityId: "sec-a", type: "BUY" as const, tradeDate: "2020-01-10", quantity: "10", pricePerShare: "1000", grossAmount: "10000" },
+      { id: "buy-old", accountId: "a", securityId: "sec-a", type: "BUY" as const, tradeDate: "2020-01-10", quantity: "10", pricePerShare: "1000", grossAmount: "10000", source: "import" },
       { id: "sell-old", accountId: "a", securityId: "sec-a", type: "SELL" as const, tradeDate: "2020-02-10", quantity: "10", pricePerShare: "1200", grossAmount: "12000" },
       { id: "buy-new", accountId: "a", securityId: "sec-a", type: "BUY" as const, tradeDate: "2021-01-10", quantity: "10", pricePerShare: "160", grossAmount: "1600" },
     ];
@@ -274,7 +464,7 @@ describe("splits", () => {
     const adjusted = deriveSplitAdjustedTransactions(rawTrades, actions);
 
     // Old buy and sell prior to split are adjusted 10x in quantity and 1/10 in unit price
-    expect(adjusted[0]).toMatchObject({ quantity: "100", pricePerShare: "100", grossAmount: "10000" });
+    expect(adjusted[0]).toMatchObject({ quantity: "100", pricePerShare: "100", grossAmount: "10000", source: "import" });
     expect(adjusted[1]).toMatchObject({ quantity: "100", pricePerShare: "120", grossAmount: "12000" });
     // Trade after split is untouched
     expect(adjusted[2]).toMatchObject({ quantity: "10", pricePerShare: "160", grossAmount: "1600" });
@@ -406,5 +596,107 @@ describe("transaction position snapshots", () => {
     // On-ex-date trade is NOT adjusted
     expect(adjusted[1]).toMatchObject({ quantity: "10", pricePerShare: "100", grossAmount: "1000" });
   });
-});
 
+  it("calculates dividend income accurately across Japanese stocks, US stocks, US ETFs, and mutual funds", () => {
+    const trades: LedgerTransaction[] = [
+      // JP Stock (Toyota): 100 shares bought 2025-01-10
+      { id: "t-jp", accountId: "acc-tokyo", securityId: "sec-7203-xtks", type: "BUY", tradeDate: "2025-01-10", quantity: "100", pricePerShare: "3000", tradeCurrency: "JPY", grossAmount: "300000" },
+      // US Stock (Apple): 20 shares bought 2025-01-10
+      { id: "t-us", accountId: "acc-ny", securityId: "sec-us-aapl-xnas", type: "BUY", tradeDate: "2025-01-10", quantity: "20", pricePerShare: "200", tradeCurrency: "USD", grossAmount: "4000" },
+      // US ETF (VYM): 50 shares bought 2025-01-10
+      { id: "t-etf", accountId: "acc-ny", securityId: "sec-us-vym-arcx", type: "BUY", tradeDate: "2025-01-10", quantity: "50", pricePerShare: "120", tradeCurrency: "USD", grossAmount: "6000" },
+      // JP Mutual Fund (eMAXIS): 50,000 units bought 2025-01-10
+      { id: "t-fund", accountId: "acc-tokyo", securityId: "sec-jp-fund-0331418a", type: "BUY", tradeDate: "2025-01-10", quantity: "50000", pricePerShare: "25000", tradeCurrency: "JPY", grossAmount: "125000" },
+    ];
+
+    const distributions: DistributionEvent[] = [
+      // JP Stock: ¥40 / share -> 100 * 40 = ¥4,000
+      { id: "d-jp", securityId: "sec-7203", paymentDate: "2025-06-25", exDate: "2025-03-28", recordDate: "2025-03-31", amountPerUnit: "40", currency: "JPY", type: "CASH_DIVIDEND", confidence: "official", sourceProvider: "fixture" },
+      // US Stock: $0.25 / share -> 20 * 0.25 = $5.00
+      { id: "d-us", securityId: "sec-us-aapl", paymentDate: "2025-05-15", exDate: "2025-05-09", recordDate: "2025-05-12", amountPerUnit: "0.25", currency: "USD", type: "CASH_DIVIDEND", confidence: "official", sourceProvider: "fixture" },
+      // US ETF: $0.85 / share -> 50 * 0.85 = $42.50
+      { id: "d-etf", securityId: "sec-us-vym", paymentDate: "2025-06-20", exDate: "2025-06-16", recordDate: "2025-06-17", amountPerUnit: "0.85", currency: "USD", type: "CASH_DIVIDEND", confidence: "official", sourceProvider: "fixture" },
+      // JP Fund: ¥50 / 10,000 units -> (50,000 / 10,000) * 50 = ¥250
+      { id: "d-fund", securityId: "sec-jp-fund-0331418a", paymentDate: "2025-07-15", exDate: "2025-07-14", recordDate: "2025-07-14", amountPerUnit: "50", distributionUnit: "10000", currency: "JPY", type: "FUND_DISTRIBUTION", confidence: "official", sourceProvider: "fixture" },
+    ];
+
+    const summary = calculateDividendIncome(trades, distributions, [], "2025-12-31");
+    expect(summary.receipts).toHaveLength(4);
+
+    const jpReceipt = summary.receipts.find((r) => matchSecurityId(r.securityId, "sec-7203"));
+    expect(jpReceipt).toBeDefined();
+    expect(jpReceipt?.grossAmount).toBe("4000");
+    expect(jpReceipt?.currency).toBe("JPY");
+    expect(jpReceipt?.eligibleQuantity).toBe("100");
+
+    const usReceipt = summary.receipts.find((r) => matchSecurityId(r.securityId, "sec-us-aapl"));
+    expect(usReceipt).toBeDefined();
+    expect(usReceipt?.grossAmount).toBe("5");
+    expect(usReceipt?.currency).toBe("USD");
+    expect(usReceipt?.eligibleQuantity).toBe("20");
+
+    const etfReceipt = summary.receipts.find((r) => matchSecurityId(r.securityId, "sec-us-vym"));
+    expect(etfReceipt).toBeDefined();
+    expect(etfReceipt?.grossAmount).toBe("42.5");
+    expect(etfReceipt?.currency).toBe("USD");
+    expect(etfReceipt?.eligibleQuantity).toBe("50");
+
+    const fundReceipt = summary.receipts.find((r) => matchSecurityId(r.securityId, "sec-jp-fund-0331418a"));
+    expect(fundReceipt).toBeDefined();
+    expect(fundReceipt?.grossAmount).toBe("250");
+    expect(fundReceipt?.currency).toBe("JPY");
+    expect(fundReceipt?.eligibleQuantity).toBe("50000");
+    expect(fundReceipt?.distributionUnit).toBe("10000");
+  });
+
+  describe("canonicalDomainSecurityId & domainSecurityIdVariants", () => {
+    it("canonicalizes Japanese alphanumeric and 4-digit symbols in all common forms", () => {
+      // 285A Kioxia variants
+      expect(canonicalDomainSecurityId("285A")).toBe("sec-285a");
+      expect(canonicalDomainSecurityId("285a")).toBe("sec-285a");
+      expect(canonicalDomainSecurityId("285A.T")).toBe("sec-285a");
+      expect(canonicalDomainSecurityId("285a.t")).toBe("sec-285a");
+      expect(canonicalDomainSecurityId("sec-285A")).toBe("sec-285a");
+      expect(canonicalDomainSecurityId("sec-285a")).toBe("sec-285a");
+      expect(canonicalDomainSecurityId("sec-285A-xtks")).toBe("sec-285a");
+      expect(canonicalDomainSecurityId("sec-285a-xtks")).toBe("sec-285a");
+      expect(canonicalDomainSecurityId("sec-285a-tse")).toBe("sec-285a");
+
+      // 7203 Toyota variants
+      expect(canonicalDomainSecurityId("7203")).toBe("sec-7203");
+      expect(canonicalDomainSecurityId("7203.T")).toBe("sec-7203");
+      expect(canonicalDomainSecurityId("sec-7203-xtks")).toBe("sec-7203");
+      expect(canonicalDomainSecurityId("sec-7203-tse")).toBe("sec-7203");
+      expect(canonicalDomainSecurityId("sec-7203")).toBe("sec-7203");
+
+      // US ticker variants
+      expect(canonicalDomainSecurityId("sec-us-aapl-xnas")).toBe("sec-us-aapl");
+      expect(canonicalDomainSecurityId("sec-us-aapl-xnys")).toBe("sec-us-aapl");
+      expect(canonicalDomainSecurityId("sec-us-aapl")).toBe("sec-us-aapl");
+
+      // Match check across representations
+      expect(matchSecurityId("285A", "sec-285a-xtks")).toBe(true);
+      expect(matchSecurityId("285A.T", "sec-285a")).toBe(true);
+      expect(matchSecurityId("7203", "sec-7203-xtks")).toBe(true);
+      expect(matchSecurityId("7203.T", "sec-7203")).toBe(true);
+    });
+
+    it("generates comprehensive variants for map indexing", () => {
+      const kioxiaVariants = new Set(domainSecurityIdVariants("sec-285a"));
+      expect(kioxiaVariants.has("sec-285a")).toBe(true);
+      expect(kioxiaVariants.has("sec-285A")).toBe(true);
+      expect(kioxiaVariants.has("sec-285a-xtks")).toBe(true);
+      expect(kioxiaVariants.has("sec-285A-xtks")).toBe(true);
+      expect(kioxiaVariants.has("285a")).toBe(true);
+      expect(kioxiaVariants.has("285A")).toBe(true);
+      expect(kioxiaVariants.has("285a.t")).toBe(true);
+      expect(kioxiaVariants.has("285A.T")).toBe(true);
+
+      const toyotaVariants = new Set(domainSecurityIdVariants("7203"));
+      expect(toyotaVariants.has("sec-7203")).toBe(true);
+      expect(toyotaVariants.has("sec-7203-xtks")).toBe(true);
+      expect(toyotaVariants.has("7203")).toBe(true);
+      expect(toyotaVariants.has("7203.T")).toBe(true);
+    });
+  });
+});

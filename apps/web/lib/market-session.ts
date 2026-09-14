@@ -179,6 +179,63 @@ function isBusinessDay(ymd: string, region: MarketRegion) {
   return weekday !== 0 && weekday !== 6 && !(region === "JP" ? jpHoliday(ymd) : usHoliday(ymd));
 }
 
+/** The US session whose intraday curve should be considered current at this instant. */
+export function usTradingDateForSparkline(now = new Date()) {
+  const clock = localClock(now, "America/New_York");
+  let candidate = clock.ymd;
+  if (clock.minute < 4 * 60) candidate = shiftedYmd(clock, -1);
+  while (!isBusinessDay(candidate, "US")) {
+    const date = utcDateFromYmd(candidate);
+    date.setUTCDate(date.getUTCDate() - 1);
+    candidate = date.toISOString().slice(0, 10);
+  }
+  return candidate;
+}
+
+export function previousUsTradingDate(ymd: string): string {
+  let candidate = ymd;
+  do {
+    const date = utcDateFromYmd(candidate);
+    date.setUTCDate(date.getUTCDate() - 1);
+    candidate = date.toISOString().slice(0, 10);
+  } while (!isBusinessDay(candidate, "US"));
+  return candidate;
+}
+
+export function eligibleUsTradingDates(now = new Date()): [string, string] {
+  const current = usTradingDateForSparkline(now);
+  const previous = previousUsTradingDate(current);
+  return [current, previous];
+}
+
+export function japanTradingDateForSparkline(now = new Date()): string {
+  const clock = localClock(now, "Asia/Tokyo");
+  let candidate = clock.ymd;
+  if (clock.minute < 6 * 60) candidate = shiftedYmd(clock, -1);
+  while (!isBusinessDay(candidate, "JP")) {
+    const date = utcDateFromYmd(candidate);
+    date.setUTCDate(date.getUTCDate() - 1);
+    candidate = date.toISOString().slice(0, 10);
+  }
+  return candidate;
+}
+
+export function previousJapanTradingDate(ymd: string): string {
+  let candidate = ymd;
+  do {
+    const date = utcDateFromYmd(candidate);
+    date.setUTCDate(date.getUTCDate() - 1);
+    candidate = date.toISOString().slice(0, 10);
+  } while (!isBusinessDay(candidate, "JP"));
+  return candidate;
+}
+
+export function eligibleJapanTradingDates(now = new Date()): [string, string] {
+  const current = japanTradingDateForSparkline(now);
+  const previous = previousJapanTradingDate(current);
+  return [current, previous];
+}
+
 function closedStatus(market: MarketRegion, label: string, reason: string, detail: string, source: "official" | "rules"): MarketSessionStatus {
   return { market, marketLabel: market === "JP" ? "日本" : "米国", isOpen: false, session: "closed", label, reason, detail, calendarSource: source };
 }

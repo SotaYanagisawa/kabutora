@@ -25,6 +25,8 @@ export default function EncryptedBackupDialog({ seed, ownerUid, onClose, onCreat
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [recoveryKey, setRecoveryKey] = useState("");
+  const [backupFile, setBackupFile] = useState<{ stamp: string; content: string } | null>(null);
+  const recoveryText = (key: string) => `株トラ 復旧キー\n\n${key}\n\nこのキーは暗号化データを復号できます。クラウドストレージへ保存せず、パスワード管理アプリまたは紙で安全に保管してください。\n`;
 
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -35,10 +37,12 @@ export default function EncryptedBackupDialog({ seed, ownerUid, onClose, onCreat
       const created = await createEncryptedVault(seed, passphrase, ownerUid);
       await onCreated?.(created.envelope, created.dataKey);
       const stamp = new Date().toISOString().slice(0, 10);
-      downloadText(`kabutora-encrypted-${stamp}.json`, serializeVault(created.envelope), "application/json;charset=utf-8");
+      const content = serializeVault(created.envelope);
+      setBackupFile({ stamp, content });
+      downloadText(`kabutora-encrypted-${stamp}.json`, content, "application/json;charset=utf-8");
       downloadText(
         `kabutora-recovery-key-${stamp}.txt`,
-        `株トラ 復旧キー\n\n${created.recoveryKey}\n\nこのキーは暗号化データを復号できます。クラウドストレージへ保存せず、パスワード管理アプリまたは紙で安全に保管してください。\n`,
+        recoveryText(created.recoveryKey),
       );
       setRecoveryKey(created.recoveryKey);
       setPassphrase("");
@@ -55,8 +59,12 @@ export default function EncryptedBackupDialog({ seed, ownerUid, onClose, onCreat
       <div className="modal-head"><div><span>END-TO-END ENCRYPTION</span><h2>暗号化バックアップ</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="閉じる"><X size={18}/></button></div>
       {recoveryKey ? <div className="recovery-result">
         <ShieldCheck size={24}/><strong>暗号化ファイルを作成しました</strong>
-        <p>復旧キーのファイルもダウンロード済みです。パスフレーズとは別の安全な場所に保管してください。</p>
+        <p>暗号化ファイルと復旧キーの両方が保存されたことを確認してください。ブラウザが連続ダウンロードを止めた場合は、以下から個別に保存できます。</p>
         <code>{recoveryKey}</code>
+        {backupFile && <>
+          <button type="button" className="secondary-button" onClick={() => downloadText(`kabutora-encrypted-${backupFile.stamp}.json`, backupFile.content, "application/json;charset=utf-8")}>暗号化ファイルを保存</button>
+          <button type="button" className="secondary-button" onClick={() => downloadText(`kabutora-recovery-key-${backupFile.stamp}.txt`, recoveryText(recoveryKey))}>復旧キーを保存</button>
+        </>}
         <button type="button" className="trade-button full" onClick={onClose}>完了</button>
       </div> : <>
         <p className="secure-copy"><KeyRound size={16}/> 16文字以上の専用パスフレーズで暗号化します。株トラ、Firebase、Cloudflareのいずれにも送信されません。</p>
@@ -68,4 +76,3 @@ export default function EncryptedBackupDialog({ seed, ownerUid, onClose, onCreat
     </form>
   </div>;
 }
-

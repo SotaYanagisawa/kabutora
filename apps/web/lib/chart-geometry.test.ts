@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartAxisTicks, donutArcPath, downsampleChartPoints, monotoneSvgPath } from "./chart-geometry";
+import { chartAxisTicks, donutArcPath, downsampleChartPoints, monotoneSvgPath, niceChartAxis } from "./chart-geometry";
 
 describe("lightweight chart geometry", () => {
   it("keeps endpoints and bucket extrema while bounding rendered points", () => {
@@ -19,6 +19,16 @@ describe("lightweight chart geometry", () => {
 
   it("matches the zero-based tick spacing used by the portfolio charts", () => {
     expect(chartAxisTicks([0, 12_510_000], 5)).toEqual([0, 3_500_000, 7_000_000, 10_500_000, 12_510_000]);
+  });
+
+  it("calculates clean round tick steps with niceChartAxis without trailing arbitrary floats", () => {
+    const jpy = niceChartAxis(73_000, 5);
+    expect(jpy.domain).toEqual([0, 80_000]);
+    expect(jpy.ticks).toEqual([0, 20_000, 40_000, 60_000, 80_000]);
+
+    const usd = niceChartAxis(345, 5);
+    expect(usd.domain).toEqual([0, 400]);
+    expect(usd.ticks).toEqual([0, 100, 200, 300, 400]);
   });
 
   it("builds a closed donut segment", () => {

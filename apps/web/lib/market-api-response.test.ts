@@ -3,9 +3,9 @@ import { MarketApiResponseError, isAbortLikeMarketError, readMarketApiResponse, 
 
 describe("market API responses", () => {
   it("parses JSON regardless of a missing content-type header", async () => {
-    const response = new Response(JSON.stringify({ quotes: [{ securityId: "sec-7203-xtks" }] }), { status: 200 });
+    const response = new Response(JSON.stringify({ quotes: [{ securityId: "sec-7203-xtks", price: "2500" }] }), { status: 200 });
     await expect(readMarketApiResponse(response, "response unavailable")).resolves.toEqual({
-      quotes: [{ securityId: "sec-7203-xtks" }],
+      quotes: [{ securityId: "sec-7203-xtks", price: "2500" }],
     });
   });
 

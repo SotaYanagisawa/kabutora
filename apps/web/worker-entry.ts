@@ -3,6 +3,9 @@ import openNextWorker, {
   DOQueueHandler,
   DOShardedTagCache,
 } from "./.open-next/worker.js";
+import type { D1DatabaseLike, MarketWorkerEnv } from "./lib/cloudflare-market-env";
+import { collectJapannextPts } from "./lib/server-pts-collector";
+import { isD1DailyLimitError, isMarketRefreshJob, processMarketRefreshJob, scheduleMarketRefresh } from "./lib/server-market-scheduler";
 
 export { BucketCachePurge, DOQueueHandler, DOShardedTagCache };
 
@@ -49,5 +52,43 @@ export default {
     const authResponse = await proxyFirebaseAuthHelper(request);
     if (authResponse) return authResponse;
     return openNextWorker.fetch(request, env, ctx);
+  },
+  async scheduled(controller: { scheduledTime: number; cron?: string }, env: MarketWorkerEnv, ctx: { waitUntil: (promise: Promise<unknown>) => void }) {
+    if (!env.MARKET_DB) return;
+    if (controller.cron === "* * * * *") {
+      ctx.waitUntil(collectJapannextPts(env.MARKET_DB, controller.scheduledTime));
+      return;
+    }
+    if (env.MARKET_REFRESH_QUEUE) {
+      ctx.waitUntil(scheduleMarketRefresh(env.MARKET_DB, env.MARKET_REFRESH_QUEUE, controller.scheduledTime));
+    }
+  },
+  async queue(batch: {
+    messages: Array<{
+      body: unknown;
+      ack: () => void;
+      retry: (options?: { delaySeconds?: number }) => void;
+    }>;
+  }, env: MarketWorkerEnv) {
+    if (!env.MARKET_DB) {
+      for (const message of batch.messages) message.retry({ delaySeconds: 300 });
+      return;
+    }
+    const db: D1DatabaseLike = env.MARKET_DB;
+    await Promise.all(batch.messages.map(async (message) => {
+      if (!isMarketRefreshJob(message.body)) {
+        message.ack();
+        return;
+      }
+      try {
+        await processMarketRefreshJob(db, message.body);
+        message.ack();
+      } catch (error) {
+        // Retrying quota-rejected writes every two minutes builds a backlog
+        // that stampedes D1 as soon as the UTC-day allowance resets.
+        if (isD1DailyLimitError(error)) message.ack();
+        else message.retry({ delaySeconds: 120 });
+      }
+    }));
   },
 };

@@ -1,3 +1,5 @@
+import { validateMarketPayload } from "./market-payload-validation";
+
 export class MarketApiResponseError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -24,7 +26,9 @@ export async function readMarketApiResponse<T>(response: Response, fallbackMessa
   const body = await response.text();
   if (!body.trim()) throw new MarketApiResponseError(fallbackMessage, response.status);
   try {
-    return JSON.parse(body) as T;
+    const value: unknown = JSON.parse(body);
+    if (response.ok) validateMarketPayload(value);
+    return value as T;
   } catch {
     // Safari exposes JSON parsing failures as the opaque DOMException message
     // "The string did not match the expected pattern.". Keep infrastructure

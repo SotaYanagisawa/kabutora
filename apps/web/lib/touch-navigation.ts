@@ -35,23 +35,26 @@ export function shouldCommitNativeSwipe(distance: number, velocity: number, view
     || (Math.abs(distance) >= 18 && Math.abs(velocity) >= 0.3);
 }
 
+type ClosestTarget = { closest(selectors: string): Element | null };
+
+function hasClosest(target: unknown): target is ClosestTarget {
+  if (!target || typeof target !== "object" || !("closest" in target)) return false;
+  return typeof (target as { closest?: unknown }).closest === "function";
+}
+
 export function isInteractiveInputTarget(target: unknown): boolean {
-  if (!target || typeof target !== "object" || !("closest" in target) || typeof (target as any).closest !== "function") {
-    return false;
-  }
+  if (!hasClosest(target)) return false;
   return Boolean(
-    (target as any).closest(
+    target.closest(
       "input, select, textarea, [contenteditable='true'], [role='slider'], .modal-layer, .date-range-layer"
     )
   );
 }
 
 export function isSwipeBlockedTarget(target: unknown): boolean {
-  if (!target || typeof target !== "object" || !("closest" in target) || typeof (target as any).closest !== "function") {
-    return false;
-  }
+  if (!hasClosest(target)) return false;
   return Boolean(
-    (target as any).closest(
+    target.closest(
       "input, select, textarea, [contenteditable='true'], [role='slider'], button, a, label, .modal-layer, .date-range-layer, .market-tape, .segmented, .mobile-nav, .mobile-control-dock, .desktop-nav, .watchlist-bottom-controls, nav, footer, [role='navigation'], svg, .lightweight-chart, .lightweight-donut, .daily-chart, .daily-performance, .detail-chart, .performance-chart, .allocation-chart-wrap, .allocation-view, .ticker-sparkline-wrap, .chart-tooltip, [data-chart], [data-swipe-ignore]"
     )
   );

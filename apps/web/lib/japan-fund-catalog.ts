@@ -1,3 +1,5 @@
+import { buildSecuritySearchIndex, searchSecurityIndex } from "./security-search";
+
 export type JapanFundSearchResult = {
   id: string;
   displaySymbol: string;
@@ -62,30 +64,12 @@ const CATALOG: readonly CatalogEntry[] = [
   },
 ];
 
-const normalize = (value: string) => value
-  .normalize("NFKC")
-  .toLocaleLowerCase("ja")
-  .replaceAll("高配当", "好配当")
-  .replace(/[\s・･()（）「」『』【】\[\]_-]+/gu, "");
-
 const publicResult = ({ aliases: _aliases, ...result }: CatalogEntry): JapanFundSearchResult => result;
+const SEARCH_INDEX = buildSecuritySearchIndex(CATALOG);
 
 export const featuredJapanFunds = () => CATALOG.map(publicResult);
 
 export function searchKnownJapanFunds(query: string): JapanFundSearchResult[] {
-  const needle = normalize(query);
-  if (!needle) return featuredJapanFunds();
-  return CATALOG.map((entry, order) => {
-    const values = [entry.displaySymbol, entry.name, ...entry.aliases].map(normalize);
-    const score = values.reduce((best, value) => {
-      if (value === needle) return Math.max(best, 100);
-      if (value.startsWith(needle)) return Math.max(best, 90);
-      if (value.includes(needle)) return Math.max(best, 80);
-      if (needle.includes(value)) return Math.max(best, 70);
-      return best;
-    }, 0);
-    return { entry, order, score };
-  }).filter((candidate) => candidate.score > 0)
-    .sort((a, b) => b.score - a.score || a.order - b.order)
-    .map(({ entry }) => publicResult(entry));
+  if (!query.trim()) return featuredJapanFunds();
+  return searchSecurityIndex(SEARCH_INDEX, query, CATALOG.length).map(publicResult);
 }

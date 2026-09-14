@@ -7,7 +7,8 @@ type MarketLabelInput = {
 
 const normalized = (value: string | null | undefined) => (value ?? "").normalize("NFKC").trim().toUpperCase();
 
-export function marketDisplayName(security: MarketLabelInput) {
+export function marketDisplayName(security?: MarketLabelInput | null) {
+  if (!security) return "株式";
   const mic = normalized(security.exchangeMic);
   const source = normalized(security.quote?.exchangeLabel ?? security.exchangeLabel ?? security.exchangeName);
 

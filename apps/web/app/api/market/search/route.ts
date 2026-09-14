@@ -1,15 +1,23 @@
 import { authorizeMarketRequest, unauthorizedResponse } from "@/lib/server-auth";
 import { parseYahooJapanFundSearch, type YahooJapanFundSearchResult } from "@/lib/yahoo-japan-fund";
 import { searchKnownJapanFunds } from "@/lib/japan-fund-catalog";
+import { searchEmbeddedCatalog } from "@/lib/stock-catalog";
 import { normalizeYahooGlobalQuote } from "@/lib/global-security";
 import type { YahooUsdSearchQuote } from "@/lib/usd-security";
 import { stableMarketErrorMessage } from "@/lib/market-api-response";
+import { searchProviderPlan } from "@/lib/market-search-plan";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import type { CatalogSecurity } from "@/lib/stock-catalog";
+
 type YahooSearchPayload = { quotes?: YahooUsdSearchQuote[] };
-type SearchResult = NonNullable<ReturnType<typeof normalizeJapaneseQuote>> | NonNullable<ReturnType<typeof normalizeYahooGlobalQuote>> | YahooJapanFundSearchResult;
+type SearchResult =
+  | NonNullable<ReturnType<typeof normalizeJapaneseQuote>>
+  | NonNullable<ReturnType<typeof normalizeYahooGlobalQuote>>
+  | YahooJapanFundSearchResult
+  | CatalogSecurity;
 
 const searchCache = new Map<string, { expiresAt: number; results: SearchResult[]; warnings: string[] }>();
 const searchInFlight = new Map<string, Promise<{ results: SearchResult[]; warnings: string[] }>>();
@@ -38,7 +46,11 @@ function normalizeJapaneseQuote(quote: YahooUsdSearchQuote) {
   return null;
 }
 
-async function searchYahooGlobal(query: string): Promise<SearchResult[]> {
+function providerSignal(parent: AbortSignal, timeoutMs: number) {
+  return AbortSignal.any([parent, AbortSignal.timeout(timeoutMs)]);
+}
+
+async function searchYahooGlobal(query: string, signal: AbortSignal): Promise<SearchResult[]> {
   const failures: string[] = [];
   for (const host of ["query2.finance.yahoo.com", "query1.finance.yahoo.com"]) {
     try {
@@ -50,7 +62,7 @@ async function searchYahooGlobal(query: string): Promise<SearchResult[]> {
       const response = await fetch(url, {
         cache: "no-store",
         headers: { Accept: "application/json", "User-Agent": "Kabutora/1.0 personal-portfolio-tracker" },
-        signal: AbortSignal.timeout(6_000),
+        signal: providerSignal(signal, 1_800),
       });
       if (!response.ok) throw new Error(`${host} returned ${response.status}`);
       const payload = (await response.json()) as YahooSearchPayload;
@@ -64,13 +76,13 @@ async function searchYahooGlobal(query: string): Promise<SearchResult[]> {
   throw new Error(failures.join("; ") || "Global search unavailable");
 }
 
-async function searchYahooJapan(query: string): Promise<SearchResult[]> {
+async function searchYahooJapan(query: string, signal: AbortSignal): Promise<SearchResult[]> {
   const url = new URL("https://finance.yahoo.co.jp/search/");
   url.searchParams.set("query", query);
   const response = await fetch(url, {
     cache: "no-store",
     headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0 (compatible; Kabutora/1.0)" },
-    signal: AbortSignal.timeout(10_000),
+    signal: providerSignal(signal, 2_000),
   });
   if (!response.ok) throw new Error(`Yahoo Japan returned ${response.status}`);
   const html = await response.text();
@@ -118,19 +130,36 @@ export async function POST(request: Request) {
   if (!task) {
     task = (async () => {
       const catalogResults = searchKnownJapanFunds(query);
-      const looksAmericanOrTicker = /^[A-Za-z0-9.^ -]{1,31}$/u.test(query);
-      const looksJapaneseTicker = /^[0-9]{3,4}[A-Za-z]?$/u.test(query);
-      const providers: Array<Promise<SearchResult[]>> = looksJapaneseTicker
-        ? [searchYahooJapan(query), searchYahooGlobal(query)]
-        : looksAmericanOrTicker
-          ? [searchYahooGlobal(query)]
-          : [searchYahooJapan(query), searchYahooGlobal(query)];
-      const searches = await Promise.allSettled(providers);
-      const providerResults = searches.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
-      const results = [...new Map([...catalogResults, ...providerResults].map((item) => [item.id, item])).values()].slice(0, 15);
-      const warnings = searches.flatMap((result) =>
-        result.status === "rejected" ? [stableMarketErrorMessage(result.reason, "一部の検索先から応答がありませんでした")] : [],
-      );
+      const stockResults = searchEmbeddedCatalog(query);
+      const combinedLocal = [...new Map([...catalogResults, ...stockResults].map((item) => [item.id, item])).values()];
+      if (combinedLocal.length >= 10) return { results: combinedLocal.slice(0, 15), warnings: [] };
+
+      const providerPlan = searchProviderPlan(query);
+      const controller = new AbortController();
+      const deadline = setTimeout(() => controller.abort(new DOMException("Search deadline exceeded", "TimeoutError")), 2_300);
+      const providers: Array<Promise<SearchResult[]>> = providerPlan === "japan"
+        ? [searchYahooJapan(query, controller.signal)]
+        : providerPlan === "global"
+          ? [searchYahooGlobal(query, controller.signal)]
+          : [searchYahooJapan(query, controller.signal), searchYahooGlobal(query, controller.signal)];
+      const warnings: string[] = [];
+      let providerResults: SearchResult[] = [];
+      try {
+        const settled = await Promise.allSettled(providers);
+        for (const res of settled) {
+          if (res.status === "fulfilled" && res.value.length) {
+            providerResults.push(...res.value);
+          } else if (res.status === "rejected") {
+            warnings.push(stableMarketErrorMessage(res.reason, "一部の検索先から応答がありませんでした"));
+          }
+        }
+      } catch (error) {
+        warnings.push(stableMarketErrorMessage(error, "検索先から応答がありませんでした"));
+      } finally {
+        clearTimeout(deadline);
+        controller.abort();
+      }
+      const results = [...new Map([...combinedLocal, ...providerResults].map((item) => [item.id, item])).values()].slice(0, 15);
       if (results.length) searchCache.set(key, { expiresAt: Date.now() + SEARCH_TTL_MS, results, warnings });
       return { results, warnings };
     })();

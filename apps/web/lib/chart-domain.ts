@@ -1,3 +1,5 @@
+import { numericExtent } from "./numeric-extent";
+
 export function dynamicChartDomain(
   primaryValues: number[],
   referenceValues: number[] = [],
@@ -9,8 +11,7 @@ export function dynamicChartDomain(
   const values = [...primary, ...reference];
   if (!values.length) return [0, 1];
 
-  const minimum = Math.min(...values);
-  const maximum = Math.max(...values);
+  const [minimum, maximum] = numericExtent(values);
   if (options.zeroBased) return [0, Math.max(options.minimumSpread ?? 1, maximum * 1.04)];
 
   const spread = Math.max(maximum - minimum, Math.abs(maximum) * 0.0025, options.minimumSpread ?? 1);

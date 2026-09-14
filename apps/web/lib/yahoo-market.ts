@@ -1,4 +1,4 @@
-import type { CorporateAction, IntradayBar, MarketBar, MarketQuote } from "@kabutora/domain";
+import type { CorporateAction, DistributionEvent, IntradayBar, MarketBar, MarketQuote } from "@kabutora/domain";
 
 type YahooChartResult = {
   meta?: {
@@ -29,6 +29,8 @@ type YahooChartResult = {
   };
   events?: {
     splits?: Record<string, { date?: number; numerator?: number; denominator?: number; splitRatio?: string }>;
+    dividends?: Record<string, { amount?: number; date?: number }>;
+    capitalGains?: Record<string, { amount?: number; date?: number }>;
   };
 };
 
@@ -57,7 +59,7 @@ const inFlight = new Map<string, Promise<ProviderResult<YahooChartResult>>>();
 const hostCooldown = new Map<string, number>();
 const providerWaiters: Array<() => void> = [];
 let activeProviderRequests = 0;
-const MAX_PROVIDER_CONCURRENCY = 3;
+const MAX_PROVIDER_CONCURRENCY = 6;
 const MAX_MEMORY_CACHE_ENTRIES = 600;
 const ACTIVE_QUOTE_TTL_MS = 9 * 60 * 1000;
 const CLOSED_QUOTE_TTL_MS = 6 * 60 * 60 * 1000;
@@ -142,8 +144,14 @@ function sliceHistoryResult(result: YahooChartResult, params: Record<string, str
   ));
   const splits = Object.fromEntries(Object.entries(result.events?.splits ?? {}).filter(([key, split]) => {
     const timestamp = finiteNumber(split.date) ?? finiteNumber(Number(key));
-    return timestamp != null && (!Number.isFinite(start) || timestamp >= start) && (!Number.isFinite(end) || timestamp <= end);
+    return timestamp != null && (!Number.isFinite(end) || timestamp <= end);
   }));
+  const sliceCashEvents = (events: Record<string, { amount?: number; date?: number }> | undefined) => Object.fromEntries(
+    Object.entries(events ?? {}).filter(([key, item]) => {
+      const timestamp = finiteNumber(item.date) ?? finiteNumber(Number(key));
+      return timestamp != null && (!Number.isFinite(end) || timestamp <= end);
+    }),
+  );
   return {
     ...result,
     timestamp: indexes.map((index) => timestamps[index]),
@@ -152,7 +160,12 @@ function sliceHistoryResult(result: YahooChartResult, params: Record<string, str
       quote: [{ ...(result.indicators?.quote?.[0] ?? {}), close: indexes.map((index) => closes[index] ?? null) }],
       adjclose: [{ ...(result.indicators?.adjclose?.[0] ?? {}), adjclose: indexes.map((index) => adjusted[index] ?? null) }],
     },
-    events: { ...result.events, splits },
+    events: {
+      ...result.events,
+      splits,
+      dividends: sliceCashEvents(result.events?.dividends),
+      capitalGains: sliceCashEvents(result.events?.capitalGains),
+    },
   };
 }
 
@@ -184,6 +197,8 @@ function mergeHistoryResults(existing: YahooChartResult | null, incoming: YahooC
       ...existing.events,
       ...incoming.events,
       splits: { ...(existing.events?.splits ?? {}), ...(incoming.events?.splits ?? {}) },
+      dividends: { ...(existing.events?.dividends ?? {}), ...(incoming.events?.dividends ?? {}) },
+      capitalGains: { ...(existing.events?.capitalGains ?? {}), ...(incoming.events?.capitalGains ?? {}) },
     },
   };
 }
@@ -300,18 +315,57 @@ export function parseYahooJapanQuotePage(html: string): YahooJapanBoard | null {
   }
 }
 
-function tokyoPtsTimestamp(value: string | undefined) {
-  const match = /^(?:(\d{1,2})\/(\d{1,2})\s+)?(\d{1,2}):(\d{2})$/u.exec(value ?? "");
+export function tokyoPtsTimestamp(value: string | undefined, now = new Date()) {
+  const clean = value?.trim();
+  if (!clean) return null;
+
+  const match = /^(?:(?:(\d{4})\/)?(\d{1,2})\/(\d{1,2})\s+)?(\d{1,2}):(\d{2})$/u.exec(clean);
   if (!match) return null;
-  const now = new Date(Date.now() + 9 * 60 * 60_000);
-  const currentMonth = now.getUTCMonth() + 1;
-  const month = Number(match[1] ?? currentMonth);
-  const day = Number(match[2] ?? now.getUTCDate());
-  let year = now.getUTCFullYear();
-  if (currentMonth === 1 && month === 12) year -= 1;
-  else if (currentMonth === 12 && month === 1) year += 1;
-  const timestamp = Date.UTC(year, month - 1, day, Number(match[3]) - 9, Number(match[4]));
-  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+
+  const tokyoParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => tokyoParts.find((item) => item.type === type)?.value ?? "";
+  const currentYear = Number(part("year"));
+  const currentMonth = Number(part("month"));
+  const currentDay = Number(part("day"));
+  const weekday = part("weekday");
+  const currentMinute = Number(part("hour")) * 60 + Number(part("minute"));
+
+  const hasDate = match[2] != null && match[3] != null;
+  const rawMonth = hasDate ? Number(match[2]) : currentMonth;
+  const rawDay = hasDate ? Number(match[3]) : currentDay;
+  let year = match[1] ? Number(match[1]) : currentYear;
+  if (!match[1]) {
+    if (currentMonth === 1 && rawMonth === 12) year -= 1;
+    else if (currentMonth === 12 && rawMonth === 1) year += 1;
+  }
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const tradeMinute = hour * 60 + minute;
+
+  const d = new Date(Date.UTC(year, rawMonth - 1, rawDay, hour - 9, minute));
+  if (!hasDate) {
+    let daysToSubtract = 0;
+    if (weekday === "Sat") {
+      daysToSubtract = 1;
+    } else if (weekday === "Sun") {
+      daysToSubtract = 2;
+    } else if (tradeMinute > currentMinute) {
+      daysToSubtract = weekday === "Mon" ? 3 : 1;
+    }
+    if (daysToSubtract > 0) {
+      d.setUTCDate(d.getUTCDate() - daysToSubtract);
+    }
+  }
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null;
 }
 
 function japanBoardEdgeUrl(symbol: string) {
@@ -377,16 +431,68 @@ function numericText(value: string | undefined) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function tokyoMarketTimestamp(updateTime: string | undefined) {
-  const date = new Intl.DateTimeFormat("en-CA", {
+export function tokyoMarketTimestamp(updateTime: string | undefined, now = new Date()) {
+  const clean = updateTime?.trim();
+  if (!clean) return now.toISOString();
+
+  const tokyoParts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Tokyo",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).format(new Date());
-  return updateTime && /^\d{1,2}:\d{2}$/u.test(updateTime)
-    ? new Date(`${date}T${updateTime.padStart(5, "0")}:00+09:00`).toISOString()
-    : new Date().toISOString();
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => tokyoParts.find((item) => item.type === type)?.value ?? "";
+  const currentYear = Number(part("year"));
+  const currentMonth = Number(part("month"));
+  const currentDay = Number(part("day"));
+  const weekday = part("weekday");
+  const currentMinute = Number(part("hour")) * 60 + Number(part("minute"));
+
+  // Format 1: YYYY/M/D H:mm or M/D H:mm or YYYY/M/D or M/D
+  const dateMatch = /^(?:(?:(\d{4})\/)?(\d{1,2})\/(\d{1,2}))(?:\s+(\d{1,2}):(\d{2}))?$/u.exec(clean);
+  if (dateMatch) {
+    const rawMonth = Number(dateMatch[2]);
+    const rawDay = Number(dateMatch[3]);
+    let year = dateMatch[1] ? Number(dateMatch[1]) : currentYear;
+    if (!dateMatch[1]) {
+      if (currentMonth === 1 && rawMonth === 12) year -= 1;
+      else if (currentMonth === 12 && rawMonth === 1) year += 1;
+    }
+    // Default hour/minute to TSE official close at 15:30 JST (06:30 UTC) if omitted
+    const hour = dateMatch[4] != null ? Number(dateMatch[4]) : 15;
+    const minute = dateMatch[5] != null ? Number(dateMatch[5]) : 30;
+    const d = new Date(Date.UTC(year, rawMonth - 1, rawDay, hour - 9, minute));
+    return Number.isFinite(d.getTime()) ? d.toISOString() : now.toISOString();
+  }
+
+  // Format 2: H:mm
+  const timeMatch = /^(\d{1,2}):(\d{2})$/u.exec(clean);
+  if (timeMatch) {
+    const uHour = Number(timeMatch[1]);
+    const uMin = Number(timeMatch[2]);
+    const updateMinute = uHour * 60 + uMin;
+
+    let daysToSubtract = 0;
+    if (weekday === "Sat") {
+      daysToSubtract = 1;
+    } else if (weekday === "Sun") {
+      daysToSubtract = 2;
+    } else if (currentMinute < updateMinute) {
+      daysToSubtract = weekday === "Mon" ? 3 : 1;
+    }
+
+    const d = new Date(Date.UTC(currentYear, currentMonth - 1, currentDay, uHour - 9, uMin));
+    if (daysToSubtract > 0) {
+      d.setUTCDate(d.getUTCDate() - daysToSubtract);
+    }
+    return Number.isFinite(d.getTime()) ? d.toISOString() : now.toISOString();
+  }
+
+  return now.toISOString();
 }
 
 function tseSessionNow(): MarketQuote["session"] {
@@ -401,6 +507,38 @@ function tseSessionNow(): MarketQuote["session"] {
   if (["Sat", "Sun"].includes(part("weekday"))) return "closed";
   const minute = Number(part("hour")) * 60 + Number(part("minute"));
   return (minute >= 9 * 60 && minute <= 11 * 60 + 30) || (minute >= 12 * 60 + 30 && minute <= 15 * 60 + 30) ? "regular" : "closed";
+}
+
+function ptsSessionNow(now = new Date()): "pts_day" | "pts_night" | null {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Tokyo",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+  const weekday = part("weekday");
+  const minute = Number(part("hour")) * 60 + Number(part("minute"));
+
+  // Tue-Sat 00:00 - 06:00 is night PTS from previous business day
+  if (minute < 6 * 60 && !["Sun", "Mon"].includes(weekday)) {
+    return "pts_night";
+  }
+  if (["Sat", "Sun"].includes(weekday)) return null;
+  // Mon-Fri 08:20 - 16:30 (pts day: 08:20-09:00, 11:30-12:30 lunch, 15:30-16:30 post-TSE)
+  if (
+    (minute >= 8 * 60 + 20 && minute < 9 * 60) ||
+    (minute >= 11 * 60 + 30 && minute < 12 * 60 + 30) ||
+    (minute >= 15 * 60 + 30 && minute < 16 * 60 + 30)
+  ) {
+    return "pts_day";
+  }
+  // Mon-Fri 17:00 - 24:00 (pts night)
+  if (minute >= 17 * 60) {
+    return "pts_night";
+  }
+  return null;
 }
 
 async function fetchChart(
@@ -502,12 +640,20 @@ export async function getYahooQuoteBundle(
   securityId: string,
   venueCode: string,
   force = false,
-  intradayRange: "1d" | "5d" = "5d",
+  intradayRange: "1d" | "5d" = "1d",
   expectedPtsSession?: "pts_day" | "pts_night",
 ) {
   const fetchedAt = new Date().toISOString();
   const dailyFund = venueCode === "FUND";
-  const japanBoardTask = venueCode === "TSE" ? getYahooJapanBoard(symbol, force).catch(() => null) : Promise.resolve(null);
+  const shouldFetchJapanBoard = venueCode === "TSE" && (
+    tseSessionNow() !== "regular" ||
+    expectedPtsSession === "pts_day" ||
+    expectedPtsSession === "pts_night" ||
+    force
+  );
+  const japanBoardTask = shouldFetchJapanBoard
+    ? getYahooJapanBoard(symbol, force).catch(() => null)
+    : Promise.resolve(null);
   const tokyoParts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Tokyo",
     weekday: "short",
@@ -524,7 +670,7 @@ export async function getYahooQuoteBundle(
   const nyMinute = Number(nyPart("hour")) * 60 + Number(nyPart("minute"));
   const likelyUsSession = (venueCode === "US" || venueCode === "INDEX") && !["Sat", "Sun"].includes(nyPart("weekday")) && nyMinute >= 4 * 60 && nyMinute <= 20 * 60;
   const likelyActiveSession = likelyTseSession || likelyUsSession || venueCode === "GLOBAL";
-  const providerResult = await fetchChart(symbol, { interval: dailyFund ? "1d" : "15m", range: dailyFund ? "1mo" : intradayRange, events: "div,splits" }, likelyActiveSession ? ACTIVE_QUOTE_TTL_MS : CLOSED_QUOTE_TTL_MS, force);
+  const providerResult = await fetchChart(symbol, { interval: dailyFund ? "1d" : "5m", range: dailyFund ? "1mo" : intradayRange, events: "div,splits" }, likelyActiveSession ? ACTIVE_QUOTE_TTL_MS : CLOSED_QUOTE_TTL_MS, force);
   const result = providerResult.value;
   const last = latestClose(result);
   const metaPrice = finiteNumber(result.meta?.regularMarketPrice);
@@ -577,12 +723,23 @@ export async function getYahooQuoteBundle(
   const japanBoard = await japanBoardTask;
   if (venueCode === "TSE" && japanBoard?.board) {
     const ptsPrice = numericText(japanBoard.board.ptsPrice);
+    const regularPrice = numericText(japanBoard.board.price?.value);
     const ptsTimestamp = tokyoPtsTimestamp(japanBoard.board.ptsUpdateTime);
     const ptsAgeSeconds = ptsTimestamp == null ? Number.POSITIVE_INFINITY : Date.now() / 1000 - new Date(ptsTimestamp).getTime() / 1000;
-    const hasPtsTrade = expectedPtsSession !== "pts_day" && ptsPrice != null && ptsPrice > 0 && ptsTimestamp != null && ptsAgeSeconds >= -120 && ptsAgeSeconds <= 13 * 60 * 60;
+    const isPtsSessionActive = expectedPtsSession === "pts_night" || expectedPtsSession === "pts_day";
+    const ptsDeviation = ptsPrice != null && regularPrice != null && regularPrice > 0 ? Math.abs(ptsPrice / regularPrice - 1) : 0;
+    const ptsTime = ptsTimestamp ? new Date(ptsTimestamp).getTime() : 0;
+    const tseTime = new Date(quote.marketTimestamp).getTime();
+    const isTseRegular = tseSessionNow() === "regular";
+
+    const hasPtsTrade = ptsPrice != null && ptsPrice > 0 && ptsTimestamp != null && ptsAgeSeconds >= -120 && ptsDeviation <= 0.20 && (
+      isTseRegular
+        ? ptsTime > tseTime && ptsAgeSeconds <= 15 * 60
+        : ptsTime >= tseTime - 60_000 && ptsAgeSeconds <= 5 * 24 * 60 * 60
+    );
     if (hasPtsTrade) {
       quote.price = String(ptsPrice);
-      quote.session = "pts_night";
+      quote.session = expectedPtsSession ?? (ptsSessionNow() ?? (isTseRegular ? "regular" : "closed"));
       quote.venueCode = "JNX";
       quote.marketTimestamp = ptsTimestamp;
       quote.provider = `yahoo_japan_pts_html:${japanBoard.cacheState}`;
@@ -613,15 +770,25 @@ export async function getYahooJapanQuoteBundle(symbol: string, securityId: strin
   const regularPrice = numericText(board.price?.value);
   const ptsPrice = numericText(board.ptsPrice);
   const ptsTimestamp = tokyoPtsTimestamp(board.ptsUpdateTime);
+  const regularTimestamp = tokyoMarketTimestamp(board.japanUpdateTime);
   const ptsAgeSeconds = ptsTimestamp == null ? Number.POSITIVE_INFINITY : Date.now() / 1000 - new Date(ptsTimestamp).getTime() / 1000;
-  const hasPtsTrade = expectedSession !== "pts_day" && ptsPrice != null && ptsPrice > 0 && ptsTimestamp != null && ptsAgeSeconds >= -120 && ptsAgeSeconds <= 13 * 60 * 60;
+  const ptsDeviation = ptsPrice != null && regularPrice != null && regularPrice > 0 ? Math.abs(ptsPrice / regularPrice - 1) : 0;
+  const ptsTime = ptsTimestamp ? new Date(ptsTimestamp).getTime() : 0;
+  const regularTime = new Date(regularTimestamp).getTime();
+  const isTseRegular = tseSessionNow() === "regular";
+
+  const hasPtsTrade = ptsPrice != null && ptsPrice > 0 && ptsTimestamp != null && ptsAgeSeconds >= -120 && ptsDeviation <= 0.20 && (
+    isTseRegular
+      ? ptsTime > regularTime && ptsAgeSeconds <= 15 * 60
+      : ptsTime >= regularTime - 60_000 && ptsAgeSeconds <= 5 * 24 * 60 * 60
+  );
   const price = hasPtsTrade ? ptsPrice : regularPrice;
   const change = numericText(board.priceChange?.value);
   if (price == null || price <= 0) throw new MarketDataError(`${symbol}: Yahoo Japan price unavailable`);
   const previousClose = change == null || regularPrice == null ? null : regularPrice - change;
-  const marketTimestamp = hasPtsTrade ? ptsTimestamp : tokyoMarketTimestamp(board.japanUpdateTime);
+  const marketTimestamp = hasPtsTrade ? ptsTimestamp : regularTimestamp;
   const timestampSeconds = new Date(marketTimestamp).getTime() / 1000;
-  const session: MarketQuote["session"] = expectedSession ?? (hasPtsTrade ? "pts_night" : tseSessionNow());
+  const session: MarketQuote["session"] = expectedSession ?? (hasPtsTrade ? (ptsSessionNow() ?? (isTseRegular ? "regular" : "closed")) : tseSessionNow());
   const ageSeconds = Math.max(0, Date.now() / 1000 - timestampSeconds);
   const provider = hasPtsTrade ? `yahoo_japan_pts_html:${cacheState}` : `yahoo_japan_html:${cacheState}`;
   const quote: MarketQuote = {
@@ -649,10 +816,13 @@ export async function getYahooHistory(
   period1: number,
   period2: number,
   force = false,
+  distributionsOnly = false,
 ) {
+  const fiveYearsAgo = Math.floor((Date.now() - 5 * 365 * 24 * 60 * 60 * 1000) / 1000);
+  const fetchPeriod1 = Math.min(period1, fiveYearsAgo);
   const providerResult = await fetchChart(
     symbol,
-    { interval: "1d", period1: String(period1), period2: String(period2), events: "div,splits", includeAdjustedClose: "true" },
+    { interval: distributionsOnly ? "1mo" : "1d", period1: String(fetchPeriod1), period2: String(period2), events: "capitalGain|div|split", includeAdjustedClose: distributionsOnly ? "false" : "true" },
     6 * 60 * 60 * 1000,
     force,
   );
@@ -662,7 +832,7 @@ export async function getYahooHistory(
   const closes = result.indicators?.quote?.[0]?.close ?? [];
   const adjustedCloses = result.indicators?.adjclose?.[0]?.adjclose ?? [];
   const bars: MarketBar[] = [];
-  for (let index = 0; index < Math.min(timestamps.length, closes.length); index += 1) {
+  for (let index = 0; !distributionsOnly && index < Math.min(timestamps.length, closes.length); index += 1) {
     const timestamp = finiteNumber(timestamps[index]);
     const close = finiteNumber(closes[index]);
     if (timestamp == null || close == null || close <= 0) continue;
@@ -692,9 +862,39 @@ export async function getYahooHistory(
       sourceProvider: `yahoo_chart_unofficial:${providerResult.host}`,
     });
   }
+  const distributions: DistributionEvent[] = [];
+  const currency = result.meta?.currency ?? (symbol.endsWith(".T") ? "JPY" : "USD");
+  const appendDistributions = (
+    source: Record<string, { amount?: number; date?: number }> | undefined,
+    type: DistributionEvent["type"],
+  ) => {
+    for (const [eventKey, item] of Object.entries(source ?? {})) {
+      const timestamp = finiteNumber(item.date) ?? finiteNumber(Number(eventKey));
+      const amount = finiteNumber(item.amount);
+      if (timestamp == null || amount == null || amount < 0) continue;
+      const date = ymdInTokyo(timestamp);
+      distributions.push({
+        id: `${securityId}-${type.toLowerCase()}-${timestamp}`,
+        securityId,
+        type,
+        exDate: date,
+        amountPerUnit: String(amount),
+        distributionUnit: "1",
+        currency,
+        sourceProvider: `yahoo_chart_unofficial:${providerResult.host}`,
+        sourceUrl: chartUrl(providerResult.host === "edge" ? hosts[0] : providerResult.host, symbol, { interval: distributionsOnly ? "1mo" : "1d", period1: String(fetchPeriod1), period2: String(period2), events: "capitalGain|div|split" }),
+        confidence: "reported",
+        status: "estimated",
+        fetchedAt: new Date().toISOString(),
+      });
+    }
+  };
+  appendDistributions(result.events?.dividends, "CASH_DIVIDEND");
+  appendDistributions(result.events?.capitalGains, "CAPITAL_GAIN_DISTRIBUTION");
   return {
     bars,
     corporateActions,
+    distributions,
     ...(firstTradeTimestamp != null ? { inceptionDate: ymdInTokyo(firstTradeTimestamp) } : {}),
     cacheState: providerResult.cacheState,
     providerHost: providerResult.host,

@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "node node_modules/next/dist/bin/next dev",
-    "build": "node node_modules/next/dist/bin/next build",
-    "build:cloudflare": "node node_modules/@opennextjs/cloudflare/dist/cli/index.js build",
+    "build": "node ../../scripts/build-release.mjs next",
+    "build:cloudflare": "node ../../scripts/build-release.mjs cloudflare",
     "preview:cloudflare": "node node_modules/@opennextjs/cloudflare/dist/cli/index.js build && node node_modules/@opennextjs/cloudflare/dist/cli/index.js preview",
-    "deploy:cloudflare": "node node_modules/@opennextjs/cloudflare/dist/cli/index.js build && node node_modules/@opennextjs/cloudflare/dist/cli/index.js deploy",
+    "deploy:cloudflare": "node ../../scripts/build-release.mjs cloudflare && node node_modules/@opennextjs/cloudflare/dist/cli/index.js deploy",
     "start": "node node_modules/next/dist/bin/next start",
     "typecheck": "node ../../node_modules/typescript/bin/tsc --noEmit"
   },

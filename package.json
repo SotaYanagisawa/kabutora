@@ -6,11 +6,20 @@
     "dev": "pnpm --filter @kabutora/web dev",
     "build": "pnpm --filter @kabutora/web build",
     "typecheck": "pnpm --filter @kabutora/web typecheck",
+    "tc": "pnpm --filter @kabutora/web typecheck",
+    "check": "pnpm typecheck && pnpm test",
+    "check:full": "pnpm check && pnpm verify:privacy && pnpm exec playwright test",
     "test": "vitest run",
-    "test:rules": "firebase emulators:exec --only firestore \"node firebase/firestore-rules.mjs\"",
-    "verify:privacy": "node scripts/verify-private-data-boundary.mjs"
+    "test:fast": "vitest run --exclude '**/vault-crypto.test.ts'",
+    "test:domain": "vitest run packages/domain",
+    "test:market": "vitest run apps/web/lib/server-market*.test.ts apps/web/lib/yahoo-*.test.ts",
+    "test:e2e:search": "playwright test apps/web/e2e/security-search.spec.ts",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-kabutora-security-rules \"node firebase/firestore-rules.mjs\"",
+    "verify:privacy": "node scripts/verify-private-data-boundary.mjs",
+    "test:cloud": "firebase emulators:exec --only auth,firestore --project demo-kabutora-security-rules \"playwright test --config playwright.cloud.config.ts\""
   },
   "devDependencies": {
+    "@playwright/test": "1.51.1",
     "@firebase/rules-unit-testing": "5.0.1",
     "@types/node": "^24.0.0",
     "firebase": "^12.17.1",

@@ -6,6 +6,9 @@ describe("market security identifiers", () => {
     expect(normalizeRequestedSecurity("sec-7203-xtks")?.providerSymbol).toBe("7203.T");
     expect(normalizeRequestedSecurity("sec-285a-xtks")?.providerSymbol).toBe("285A.T");
     expect(normalizeRequestedSecurity("sec-us-aapl-xnas")?.providerSymbol).toBe("AAPL");
+    expect(normalizeRequestedSecurity("sec-us-vym")).toMatchObject({ providerSymbol: "VYM", currency: "USD", venueCode: "US" });
+    expect(normalizeRequestedSecurity("sec-us-hdv")).toMatchObject({ providerSymbol: "HDV", currency: "USD", venueCode: "US" });
+    expect(normalizeRequestedSecurity("sec-us-spyd-xams")).toMatchObject({ providerSymbol: "SPYD", exchangeMic: "ARCX", currency: "USD", venueCode: "US" });
     expect(normalizeRequestedSecurity("sec-fx-usdjpy")?.providerSymbol).toBe("JPY=X");
     expect(normalizeRequestedSecurity("sec-jp-fund-0231o01a")).toMatchObject({ providerSymbol: "0231O01A", exchangeMic: "JPFD", venueCode: "FUND" });
     expect(normalizeRequestedSecurity("sec-foreign-fund-21070062")).toMatchObject({ providerSymbol: "0162", exchangeMic: "XFND", currency: "USD", venueCode: "FUND" });
@@ -61,5 +64,31 @@ describe("market security identifiers", () => {
     const normalized = normalizeRequestedSecurities([ids[0], ids[0], ...ids].join(","));
     expect(normalized).toHaveLength(25);
     expect(new Set(normalized.map((item) => item.id)).size).toBe(25);
+  });
+
+  it("normalizes bare Japanese tickers and .T symbols", () => {
+    expect(normalizeRequestedSecurity("285A")).toMatchObject({
+      id: "sec-285a",
+      displaySymbol: "285A",
+      providerSymbol: "285A.T",
+      exchangeMic: "XTKS",
+      currency: "JPY",
+      venueCode: "TSE",
+    });
+    expect(normalizeRequestedSecurity("285A.T")).toMatchObject({
+      id: "sec-285a",
+      displaySymbol: "285A",
+      providerSymbol: "285A.T",
+    });
+    expect(normalizeRequestedSecurity("7203")).toMatchObject({
+      id: "sec-7203",
+      displaySymbol: "7203",
+      providerSymbol: "7203.T",
+    });
+    expect(normalizeRequestedSecurity("7203.T")).toMatchObject({
+      id: "sec-7203",
+      displaySymbol: "7203",
+      providerSymbol: "7203.T",
+    });
   });
 });

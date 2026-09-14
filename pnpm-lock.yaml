@@ -15,6 +15,9 @@ importers:
       '@firebase/rules-unit-testing':
         specifier: 5.0.1
         version: 5.0.1(firebase@12.17.1)
+      '@playwright/test':
+        specifier: 1.51.1
+        version: 1.51.1
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.3
@@ -30,12 +33,6 @@ importers:
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@24.13.3)(supports-color@10.2.2)(terser@5.16.9)(yaml@2.9.0)
-
-  apps/market-worker:
-    dependencies:
-      '@kabutora/market-data':
-        specifier: workspace:*
-        version: link:../../packages/market-data
 
   apps/web:
     dependencies:
@@ -62,7 +59,7 @@ importers:
         version: 0.536.0(react@19.2.8)
       next:
         specifier: ^15.4.0
-        version: 15.5.23(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        version: 15.5.23(@opentelemetry/api@1.9.1)(@playwright/test@1.51.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       react:
         specifier: ^19.1.0
         version: 19.2.8
@@ -72,7 +69,7 @@ importers:
     devDependencies:
       '@opennextjs/cloudflare':
         specifier: ^1.20.2
-        version: 1.20.2(next@15.5.23(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(supports-color@10.2.2)(wrangler@4.120.0)
+        version: 1.20.2(next@15.5.23(@opentelemetry/api@1.9.1)(@playwright/test@1.51.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(supports-color@10.2.2)(wrangler@4.120.0)
       '@types/react':
         specifier: ^19.1.0
         version: 19.2.18
@@ -1323,6 +1320,11 @@ packages:
   '@pkgjs/parseargs@0.11.0':
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
+
+  '@playwright/test@1.51.1':
+    resolution: {integrity: sha512-nM+kEaTSAoVlXmMPH10017vn3FSiFqr/bh4fKg9vmAdMfd9SDqRZNvPSiAHADc/itWak+qPvMPZQOPwCBW7k7Q==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   '@pnpm/config.env-replace@1.1.0':
     resolution: {integrity: sha512-htyl8TWnKL7K/ESFa1oW2UB5lVDxuF5DpM7tBi6Hu2LNL3mWkIzNLG6N4zoCUP1lCKNxWy/3iu8mS8MvToGd6w==}
@@ -2657,6 +2659,11 @@ packages:
   fs.realpath@1.0.0:
     resolution: {integrity: sha512-OO0pH2lK6a0hZnAdau5ItzHPI6pUlvI7jMVnxUQRtw4owF2wk8lOSabtGDCTP4Ggrg2MbGnWO9X8K1t4+fGMDw==}
 
+  fsevents@2.3.2:
+    resolution: {integrity: sha512-xiqMQR4xAeHTuB9uWm+fFRcIOgKBMiOBP+eXiyT7jsgVCq1bkVygt00oASowB7EdtpOHaaPgKt812P9ab+DDKA==}
+    engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
+    os: [darwin]
+
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
@@ -3579,6 +3586,16 @@ packages:
   picomatch@4.0.5:
     resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
     engines: {node: '>=12'}
+
+  playwright-core@1.51.1:
+    resolution: {integrity: sha512-/crRMj8+j/Nq5s8QcvegseuyeZPxpQCZb6HNk3Sos3BlZyAknRjoyJPFWkpNn8v0+P3WiwqFF8P+zQo4eqiNuw==}
+    engines: {node: '>=18'}
+    hasBin: true
+
+  playwright@1.51.1:
+    resolution: {integrity: sha512-kkx+MB2KQRkyxjYPc3a0wLZZoDczmppyGJIvQ43l+aZihkaVvmu/21kiyaHeHjiFxjxNNFnUncKmcGIyOojsaw==}
+    engines: {node: '>=18'}
+    hasBin: true
 
   portfinder@1.0.38:
     resolution: {integrity: sha512-rEwq/ZHlJIKw++XtLAO8PPuOQA/zaPJOZJ37BVuN97nLpMJeuDVLVGRwbFoBgLudgdTMP2hdRJP++H+8QOA3vg==}
@@ -5858,7 +5875,7 @@ snapshots:
     dependencies:
       gzip-size: 6.0.0
 
-  '@opennextjs/aws@4.1.0(next@15.5.23(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(supports-color@10.2.2)':
+  '@opennextjs/aws@4.1.0(next@15.5.23(@opentelemetry/api@1.9.1)(@playwright/test@1.51.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(supports-color@10.2.2)':
     dependencies:
       '@ast-grep/napi': 0.40.5
       '@aws-sdk/client-cloudfront': 3.984.0
@@ -5874,24 +5891,24 @@ snapshots:
       cookie: 1.1.1
       esbuild: 0.25.4
       express: 5.2.1(supports-color@10.2.2)
-      next: 15.5.23(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      next: 15.5.23(@opentelemetry/api@1.9.1)(@playwright/test@1.51.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       path-to-regexp: 6.3.0
       urlpattern-polyfill: 10.1.0
       yaml: 2.9.0
     transitivePeerDependencies:
       - supports-color
 
-  '@opennextjs/cloudflare@1.20.2(next@15.5.23(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(supports-color@10.2.2)(wrangler@4.120.0)':
+  '@opennextjs/cloudflare@1.20.2(next@15.5.23(@opentelemetry/api@1.9.1)(@playwright/test@1.51.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(supports-color@10.2.2)(wrangler@4.120.0)':
     dependencies:
       '@ast-grep/napi': 0.40.5
       '@dotenvx/dotenvx': 1.31.0
-      '@opennextjs/aws': 4.1.0(next@15.5.23(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(supports-color@10.2.2)
+      '@opennextjs/aws': 4.1.0(next@15.5.23(@opentelemetry/api@1.9.1)(@playwright/test@1.51.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(supports-color@10.2.2)
       ci-info: 4.4.0
       cloudflare: 4.5.0
       comment-json: 4.6.2
       enquirer: 2.4.1
       glob: 12.0.0
-      next: 15.5.23(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      next: 15.5.23(@opentelemetry/api@1.9.1)(@playwright/test@1.51.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       ts-tqdm: 0.8.6
       wrangler: 4.120.0
       yargs: 18.1.0
@@ -5905,6 +5922,10 @@ snapshots:
 
   '@pkgjs/parseargs@0.11.0':
     optional: true
+
+  '@playwright/test@1.51.1':
+    dependencies:
+      playwright: 1.51.1
 
   '@pnpm/config.env-replace@1.1.0': {}
 
@@ -7439,6 +7460,9 @@ snapshots:
 
   fs.realpath@1.0.0: {}
 
+  fsevents@2.3.2:
+    optional: true
+
   fsevents@2.3.3:
     optional: true
 
@@ -8184,7 +8208,7 @@ snapshots:
 
   netmask@2.1.1: {}
 
-  next@15.5.23(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8):
+  next@15.5.23(@opentelemetry/api@1.9.1)(@playwright/test@1.51.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8):
     dependencies:
       '@next/env': 15.5.23
       '@swc/helpers': 0.5.15
@@ -8203,6 +8227,7 @@ snapshots:
       '@next/swc-win32-arm64-msvc': 15.5.23
       '@next/swc-win32-x64-msvc': 15.5.23
       '@opentelemetry/api': 1.9.1
+      '@playwright/test': 1.51.1
       sharp: 0.35.2
     transitivePeerDependencies:
       - '@babel/core'
@@ -8408,6 +8433,14 @@ snapshots:
   picomatch@2.3.2: {}
 
   picomatch@4.0.5: {}
+
+  playwright-core@1.51.1: {}
+
+  playwright@1.51.1:
+    dependencies:
+      playwright-core: 1.51.1
+    optionalDependencies:
+      fsevents: 2.3.2
 
   portfinder@1.0.38(supports-color@10.2.2):
     dependencies:

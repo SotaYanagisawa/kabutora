@@ -25,10 +25,14 @@ flowchart TB
     subgraph Edge["⚡ Edge Infrastructure (Cloudflare Workers)"]
         Worker["OpenNext Cloudflare Worker"]
         AuthCheck["App Check & Auth Verifier"]
-        MarketProxy["Market Data Proxy & Cache"]
+        MarketProxy["Market API & Snapshot Reader"]
+        Scheduler["10-minute Cron + Queue"]
+        D1[("D1 Public Market Data")]
         
         Worker --> AuthCheck
         AuthCheck --> MarketProxy
+        Scheduler --> MarketProxy
+        MarketProxy <--> D1
     end
 
     subgraph Backend["☁️ Secure Cloud Services"]
@@ -37,7 +41,7 @@ flowchart TB
         Upstream["Upstream Market Providers\n(Tokyo Quotes, US Equities, Funds)"]
     end
 
-    State -- "Authenticated Quote Requests" --> Worker
+    State -- "Authenticated Snapshot / Quote Requests" --> Worker
     Crypto -- "Sync Encrypted Blobs" --> Firestore
     State -- "Session Validation" --> Auth
     MarketProxy <--> Upstream
@@ -75,16 +79,18 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    Client["Client UI"] -->|"1. Request Quotes"| Edge["Cloudflare Worker"]
-    Edge -->|"2. Check Edge Cache"| Cache{"Cache Hit?"}
-    Cache -- "Yes (< 10 min)" --> Hit["Return Cached Quote"]
-    Cache -- "No" --> Fetch["Fetch from Upstream Provider"]
-    Fetch --> Store["Store in Edge Cache"]
-    Store --> Client
-    Hit --> Client
+    Cron["10-minute Cron"] --> Queue["Public-symbol jobs"]
+    Queue --> Fetch["Fetch upstream providers"]
+    Fetch --> D1[("D1 snapshots")]
+    Client["Client UI"] -->|"One authenticated startup read"| Edge["Cloudflare Worker"]
+    Edge --> D1
+    D1 --> Client
+    Client -->|"Authenticated manual refresh"| Queue
 ```
 
 - **Intraday 15-Minute Bars**: Real-time 5-day session bars for active holdings.
 - **Historical Daily Bars**: Long-term price history loaded incrementally on-demand for the Performance view.
-- **Tiered Caching**: Cloudflare edge cache + client IndexedDB cache to ensure fast performance and minimal network overhead.
-
+- **Tiered Caching**: Cloudflare D1 snapshots plus the client IndexedDB cache minimize startup requests and preserve offline fallback.
+- **Privacy Split**: D1 contains public symbols and market data only; Firestore portfolio documents remain ciphertext and are decrypted only in the client.
+- **Snapshot-first refresh**: Browser refreshes enqueue symbol-only work and immediately return to the cached snapshot. Quote completion is merged through conditional ETag reads; price refresh never waits for historical backfill.
+- **Search isolation**: Search keystrokes stay inside a small component, local matches render immediately, obsolete provider requests are aborted, and the server applies a bounded provider deadline.

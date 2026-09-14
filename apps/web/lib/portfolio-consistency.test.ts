@@ -3,7 +3,8 @@ import type { PortfolioSummary } from "@kabutora/domain";
 import { projectStockPortfolio, reconcilePortfolioParts } from "./portfolio-consistency";
 
 const summary = (securitiesValue: string, costBasis: string, realizedGain: string, unrealizedGain: string): PortfolioSummary => ({
-  holdings: [], securitiesValue, cashValue: "-999", totalValue: "-999", costBasis, realizedGain, unrealizedGain,
+  holdings: [], securitiesValue, cashValue: "-999", totalValue: "-999", costBasis,
+  capitalRealizedGain: realizedGain, distributionIncome: "0", realizedGain, unrealizedGain,
   totalGain: String(Number(realizedGain) + Number(unrealizedGain)),
   dayGain: "0", netDeposits: "0", pricedSecurityCount: 1, unpricedSecurityCount: 0, quoteCoveragePercent: "100",
 });

@@ -10,7 +10,8 @@ Kabutora is deployed globally on **Cloudflare Workers** (edge compute & market p
 flowchart LR
     User["📱 Client"] -->|"1. HTTPS / Google Auth"| Firebase["Firebase Auth & App Check"]
     Firebase -->|"2. Verify Token"| Cloudflare["Cloudflare Worker (OpenNext)"]
-    Cloudflare -->|"3. Read/Write Encrypted Blobs"| Firestore[("Cloud Firestore\n(AES-256-GCM Blobs)")]
+    Cloudflare -->|"3. Serve public market snapshots"| D1[("Cloudflare D1\nSymbols + Market Data")]
+    User -->|"Encrypted portfolio sync"| Firestore[("Cloud Firestore\n(AES-256-GCM Blobs)")]
 ```
 
 ---
@@ -42,10 +43,15 @@ npx wrangler secret put KABUTORA_ALLOWED_UID
 ```
 
 ### Step 4: Deploy the Cloudflare Worker
-Deploy the OpenNext application to Cloudflare Workers:
+Create the existing Worker's market resources once, apply migrations, then deploy the OpenNext application:
 ```bash
+node node_modules/wrangler/bin/wrangler.js d1 create kabutora-market
+node node_modules/wrangler/bin/wrangler.js queues create kabutora-market-refresh
+node node_modules/wrangler/bin/wrangler.js d1 migrations apply kabutora-market --remote
 pnpm --filter @kabutora/web deploy:cloudflare
 ```
+
+Record the D1 `database_id` returned by the create command in `apps/web/wrangler.jsonc`. The same `kabutora` Worker owns the Cron trigger, Queue producer/consumer, and D1 binding; do not create a separate website project.
 
 ---
 
@@ -77,4 +83,6 @@ sequenceDiagram
 - [ ] Unauthenticated API requests to `/api/market/*` return `HTTP 401 Unauthorized`.
 - [ ] Authenticated requests from authorized Google UID return live quotes with `HTTP 200`.
 - [ ] Firestore contains only encrypted ciphertext blobs (no plaintext ticker symbols or quantities).
-
+- [ ] D1 contains public security IDs and market values only; its schema has no transaction, account, quantity, cost-basis, balance, or portfolio fields.
+- [ ] The Queue consumer and both the `*/10 * * * *` market refresh and `* * * * *` PTS collection Cron triggers are attached to the existing `kabutora` Worker.
+- [ ] Migration `0005_japannext_pts_frames.sql` is applied before deploying the Worker code.

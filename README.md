@@ -9,7 +9,7 @@
 [![React](https://img.shields.io/badge/React-19-blue?style=flat&logo=react)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?style=flat&logo=typescript)](https://www.typescriptlang.org/)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange?style=flat&logo=cloudflare)](https://workers.cloudflare.com/)
-[![Tests](https://img.shields.io/badge/Tests-161%20Passing-brightgreen?style=flat)]()
+[![Tests](https://img.shields.io/badge/tests-pnpm%20check-brightgreen?style=flat)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 </div>
@@ -104,14 +104,15 @@ Kabutora is organized as a clean TypeScript monorepo using `pnpm`:
 株トラ/
 ├── apps/
 │   └── web/                   # Next.js 15 App Router & Cloudflare edge integration
-│       ├── app/               # Application views & authenticated market API routes
-│       ├── components/        # UI components (Dashboard, Lightweight Charts, Watchlist)
-│       └── lib/               # Client-side crypto, market fetchers, session clocks
+│       ├── app/               # Application shell & authenticated market API routes
+│       ├── components/        # UI coordinators and feature component directories
+│       ├── lib/               # Client services, crypto, sync, market and edge modules
+│       └── migrations/        # Public-market D1 schema
 ├── packages/
 │   ├── domain/                # Pure TypeScript accounting engine (FIFO, cost basis, splits)
 │   └── market-data/           # Market quote models, provider adapters & PTS types
 ├── firebase/                  # Security rules and database index definitions
-├── docs/                      # Technical specifications, math rules, and security model
+├── docs/                      # Architecture map, specifications, and security model
 └── scripts/                   # Native app builders (macOS / iOS Preview) & privacy verifiers
 ```
 
@@ -121,7 +122,7 @@ Kabutora is organized as a clean TypeScript monorepo using `pnpm`:
 
 ### 1. Prerequisites
 - **Node.js**: 20.x or newer
-- **pnpm**: 10.x or newer
+- **pnpm**: 11.x
 
 ### 2. Clone & Install
 ```bash
@@ -146,11 +147,8 @@ Open [http://localhost:3000](http://localhost:3000) to see your portfolio in loc
 Kabutora includes full unit test coverage across accounting, crypto, and market logic:
 
 ```bash
-# Run all unit tests (161 tests across 37 suites)
-pnpm test
-
-# Check TypeScript types
-pnpm typecheck
+# Check TypeScript and run all unit tests
+pnpm check
 
 # Verify that no private data is present in builds
 pnpm verify:privacy
@@ -179,6 +177,7 @@ For complete cloud configuration details, including Firebase authentication and 
 
 ## Documentation
 
+- 🧭 [Codebase Path Map](docs/path-and-nodes.md) — Fast routing from a change to its owning module and test
 - 📐 [Architecture & Data Flow](docs/architecture.md) — System design and data flow
 - 🧮 [Calculation Rules](docs/calculation-rules.md) — Exact formulas for FIFO, cost basis, and splits
 - ☁️ [Cloud Deployment Guide](docs/cloud-deployment.md) — Firebase and Cloudflare step-by-step setup
@@ -190,4 +189,3 @@ For complete cloud configuration details, including Firebase authentication and 
 ## License
 
 Kabutora is open source software licensed under the [MIT License](LICENSE).
-

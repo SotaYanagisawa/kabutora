@@ -247,5 +247,102 @@ describe("portfolio notifications", () => {
     // Should include the SPLIT notice, but NO false PRICE_DOWN (-50%) alert
     expect(result.map((n) => n.type)).toEqual(["SPLIT"]);
   });
+
+  it("generates price alerts for watchlist securities without transactions", () => {
+    const watchlistSecurities = [{
+      id: "sec-watchlist-toyota",
+      displaySymbol: "7203",
+      name: "トヨタ自動車",
+      exchangeMic: "XTKS",
+      currency: "JPY",
+      quote: {
+        price: "3180",
+        previousRegularClose: "3000",
+        marketTimestamp: "2026-08-10T06:00:00Z",
+        fetchedAt: "2026-08-10T06:01:00Z",
+        freshness: "near_live" as const,
+        provider: "fixture",
+        session: "regular" as const,
+        priceType: "last_trade" as const,
+        venueCode: "TSE",
+        validationStatus: "valid" as const,
+      },
+    }];
+
+    const result = derivePortfolioNotifications({
+      transactions: [], // No trades! Pure watchlist security
+      securities: watchlistSecurities,
+      actions: [],
+      bars: [],
+      monitoredSecurityIds: new Set(["sec-watchlist-toyota"]),
+      priceMoveThreshold: 0.05,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      type: "PRICE_UP",
+      securityId: "sec-watchlist-toyota",
+      title: "トヨタ自動車が急騰",
+      currency: "JPY",
+    });
+    expect(Number(result[0].changeRatio)).toBeCloseTo(0.06);
+  });
+
+  it("generates PRICE_UP and PRICE_DOWN for Japanese stocks on regular 5% moves without limit", () => {
+    const jpSecurities = [{
+      id: "sec-sony",
+      displaySymbol: "6758",
+      name: "ソニーグループ",
+      exchangeMic: "XTKS",
+      currency: "JPY",
+      quote: {
+        price: "12600",
+        previousRegularClose: "12000",
+        marketTimestamp: "2026-08-10T06:00:00Z",
+        fetchedAt: "2026-08-10T06:01:00Z",
+        freshness: "near_live" as const,
+        provider: "fixture",
+        session: "regular" as const,
+        priceType: "last_trade" as const,
+        venueCode: "TSE",
+        validationStatus: "valid" as const,
+      },
+    }];
+
+    const result = derivePortfolioNotifications({
+      transactions: [{ id: "tx-1", accountId: "a", securityId: "sec-sony", type: "BUY", tradeDate: "2026-01-01", quantity: "100", pricePerShare: "12000", grossAmount: "1200000" }],
+      securities: jpSecurities,
+      actions: [],
+      bars: [],
+      priceMoveThreshold: 0.05,
+    });
+
+    // 12600 vs 12000 is +5.0% change, but TSE band for 12,000 is 3,000 yen (limit-up is 15,000).
+    // It should trigger PRICE_UP, not LIMIT_UP!
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      type: "PRICE_UP",
+      securityId: "sec-sony",
+      title: "ソニーグループが急騰",
+    });
+  });
+
+  it("safely merges and retains read notification IDs across concurrent updates without loss", () => {
+    const localReadIds = ["notice:sec-a:price-up:2026-08-10", "notice:split-1"];
+    const remotePreferencesReadIds = ["notice:split-1", "notice:sec-b:limit-up:2026-08-10"];
+
+    // Union logic used in Dashboard hydration and seed.preferences sync
+    const merged = [...new Set([...localReadIds, ...remotePreferencesReadIds])];
+    expect(merged).toHaveLength(3);
+    expect(merged).toContain("notice:sec-a:price-up:2026-08-10");
+    expect(merged).toContain("notice:split-1");
+    expect(merged).toContain("notice:sec-b:limit-up:2026-08-10");
+
+    // When marking additional notifications read, ensure new IDs are appended without discarding existing ones
+    const toMark = ["notice:tob-a"];
+    const nextReadIds = [...new Set([...merged, ...toMark])];
+    expect(nextReadIds).toHaveLength(4);
+    expect(nextReadIds).toContain("notice:tob-a");
+  });
 });
 

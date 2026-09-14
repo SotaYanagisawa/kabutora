@@ -3,488 +3,270 @@
 import Dashboard, { type Seed } from "@/components/dashboard";
 import AppLoadingScreen from "@/components/app-loading-screen";
 import EncryptedBackupDialog from "@/components/encrypted-backup-dialog";
-import { completeKabutoraSignInRedirect, getFirebaseServices, signInToKabutora, signOutOfKabutora } from "@/lib/firebase-client";
-import {
-  createGoogleProtectedVault,
-  decryptVaultWithDataKey,
-  decryptVaultRecord,
-  encryptVaultRecord,
-  isKabutoraVaultEnvelope,
-  importGoogleAccountKey,
-  unlockVaultWithPassphrase,
-  unlockVaultWithRecoveryKey,
-  type KabutoraVaultEnvelope,
-} from "@/lib/vault-crypto";
-import {
-  deleteTrustedDeviceKey,
-  loadTrustedDeviceKey,
-  saveTrustedDeviceKey,
-} from "@/lib/trusted-device-key-store";
-import {
-  createFirebasePortfolioCloudStore,
-  portfolioEventSnapshotSignature,
-  portfolioEventsSnapshotIsReady,
-  type EncryptedPortfolioEvent,
-  type GoogleAccountVaultKey,
-} from "@/lib/portfolio-cloud-store";
+import { completeKabutoraSignInRedirect, enableMemoryFirebaseFallback, getFirebaseServices, signInToKabutora, signOutOfKabutora } from "@/lib/firebase-client";
+import { createFirebasePortfolioCloudStore } from "@/lib/portfolio-cloud-store";
+import { PortfolioSession, type RecoverySetup, type SessionState } from "@/lib/portfolio-session";
+import { isKabutoraVaultEnvelope, type KabutoraVaultEnvelope } from "@/lib/vault-crypto";
+import { deleteTrustedDeviceKey } from "@/lib/trusted-device-key-store";
+import { portfolioQueueState, subscribePortfolioQueue } from "@/lib/portfolio-offline-queue";
+import { settleInitialAuthSession } from "@/lib/initial-auth-session";
+import { startupLabels, type PortfolioStartupState, type StartupStage } from "@/lib/portfolio-startup";
+import { diffTransactionChanges } from "@/lib/transaction-event-merge";
+import { isNewerAccountRevision } from "@/lib/account-event-merge";
+import { getCachedServerMarketSnapshot, loadServerMarketSnapshot } from "@/lib/client-market-service";
+import type { ServerMarketSnapshot } from "@/lib/server-market-types";
+import type { MarketSessionStatus } from "@/lib/market-session";
+import type { DeviceTrustMode } from "@/lib/firebase-config";
+import { pendingSyncIndicatorDelay } from "@/lib/sync-status";
+import { PreferenceSaveScheduler } from "@/lib/preference-save-scheduler";
+import type { SearchSecurity, UserPreferences } from "@/components/dashboard/types";
 import type { User } from "firebase/auth";
 import { FileKey, KeyRound, LockKeyhole, LogOut, Upload } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DeviceTrustMode } from "@/lib/firebase-config";
-import { diffTransactionChanges, mergeLatestTransactions } from "@/lib/transaction-event-merge";
-import { isNewerAccountRevision, mergeLatestAccounts } from "@/lib/account-event-merge";
-import type { MarketSessionStatus } from "@/lib/market-session";
-import { settleInitialAuthSession } from "@/lib/initial-auth-session";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-const errorMessage = (cause: unknown, fallback: string) => cause instanceof Error ? cause.message : fallback;
-
-type PortfolioEventPayload =
-  | { kind: "transaction"; value: Seed["transactions"][number] }
-  | { kind: "transaction-delete"; value: { id: string; deletedAt: string } }
-  | { kind: "account"; value: Seed["accounts"][number] }
-  | { kind: "security"; value: Seed["securities"][number] };
-
-const SHARED_DEVICE_IDLE_LOCK_MS = 10 * 60 * 1000;
+const initialState: SessionState = { startup: { stage: "vault" }, seed: null, envelope: null, needsUnlock: false, cached: false, cachedAvailable: false, warning: "" };
+const message = (error: unknown) => error instanceof Error ? error.message : "処理を完了できませんでした。再試行してください。";
 
 export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, initialMarketSessions }: { deviceMode: DeviceTrustMode; initialServerTimeMs: number; initialMarketSessions: MarketSessionStatus[] }) {
   const [user, setUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [vaultLoaded, setVaultLoaded] = useState(false);
-  const [accountKeyLoaded, setAccountKeyLoaded] = useState(false);
-  const [accountKeyRecord, setAccountKeyRecord] = useState<GoogleAccountVaultKey | null>(null);
-  const [envelope, setEnvelope] = useState<KabutoraVaultEnvelope | null>(null);
-  const [seed, setSeed] = useState<Seed | null>(null);
-  const [dataKey, setDataKey] = useState<CryptoKey | null>(null);
+  const [authState, setAuthState] = useState<PortfolioStartupState>({ stage: "authentication" });
+  const [attempt, setAttempt] = useState(0);
+  const [sessionAttempt, setSessionAttempt] = useState(0);
+  const [state, setState] = useState<SessionState>(initialState);
+  const [locked, setLocked] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const [unlockValue, setUnlockValue] = useState("");
   const [unlockMode, setUnlockMode] = useState<"passphrase" | "recovery">("passphrase");
   const [importEnvelope, setImportEnvelope] = useState<KabutoraVaultEnvelope | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [setup, setSetup] = useState<RecoverySetup | null>(null);
+  const [passphrase, setPassphrase] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [backupSeed, setBackupSeed] = useState<Seed | null>(null);
-  const [deviceUnlockState, setDeviceUnlockState] = useState<"idle" | "checking" | "done">("idle");
-  const [eventsLoaded, setEventsLoaded] = useState(false);
-  const [sessionLocked, setSessionLocked] = useState(false);
-  const [accountKeyMigration, setAccountKeyMigration] = useState<"idle" | "saving" | "done" | "failed">("idle");
-  const baseSeedRef = useRef<Seed | null>(null);
-  const eventTransactionsRef = useRef<Seed["transactions"]>([]);
-  const deletedTransactionIdsRef = useRef<Set<string>>(new Set());
-  const eventAccountsRef = useRef<Seed["accounts"]>([]);
-  const eventSecuritiesRef = useRef<Seed["securities"]>([]);
-  const eventSnapshotVersionRef = useRef(0);
-  const eventSnapshotSignatureRef = useRef("");
-  const pendingEventSnapshotSignatureRef = useRef("");
-  const migrationStartedRef = useRef(false);
-  const cloudStore = useMemo(() => createFirebasePortfolioCloudStore(getFirebaseServices().db), []);
+  const [queue, setQueue] = useState({ pending: 0, memoryOnly: 0, storageUnavailable: false });
+  const [debouncedPending, setDebouncedPending] = useState(false);
+  const [market, setMarket] = useState<ServerMarketSnapshot | null | undefined>(() => getCachedServerMarketSnapshot("compact"));
+  const session = useRef<PortfolioSession | null>(null);
+  const preferenceSaveScheduler = useRef<PreferenceSaveScheduler<UserPreferences> | null>(null);
 
-  const lock = useCallback(() => {
-    setSeed(null);
-    setDataKey(null);
-    setUnlockValue("");
-    baseSeedRef.current = null;
-    eventTransactionsRef.current = [];
-    deletedTransactionIdsRef.current = new Set();
-    eventAccountsRef.current = [];
-    eventSecuritiesRef.current = [];
-    eventSnapshotVersionRef.current += 1;
-    eventSnapshotSignatureRef.current = "";
-    pendingEventSnapshotSignatureRef.current = "";
-    setEventsLoaded(false);
-  }, []);
+  useEffect(() => {
+    if (queue.pending <= 0) {
+      setDebouncedPending(false);
+      return;
+    }
+    const delay = pendingSyncIndicatorDelay(typeof navigator === "undefined" || navigator.onLine);
+    const timer = window.setTimeout(() => {
+      setDebouncedPending(true);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [queue.pending]);
 
   useEffect(() => {
     const { auth } = getFirebaseServices();
     let active = true;
-    let observedUid: string | null | undefined;
-    const applyAuthState = (nextUser: User | null) => {
+    let initialized = false;
+    setAuthState({ stage: "authentication" });
+    const apply = (next: User | null) => {
       if (!active) return;
-      setUser(nextUser);
-      const nextUid = nextUser?.uid ?? null;
-      if (observedUid === nextUid) return;
-      observedUid = nextUid;
-      setVaultLoaded(false);
-      setAccountKeyLoaded(false);
-      setAccountKeyRecord(null);
-      setEnvelope(null);
-      setDeviceUnlockState("idle");
-      setSessionLocked(false);
-      setAccountKeyMigration("idle");
-      migrationStartedRef.current = false;
-      lock();
+      setUser(next);
+      setLocked(false);
+      setSetup(null); setPassphrase(""); setConfirmation(""); setUnlockValue(""); setImportEnvelope(null); setBackupSeed(null);
+      setAuthState({ stage: next ? "vault" : "signed-out" });
     };
-    const unsubscribe = auth.onAuthStateChanged(applyAuthState);
-    void (async () => {
-      const initialSession = await settleInitialAuthSession({
-        completeRedirect: completeKabutoraSignInRedirect,
-        authStateReady: () => auth.authStateReady(),
-        currentUser: () => auth.currentUser,
-      });
+    const unsubscribe = auth.onAuthStateChanged((next) => { if (initialized) apply(next); });
+    void settleInitialAuthSession({ completeRedirect: completeKabutoraSignInRedirect, authStateReady: () => auth.authStateReady(), currentUser: () => auth.currentUser }).then((result) => {
       if (!active) return;
-      if (initialSession.redirectFailed) setError("Googleサインインの結果を確認できませんでした。もう一度お試しください。");
-      applyAuthState(initialSession.user);
-      setAuthReady(true);
-    })().catch(() => {
-      if (!active) return;
-      setError("Googleのログイン状態を確認できませんでした。通信状態を確認して、もう一度お試しください。");
-      setAuthReady(true);
-    });
-    return () => {
-      active = false;
-      unsubscribe();
-    };
-  }, [lock]);
+      initialized = true;
+      apply(result.user);
+      if (result.redirectFailed) setError("Googleサインインの結果を確認できませんでした。再試行してください。");
+    }).catch((cause) => { if (active) setAuthState({ stage: "recoverable-error", failedStage: "authentication", message: message(cause) }); });
+    return () => { active = false; unsubscribe(); };
+  }, [attempt]);
 
   useEffect(() => {
-    if (!user) return;
-    return cloudStore.subscribeVault(user.uid, (value) => {
-      setVaultLoaded(true);
-      if (!value) return setEnvelope(null);
-      if (!isKabutoraVaultEnvelope(value) || value.ownerUid !== user.uid) {
-        setError("クラウド上の暗号化データ形式を確認できませんでした。");
-        return;
-      }
-      setEnvelope(value);
-    }, (cause) => {
-      setVaultLoaded(true);
-      setError(errorMessage(cause, "暗号化データへ接続できませんでした。"));
-    });
-  }, [cloudStore, user]);
+    if (!user || locked) { session.current?.stop(); session.current = null; setState(initialState); return; }
+    setState(initialState);
+    const next = new PortfolioSession(user.uid, deviceMode, createFirebasePortfolioCloudStore(getFirebaseServices().db), setState, () => getFirebaseServices().auth.currentUser?.uid === user.uid);
+    session.current = next;
+    next.start();
+    const updateQueue = () => setQueue(portfolioQueueState(user.uid));
+    updateQueue();
+    const unsubscribe = subscribePortfolioQueue(updateQueue);
+    const flush = () => { void next.flush(); };
+    const timer = setInterval(flush, 5_000);
+    window.addEventListener("online", flush);
+    return () => { unsubscribe(); clearInterval(timer); window.removeEventListener("online", flush); next.stop(); if (session.current === next) session.current = null; };
+  }, [deviceMode, locked, sessionAttempt, user]);
 
   useEffect(() => {
-    if (!user) return;
-    return cloudStore.subscribeAccountKey(user.uid, (value) => {
-      setAccountKeyRecord(value?.ownerUid === user.uid && value.format === "kabutora-google-account-key" ? value : null);
-      setAccountKeyLoaded(true);
-    }, (cause) => {
-      setAccountKeyLoaded(true);
-      setError(errorMessage(cause, "Googleアカウント鍵へ接続できませんでした。"));
-    });
-  }, [cloudStore, user]);
-
-  useEffect(() => {
-    if (!user || !envelope || importEnvelope || dataKey || sessionLocked || !accountKeyLoaded) {
-      setDeviceUnlockState("done");
+    if (!user || locked || !session.current) {
+      preferenceSaveScheduler.current?.cancel();
+      preferenceSaveScheduler.current = null;
       return;
     }
-    let active = true;
-    setDeviceUnlockState("checking");
-    void (async () => {
-      const localKey = deviceMode === "trusted" ? await loadTrustedDeviceKey(user.uid) : null;
-      if (localKey) {
-        try {
-          const unlockedSeed = await decryptVaultWithDataKey<Seed>(envelope, localKey);
-          if (!active) return;
-          setDataKey(localKey);
-          baseSeedRef.current = unlockedSeed;
-          setSeed(unlockedSeed);
-          setUnlockValue("");
-          return;
-        } catch {
-          await deleteTrustedDeviceKey(user.uid).catch(() => undefined);
-        }
+    const scheduler = new PreferenceSaveScheduler<UserPreferences>(async (value) => {
+      try {
+        await session.current?.save([{ kind: "preferences", value }]);
+      } catch (cause) {
+        setError(message(cause));
       }
-      if (!accountKeyRecord) return;
-      const googleKey = await importGoogleAccountKey(accountKeyRecord.encodedKey);
-      const unlockedSeed = await decryptVaultWithDataKey<Seed>(envelope, googleKey);
-      if (!active) return;
-      if (deviceMode === "trusted") await saveTrustedDeviceKey(user.uid, googleKey).catch(() => undefined);
-      setDataKey(googleKey);
-      baseSeedRef.current = unlockedSeed;
-      setSeed(unlockedSeed);
-      setUnlockValue("");
-    })().catch(() => {
-      if (active) setError("Googleアカウントの解除鍵でデータを開けませんでした。バックアップから復元してください。");
-    }).finally(() => {
-      if (active) setDeviceUnlockState("done");
-    });
-    return () => { active = false; };
-  }, [accountKeyLoaded, accountKeyRecord, dataKey, deviceMode, envelope, importEnvelope, sessionLocked, user]);
-
-  useEffect(() => {
-    if (!user || !dataKey || !baseSeedRef.current) return;
-    let active = true;
-    const unsubscribe = cloudStore.subscribeEvents(user.uid, (events, fromCache) => {
-      const snapshotReady = portfolioEventsSnapshotIsReady(fromCache, navigator.onLine);
-      if (snapshotReady) setEventsLoaded(true);
-      const signature = portfolioEventSnapshotSignature(events);
-      if (signature === eventSnapshotSignatureRef.current || signature === pendingEventSnapshotSignatureRef.current) return;
-      pendingEventSnapshotSignatureRef.current = signature;
-      const snapshotVersion = ++eventSnapshotVersionRef.current;
-      void Promise.all(events.map(async (value) => {
-        if (value.ownerUid !== user.uid || !value.payload) return null;
-        if (accountKeyRecord && value.keyId !== accountKeyRecord.keyId) return null;
-        const decrypted = await decryptVaultRecord<PortfolioEventPayload>(dataKey, value.payload);
-        return decrypted && ["transaction", "transaction-delete", "account", "security"].includes(decrypted.kind) ? decrypted : null;
-      })).then((items) => {
-        if (!active || !baseSeedRef.current || snapshotVersion !== eventSnapshotVersionRef.current) return;
-        eventTransactionsRef.current = items.filter((item): item is { kind: "transaction"; value: Seed["transactions"][number] } => item?.kind === "transaction").map((item) => item.value);
-        deletedTransactionIdsRef.current = new Set(items.filter((item): item is { kind: "transaction-delete"; value: { id: string; deletedAt: string } } => item?.kind === "transaction-delete").map((item) => item.value.id));
-        eventAccountsRef.current = items.filter((item): item is { kind: "account"; value: Seed["accounts"][number] } => item?.kind === "account").map((item) => item.value);
-        eventSecuritiesRef.current = items.filter((item): item is { kind: "security"; value: Seed["securities"][number] } => item?.kind === "security").map((item) => item.value);
-        const merged = mergeLatestTransactions(baseSeedRef.current.transactions, eventTransactionsRef.current).filter((transaction) => !deletedTransactionIdsRef.current.has(transaction.id));
-        const mergedAccounts = mergeLatestAccounts(baseSeedRef.current.accounts, eventAccountsRef.current);
-        const mergedSecurities = [...new Map([...baseSeedRef.current.securities, ...eventSecuritiesRef.current].map((security) => [security.id, security])).values()];
-        setSeed({ ...baseSeedRef.current, accounts: mergedAccounts, securities: mergedSecurities, transactions: merged });
-        eventSnapshotSignatureRef.current = signature;
-        if (pendingEventSnapshotSignatureRef.current === signature) pendingEventSnapshotSignatureRef.current = "";
-      }).catch((cause) => {
-        if (pendingEventSnapshotSignatureRef.current === signature) pendingEventSnapshotSignatureRef.current = "";
-        setEventsLoaded(true);
-        setError(errorMessage(cause, "同期データを復号できませんでした。"));
-      });
-    }, (cause) => {
-      eventSnapshotVersionRef.current += 1;
-      setEventsLoaded(true);
-      setError(errorMessage(cause, "同期データへ接続できませんでした。"));
-    });
-    return () => { active = false; unsubscribe(); };
-  }, [accountKeyRecord, cloudStore, dataKey, user]);
-
-  useEffect(() => {
-    if (!user || !envelope || !seed || !dataKey || !accountKeyLoaded || accountKeyRecord || !eventsLoaded || importEnvelope || accountKeyMigration !== "idle" || migrationStartedRef.current) return;
-    migrationStartedRef.current = true;
-    setAccountKeyMigration("saving");
-    void createGoogleProtectedVault(seed, user.uid).then(async (created) => {
-      const now = new Date().toISOString();
-      const record: GoogleAccountVaultKey = {
-        format: "kabutora-google-account-key",
-        version: 1,
-        ownerUid: user.uid,
-        keyId: crypto.randomUUID(),
-        encodedKey: created.accountKey,
-        createdAt: now,
-        updatedAt: now,
-      };
-      await cloudStore.saveGoogleProtectedVault(user.uid, created.envelope, record);
-      await cloudStore.deleteAllEvents(user.uid).catch(() => undefined);
-      if (getFirebaseServices().auth.currentUser?.uid !== user.uid) return;
-      if (deviceMode === "trusted") await saveTrustedDeviceKey(user.uid, created.dataKey).catch(() => undefined);
-      setEnvelope(created.envelope);
-      setAccountKeyRecord(record);
-      setDataKey(created.dataKey);
-      baseSeedRef.current = seed;
-      setSeed(seed);
-      setAccountKeyMigration("done");
-    }).catch((cause) => {
-      if (getFirebaseServices().auth.currentUser?.uid !== user.uid) return;
-      setAccountKeyMigration("failed");
-      setError(errorMessage(cause, "Googleアカウントでの自動解除を設定できませんでした。"));
-    });
-  }, [accountKeyLoaded, accountKeyMigration, accountKeyRecord, cloudStore, dataKey, deviceMode, envelope, eventsLoaded, importEnvelope, seed, user]);
-
-  useEffect(() => {
-    if (!dataKey || deviceMode !== "shared") return;
-    const lockSharedSession = () => {
-      setSessionLocked(true);
-      lock();
-    };
-    let idleTimer = window.setTimeout(lockSharedSession, SHARED_DEVICE_IDLE_LOCK_MS);
-    const resetIdleTimer = () => {
-      window.clearTimeout(idleTimer);
-      idleTimer = window.setTimeout(lockSharedSession, SHARED_DEVICE_IDLE_LOCK_MS);
-    };
-    const pageHide = () => lockSharedSession();
-    const visibilityChange = () => {
-      if (document.visibilityState === "hidden") lockSharedSession();
-    };
-    const activityEvents: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "touchstart"];
-    for (const eventName of activityEvents) window.addEventListener(eventName, resetIdleTimer, { passive: true });
-    window.addEventListener("pagehide", pageHide);
-    document.addEventListener("visibilitychange", visibilityChange);
+    }, 2_500);
+    preferenceSaveScheduler.current = scheduler;
+    const flush = () => { void scheduler.flush(); };
+    const flushWhenHidden = () => { if (document.visibilityState === "hidden") flush(); };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", flushWhenHidden);
     return () => {
-      window.clearTimeout(idleTimer);
-      for (const eventName of activityEvents) window.removeEventListener(eventName, resetIdleTimer);
-      window.removeEventListener("pagehide", pageHide);
-      document.removeEventListener("visibilitychange", visibilityChange);
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", flushWhenHidden);
+      void scheduler.flush();
+      if (preferenceSaveScheduler.current === scheduler) preferenceSaveScheduler.current = null;
     };
-  }, [dataKey, deviceMode, lock]);
+  }, [locked, sessionAttempt, user]);
 
-  const unlock = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const target = importEnvelope ?? envelope;
-    if (!target || !user) return;
-    setBusy(true);
-    setError("");
-    try {
-      const unlocked = unlockMode === "recovery"
-        ? await unlockVaultWithRecoveryKey<Seed>(target, unlockValue)
-        : await unlockVaultWithPassphrase<Seed>(target, unlockValue);
-      const ownedEnvelope = { ...target, ownerUid: user.uid } satisfies KabutoraVaultEnvelope;
-      if (importEnvelope) {
-        const now = new Date().toISOString();
-        const record: GoogleAccountVaultKey = {
-          format: "kabutora-google-account-key",
-          version: 1,
-          ownerUid: user.uid,
-          keyId: crypto.randomUUID(),
-          encodedKey: unlocked.accountKey,
-          createdAt: accountKeyRecord?.createdAt ?? now,
-          updatedAt: now,
-        };
-        await cloudStore.saveGoogleProtectedVault(user.uid, ownedEnvelope, record);
-        await cloudStore.deleteAllEvents(user.uid).catch(() => undefined);
-        setAccountKeyRecord(record);
-        setImportEnvelope(null);
-      }
-      let enrollmentWarning = "";
-      if (deviceMode === "trusted") {
-        try {
-          await saveTrustedDeviceKey(user.uid, unlocked.dataKey);
-        } catch {
-          enrollmentWarning = "このブラウザには端末用の鍵を保存できませんでした。次回はGoogle認証済みのクラウド鍵で解除します。";
-        }
-      }
-      setEnvelope(ownedEnvelope);
-      setDataKey(unlocked.dataKey);
-      baseSeedRef.current = unlocked.data;
-      setSeed(unlocked.data);
-      setUnlockValue("");
-      setError(enrollmentWarning);
-    } catch (cause) {
-      setError(errorMessage(cause, "復号できませんでした。"));
-    } finally {
-      setBusy(false);
-    }
+  const schedulePreferenceSave = useCallback((value: UserPreferences) => {
+    preferenceSaveScheduler.current?.enqueue(value);
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    void loadServerMarketSnapshot({ includeIntraday: true, allowPersistentCache: deviceMode === "trusted" }).then((value) => { if (active) setMarket(value); }).catch(() => { if (active) setMarket(null); });
+    return () => { active = false; };
+  }, [deviceMode, user]);
+
+  const lock = useCallback(() => { session.current?.stop(); setLocked(true); setUnlockValue(""); setPassphrase(""); setConfirmation(""); setSetup(null); setBackupSeed(null); }, []);
+  useEffect(() => {
+    if (!state.seed || deviceMode !== "shared") return;
+    let timer = window.setTimeout(lock, 10 * 60 * 1000);
+    const activity = () => { clearTimeout(timer); timer = window.setTimeout(lock, 10 * 60 * 1000); };
+    const hidden = () => { if (document.visibilityState === "hidden") lock(); };
+    for (const name of ["pointerdown", "keydown", "touchstart"]) window.addEventListener(name, activity, { passive: true });
+    window.addEventListener("pagehide", lock);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      clearTimeout(timer);
+      for (const name of ["pointerdown", "keydown", "touchstart"]) window.removeEventListener(name, activity);
+      window.removeEventListener("pagehide", lock); document.removeEventListener("visibilitychange", hidden);
+    };
+  }, [deviceMode, lock, Boolean(state.seed)]);
+
+  const run = async (operation: () => Promise<unknown>) => {
+    setBusy(true); setError("");
+    try { await operation(); } catch (cause) { setError(message(cause)); } finally { setBusy(false); }
   };
-
-  const manuallyLock = async () => {
-    setSessionLocked(true);
+  const signOut = () => run(async () => {
     lock();
-  };
-
-  const signOutSession = async () => {
-    if (user && deviceMode === "trusted") {
-      await deleteTrustedDeviceKey(user.uid).catch(() => undefined);
-    }
-    lock();
+    if (user && deviceMode === "trusted") await deleteTrustedDeviceKey(user.uid).catch(() => undefined);
     await signOutOfKabutora();
-  };
-
-  const importFile = async (file: File | undefined) => {
+  });
+  const importFile = (file: File | undefined) => run(async () => {
     if (!file) return;
-    setError("");
-    try {
-      const value = JSON.parse(await file.text()) as unknown;
-      if (!isKabutoraVaultEnvelope(value)) throw new Error("株トラの暗号化バックアップではありません。");
-      setImportEnvelope(value);
-    } catch (cause) {
-      setError(errorMessage(cause, "ファイルを読み込めませんでした。"));
-    }
-  };
+    if (file.size > 2_000_000) throw new Error("バックアップが大きすぎます。暗号化JSONを確認してください。");
+    const value: unknown = JSON.parse(await file.text());
+    if (!isKabutoraVaultEnvelope(value)) throw new Error("株トラの暗号化バックアップではありません。");
+    setImportEnvelope(value); setUnlockValue("");
+  });
+  const unlockForm = <form className="unlock-form" onSubmit={(event) => { event.preventDefault(); void run(async () => {
+    await session.current?.unlock(unlockValue, unlockMode, importEnvelope ?? undefined);
+    setUnlockValue(""); setImportEnvelope(null);
+  }); }}>
+    <div className="segmented big"><button type="button" className={unlockMode === "passphrase" ? "active" : ""} onClick={() => setUnlockMode("passphrase")}>パスフレーズ</button><button type="button" className={unlockMode === "recovery" ? "active" : ""} onClick={() => setUnlockMode("recovery")}>復旧キー</button></div>
+    <input aria-label={unlockMode === "passphrase" ? "解除パスフレーズ" : "解除復旧キー"} type="password" autoComplete="off" value={unlockValue} onChange={(event) => setUnlockValue(event.target.value)} placeholder={unlockMode === "passphrase" ? "16文字以上" : "KBT1-…"} required />
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <button className="trade-button full" disabled={busy}>{busy ? "端末内で復号中…" : "復号して同期を開始"}</button>
+    {importEnvelope && <button type="button" className="text-button" onClick={() => setImportEnvelope(null)}>キャンセル</button>}
+  </form>;
+
+  if (authState.stage === "authentication") return <AppLoadingScreen label={startupLabels.authentication}/>;
+  if (authState.stage === "recoverable-error") return <SecureGate title="サインインを確認できませんでした" icon={<LockKeyhole/>}>
+    <p role="alert">{authState.message}</p><button className="trade-button" onClick={() => { enableMemoryFirebaseFallback(); setAttempt((value) => value + 1); }}>メモリモードで再試行</button>
+  </SecureGate>;
+  if (!user) return <SecureGate title="株トラへサインイン" icon={<LockKeyhole/>}>
+    <button className="google-signin-button" aria-label="Googleでサインイン" disabled={busy} onClick={() => void run(signInToKabutora)}><img src="/sign-in-with-google.png" alt="" width="720" height="160"/></button>
+    {error && <p role="alert">{error}</p>}
+  </SecureGate>;
+  if (locked) return <SecureGate title="ポートフォリオはロック中" description={deviceMode === "trusted" ? "この端末に保存した解除鍵で再度開きます。" : "パスフレーズまたは復旧キーで再度開きます。"} icon={<LockKeyhole/>}>
+    <button className="trade-button" onClick={() => setLocked(false)}>ポートフォリオを開く</button><button className="text-button" onClick={() => void signOut()}>ログアウト</button>
+  </SecureGate>;
+  if (importEnvelope || state.needsUnlock) return <SecureGate title={importEnvelope ? "バックアップを復元" : "この端末で保管庫を解除"} description={deviceMode === "trusted" ? "パスフレーズまたは復旧キーを一度入力します。次回からこの端末で自動解除します。" : "共有端末では解除鍵やポートフォリオを保存しません。"} icon={<KeyRound/>}>
+    {unlockForm}<button className="text-button" onClick={() => void signOut()}>別のアカウントを使用</button>
+  </SecureGate>;
+  if (state.startup.stage === "recoverable-error") return <SecureGate title={`${startupLabels[state.startup.failedStage]}：接続を回復できませんでした`} icon={<LockKeyhole/>}>
+    <p role="alert">{state.startup.message}</p><button className="trade-button" onClick={() => { setError(""); setSessionAttempt((value) => value + 1); }}>再試行</button>
+    {state.cachedAvailable && <button className="text-button" onClick={() => void run(() => session.current!.openCached())}>確認済みキャッシュを開く（最新の変更は未確認）</button>}
+    {error && <p role="alert">{error}</p>}<button className="text-button" onClick={() => void signOut()}>ログアウト</button>
+  </SecureGate>;
+  if (state.startup.stage === "empty") return <SecureGate title="暗号化バックアップを読み込む" description="Macの株トラで作成した暗号化JSONを選択します。端末内で復号を確認し、復旧方法を設定して同期します。" icon={<FileKey/>}>
+    <label className="file-button"><Upload size={16}/>ファイルを選択<input type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])}/></label>
+    {error && <p role="alert">{error}</p>}<button className="text-button" onClick={() => void signOut()}><LogOut size={14}/>別のアカウントを使用</button>
+  </SecureGate>;
+  if (state.startup.stage === "enrollment") return <SecureGate className="recovery-enrollment-gate" title="保管庫を安全に移行" description="過去の取引・口座・設定は削除せず、暗号化したまま新しい保管庫へ移します。" icon={<KeyRound/>}>
+    {state.recoveryPending && <button className="trade-button full recovery-resume-button" disabled={busy} onClick={() => void run(() => session.current!.resumeRecovery())}>確認済みの移行を再開</button>}
+    {session.current?.needsLegacyCredential() ? <section className="recovery-enrollment-panel" aria-labelledby="legacy-unlock-title">
+      <div className="recovery-step" aria-label="移行ステップ 1/3">1 / 3</div>
+      <h2 id="legacy-unlock-title">以前の保管庫を解除</h2>
+      <p>未同期の変更も含めて保持するため、これまで使用していたパスフレーズまたは復旧キーを一度だけ入力します。</p>
+      {unlockForm}
+    </section> : setup ? <form className="unlock-form recovery-enrollment-panel" onSubmit={(event) => { event.preventDefault(); void run(async () => {
+      await session.current!.activateRecovery(setup, confirmation); setSetup(null); setConfirmation(""); setPassphrase("");
+    }); }}>
+      <div className="recovery-step" aria-label="移行ステップ 2/2">2 / 2</div>
+      <h2>復旧キーを保存して確認</h2>
+      <p>下のキーをパスワード管理アプリなどへ保存してください。確認が終わるまで保管庫は切り替わりません。</p>
+      <label className="recovery-key-label">新しい復旧キー<textarea className="recovery-key-output" aria-label="新しい復旧キー" readOnly value={setup.recoveryKey} rows={4} spellCheck={false}/></label>
+      <label>保存した復旧キーを入力<input aria-label="復旧キーの確認" type="password" autoComplete="off" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="KBT1-…" required/></label>
+      <button className="trade-button full" disabled={busy}>{busy ? "変更を照合して暗号化中…" : "保存したキーを確認して移行"}</button>
+      <button className="text-button" type="button" disabled={busy} onClick={() => { setSetup(null); setConfirmation(""); }}>設定し直す</button>
+    </form> : <form className="unlock-form recovery-enrollment-panel" onSubmit={(event) => { event.preventDefault(); void run(async () => { setSetup(await session.current!.prepareRecovery(passphrase)); setPassphrase(""); }); }}>
+      <div className="recovery-step" aria-label="移行ステップ 1/2">1 / 2</div>
+      <h2>新しいパスフレーズを作成</h2>
+      <p>今後この保管庫を開くための、16文字以上の新しいパスフレーズです。以前の取引データはそのまま引き継がれます。</p>
+      <label>新しいパスフレーズ<input aria-label="新しいパスフレーズ" type="password" autoComplete="new-password" minLength={16} value={passphrase} onChange={(event) => setPassphrase(event.target.value)} placeholder="16文字以上" required/></label>
+      <button className="trade-button full" disabled={busy}>{busy ? "端末内で鍵を作成中…" : "次へ：復旧キーを作成"}</button>
+    </form>}
+    {error && <p role="alert" className="form-error">{error}</p>}
+    <button className="text-button" disabled={busy} onClick={() => void signOut()}>ログアウト</button>
+  </SecureGate>;
+  if (state.startup.stage !== "ready" || !state.seed) return <AppLoadingScreen label={startupLabels[state.startup.stage as StartupStage] ?? "ポートフォリオを準備中"}/>;
 
   const saveTransactions = async (transactions: Seed["transactions"]) => {
-    if (!user || !dataKey || !seed) return;
-    const { upserts: additionsOrUpdates, deletions } = diffTransactionChanges(seed.transactions, transactions);
-    if (!additionsOrUpdates.length && !deletions.length) return;
-    try {
-      await Promise.all([
-        ...additionsOrUpdates.map(async (transaction) => {
-          const payload = await encryptVaultRecord(dataKey, { kind: "transaction", value: transaction } satisfies PortfolioEventPayload);
-          const record: EncryptedPortfolioEvent = { ownerUid: user.uid, payload, ...(accountKeyRecord ? { keyId: accountKeyRecord.keyId } : {}) };
-          await cloudStore.saveEvent(user.uid, crypto.randomUUID(), record);
-        }),
-        ...deletions.map(async (transaction) => {
-          const payload = await encryptVaultRecord(dataKey, { kind: "transaction-delete", value: { id: transaction.id, deletedAt: new Date().toISOString() } } satisfies PortfolioEventPayload);
-          const record: EncryptedPortfolioEvent = { ownerUid: user.uid, payload, ...(accountKeyRecord ? { keyId: accountKeyRecord.keyId } : {}) };
-          await cloudStore.saveEvent(user.uid, crypto.randomUUID(), record);
-        }),
-      ]);
-    } catch (cause) {
-      setError(errorMessage(cause, "暗号化した取引を同期できませんでした。"));
-    }
+    const current = session.current?.state.seed; if (!current) return;
+    const changes = diffTransactionChanges(current.transactions, transactions);
+    await session.current!.save([...changes.upserts.map((value) => ({ kind: "transaction" as const, value })), ...changes.deletions.map((value) => ({ kind: "transaction-delete" as const, value: { id: value.id, deletedAt: new Date().toISOString() } }))]);
   };
-
   const saveAccounts = async (accounts: Seed["accounts"]) => {
-    if (!user || !dataKey || !seed) return;
-    const knownAccounts = new Map(seed.accounts.map((account) => [account.id, account]));
-    const changes = accounts.filter((account) => {
-      const known = knownAccounts.get(account.id);
-      if (!known) return true;
-      return isNewerAccountRevision(account, known);
-    });
-    if (!changes.length) return;
-    try {
-      await Promise.all(changes.map(async (account) => {
-        const payload = await encryptVaultRecord(dataKey, { kind: "account", value: account } satisfies PortfolioEventPayload);
-        const record: EncryptedPortfolioEvent = { ownerUid: user.uid, payload, ...(accountKeyRecord ? { keyId: accountKeyRecord.keyId } : {}) };
-        await cloudStore.saveEvent(user.uid, crypto.randomUUID(), record);
-      }));
-    } catch (cause) {
-      setError(errorMessage(cause, "証券口座を同期できませんでした。"));
-    }
+    const known = new Map(session.current?.state.seed?.accounts.map((value) => [value.id, value]));
+    await session.current!.save(accounts.filter((value) => !known.has(value.id) || isNewerAccountRevision(value, known.get(value.id)!)).map((value) => ({ kind: "account", value })));
   };
-
   const saveSecurities = async (securities: Seed["securities"]) => {
-    if (!user || !dataKey || !seed) return;
-    const knownIds = new Set(seed.securities.map((security) => security.id));
-    const additions = securities.filter((security) => !knownIds.has(security.id));
-    if (!additions.length) return;
-    try {
-      await Promise.all(additions.map(async (security) => {
-        const payload = await encryptVaultRecord(dataKey, { kind: "security", value: security } satisfies PortfolioEventPayload);
-        const record: EncryptedPortfolioEvent = { ownerUid: user.uid, payload, ...(accountKeyRecord ? { keyId: accountKeyRecord.keyId } : {}) };
-        await cloudStore.saveEvent(user.uid, crypto.randomUUID(), record);
-      }));
-    } catch (cause) {
-      setError(errorMessage(cause, "銘柄情報を同期できませんでした。"));
-    }
+    const known = new Map(session.current?.state.seed?.securities.map((value) => [value.id, value]));
+    await session.current!.save(securities.filter((value) => JSON.stringify(known.get(value.id)) !== JSON.stringify(value)).map((value) => ({ kind: "security", value })));
   };
+  const saveWatchlist = (value: SearchSecurity[]) => session.current!.save([{ kind: "watchlist", value }]);
+  const save = <T,>(action: (value: T) => Promise<void>) => async (value: T) => { try { await action(value); } catch (cause) { setError(message(cause)); } };
 
-  const startSignIn = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      await signInToKabutora();
-    } catch {
-      setError("Googleサインインを開始できませんでした。ページを再読み込みして、もう一度お試しください。");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const showSyncBanner = Boolean(
+    state.warning ||
+    queue.storageUnavailable ||
+    (debouncedPending && queue.pending > 0)
+  );
 
-  if (!authReady) return <AppLoadingScreen label="アカウントを確認中" detail="Googleのログイン状態を安全に確認しています" />;
-  if (!user) return <SecureGate icon={<LockKeyhole size={30}/>} title="株トラへサインイン"><button className="google-signin-button" type="button" disabled={busy} aria-label="Googleでサインイン" aria-busy={busy} onClick={() => void startSignIn()}><img src="/sign-in-with-google.png" alt="" width="720" height="160" /></button>{error && <p className="form-error" role="alert">{error}</p>}</SecureGate>;
-  if (!vaultLoaded) return <AppLoadingScreen label="保管庫に接続中" detail="暗号化ポートフォリオをクラウドから確認しています" />;
-
-  if (!accountKeyLoaded) return <AppLoadingScreen label="解除鍵を確認中" detail="このアカウントでデータを開く準備をしています" />;
-
-  if (accountKeyMigration === "saving") return <AppLoadingScreen label="同期方式を更新中" detail="暗号化データを新しい方式へ安全に移行しています" />;
-
-  if (!envelope && !importEnvelope) return <SecureGate icon={<FileKey size={30}/>} title="暗号化バックアップを読み込む" description="Macの株トラで作成した暗号化JSONを選択します。ファイルは復号確認後に暗号文のまま同期されます。">
-    <label className="file-button"><Upload size={16}/>ファイルを選択<input type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])}/></label>
-    {error && <p className="form-error">{error}</p>}
-    <button className="text-button" onClick={() => void signOutSession()}><LogOut size={14}/>別のアカウントを使用</button>
-  </SecureGate>;
-
-  if (sessionLocked && !importEnvelope) return <SecureGate icon={<LockKeyhole size={30}/>} title="ポートフォリオはロック中" description="Googleアカウントのログイン状態を確認して再度開きます。"><button className="trade-button secure-action" onClick={() => setSessionLocked(false)}>Googleアカウントで開く</button><button className="text-button" onClick={() => void signOutSession()}><LogOut size={14}/>ログアウト</button></SecureGate>;
-
-  if (envelope && !importEnvelope && deviceUnlockState !== "done") return <AppLoadingScreen label="ポートフォリオを復号中" detail="端末内の解除鍵で暗号化データを開いています" />;
-
-  if (seed && dataKey && !eventsLoaded) return <AppLoadingScreen label="最新データを同期中" detail="取引・口座・銘柄の変更を反映しています" />;
-
-  if (!seed || !dataKey) return <SecureGate icon={importEnvelope ? <KeyRound size={30}/> : <FileKey size={30}/>} title={importEnvelope ? "バックアップを復元" : "このアカウントの解除鍵がありません"} description={importEnvelope ? "選択した暗号化JSONを、このバックアップ用のパスフレーズまたは復旧キーで復元します。" : "既存端末で株トラを一度開くとGoogleアカウント用の鍵が自動登録されます。すぐに復元する場合だけ暗号化JSONを選択してください。"}>
-    {!importEnvelope && <>
-      <label className="file-button"><Upload size={16}/>バックアップから復元<input type="file" accept="application/json,.json" onChange={(event) => void importFile(event.target.files?.[0])}/></label>
-      {error && <p className="form-error">{error}</p>}
-      <button className="text-button" onClick={() => void signOutSession()}><LogOut size={14}/>別のアカウントを使用</button>
-    </>}
-    {importEnvelope &&
-    <form className="unlock-form" onSubmit={unlock}>
-      <div className="segmented big"><button type="button" className={unlockMode === "passphrase" ? "active" : ""} onClick={() => setUnlockMode("passphrase")}>パスフレーズ</button><button type="button" className={unlockMode === "recovery" ? "active" : ""} onClick={() => setUnlockMode("recovery")}>復旧キー</button></div>
-      <input type="password" autoComplete="off" value={unlockValue} onChange={(event) => setUnlockValue(event.target.value)} placeholder={unlockMode === "passphrase" ? "16文字以上" : "KBT1-…"} required />
-      {error && <p className="form-error">{error}</p>}
-      <button className="trade-button full" disabled={busy}>{busy ? "端末内で復号中…" : "復号して同期を開始"}</button>
-      <button type="button" className="text-button" onClick={() => { setImportEnvelope(null); setUnlockValue(""); }}>キャンセル</button>
-    </form>
-    }
-  </SecureGate>;
-
-  return <div className="cloud-shell">
-    <Dashboard seed={seed} initialServerTimeMs={initialServerTimeMs} initialMarketSessions={initialMarketSessions} persistenceMode="cloud" onTransactionsChange={saveTransactions} onAccountsChange={saveAccounts} onSecuritiesChange={saveSecurities} onEncryptedBackup={setBackupSeed} allowPlaintextExport={false} allowPersistentMarketCache={deviceMode === "trusted"} onLock={manuallyLock} onLogout={signOutSession}/>
-    {error && <div className="cloud-error" role="alert">{error}</div>}
-    {backupSeed && <EncryptedBackupDialog seed={backupSeed} ownerUid={user.uid} onClose={() => setBackupSeed(null)}/>} 
+  return <div className="cloud-shell" data-startup-state="ready">
+    <Dashboard key={user.uid} seed={state.seed} initialServerTimeMs={initialServerTimeMs} initialMarketSessions={initialMarketSessions} initialMarketSnapshot={market} persistenceMode="cloud" preferenceNamespace={user.uid} onTransactionsChange={save(saveTransactions)} onAccountsChange={save(saveAccounts)} onSecuritiesChange={save(saveSecurities)} onWatchlistChange={save(saveWatchlist)} onPreferencesChange={schedulePreferenceSave} onEncryptedBackup={setBackupSeed} onRestoreBackup={(file) => void importFile(file)} allowPlaintextExport={false} allowPersistentMarketCache={deviceMode === "trusted"} onLock={lock} onLogout={signOut} onStartupReady={() => performance.mark("kabutora:dashboard-interactive")}/>
+    {showSyncBanner && <div className="sync-status" role="status">
+      <div className="sync-status-content">
+        {queue.storageUnavailable && <span>端末の保存領域を確認できません。以前の未同期データは削除されていません。保存領域の回復後に再試行してください。 </span>}
+        {state.warning && <span>{state.warning} </span>}
+        {queue.pending > 0 && <span>{queue.memoryOnly > 0 ? `このタブに保持中：${queue.memoryOnly}件。閉じる前にクラウド同期を完了してください。` : `端末に保存済み：${queue.pending}件。クラウド同期を待っています。`}</span>}
+      </div>
+      <button className="text-button" onClick={() => void run(async () => { if (state.unsaved) await session.current?.retryFailedSaves(); await session.current?.flush(true); })}>同期を再試行</button>
+    </div>}
+    {queue.pending === 0 && !state.unsaved && !state.cached && <span className="sr-only" role="status">クラウド同期確認済み</span>}
+    {error && <div className="cloud-error" role="alert">{error}<button className="text-button" onClick={() => setError("")}>閉じる</button></div>}
+    {backupSeed && <EncryptedBackupDialog seed={backupSeed} ownerUid={user.uid} onClose={() => setBackupSeed(null)}/>}
   </div>;
 }
-
-function SecureGate({ icon, title, description, children }: { icon: React.ReactNode; title: string; description?: string; children?: React.ReactNode }) {
-  return <main className="secure-gate"><div className="secure-gate-icon">{icon}</div><h1>{title}</h1>{description && <p>{description}</p>}{children}</main>;
+function SecureGate({ icon, title, description, children, className }: { icon: React.ReactNode; title: string; description?: string; children?: React.ReactNode; className?: string }) {
+  return <main className={`secure-gate${className ? ` ${className}` : ""}`}><div className="secure-gate-icon">{icon}</div><h1>{title}</h1>{description && <p>{description}</p>}{children}</main>;
 }
