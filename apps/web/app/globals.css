@@ -713,9 +713,9 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
 }
 .holdings-grid-body {
   display: grid !important;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 8px;
-  padding: 10px;
+  padding: 8px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -724,7 +724,7 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   flex-direction: column !important;
   background: var(--panel-alt);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 9px;
   padding: 0;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
   transition: transform .12s ease, border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
@@ -732,7 +732,7 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   overflow: hidden;
   box-sizing: border-box;
   content-visibility: auto;
-  contain-intrinsic-size: auto 130px;
+  contain-intrinsic-size: auto 74px;
 }
 .holding-widget-card.selectable {
   cursor: pointer;
@@ -741,7 +741,7 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
 .holding-widget-card.selectable:hover {
   background: color-mix(in srgb, var(--accent) 5%, var(--panel-alt));
   border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
 }
 .holding-widget-card.selectable:focus-visible {
   border-color: var(--accent);
@@ -756,174 +756,139 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   flex-direction: column;
   width: 100% !important;
   height: auto !important;
-  padding: 10px 12px !important;
-  gap: 7px;
+  padding: 7px 10px !important;
+  gap: 3px;
   border: 0 !important;
   text-align: left !important;
   box-sizing: border-box;
 }
 
-.widget-card-header {
-  display: flex;
+/* 1. Ticker Name + Daily Percentage Change */
+.widget-card-top {
+  display: flex !important;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-.widget-symbol-group {
-  display: flex;
-  align-items: center;
   gap: 6px;
   min-width: 0;
 }
-.widget-symbol-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 6px;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+.widget-ticker-group {
+  display: flex !important;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+}
+.widget-ticker {
+  font-size: 13px !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.01em;
   color: var(--text);
-  font-size: 11.5px;
-  font-weight: 800;
-  letter-spacing: 0.03em;
-  line-height: 1.1;
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  flex-shrink: 0;
+  line-height: 1.2;
 }
-.widget-market-tag {
+.widget-subname {
+  font-size: 10.5px;
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
 }
-.widget-header-right {
-  display: flex;
+.widget-day-badge {
+  display: inline-flex !important;
   align-items: center;
-  gap: 6px;
+  padding: 1.5px 5px;
+  border-radius: 4px;
+  font-size: 11px !important;
+  font-weight: 750 !important;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
   flex-shrink: 0;
 }
-.widget-weight-tag {
-  color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 700;
-  background: var(--panel);
-  padding: 1px 5px;
-  border-radius: 4px;
-  border: 1px solid var(--line);
+.widget-day-badge.up {
+  color: var(--up);
+  background: color-mix(in srgb, var(--up) 12%, var(--panel-alt));
+  border: 1px solid color-mix(in srgb, var(--up) 22%, transparent);
 }
-
-.widget-security-name strong {
-  display: block !important;
-  font-size: 13.5px !important;
+.widget-day-badge.down {
+  color: var(--down);
+  background: color-mix(in srgb, var(--down) 12%, var(--panel-alt));
+  border: 1px solid color-mix(in srgb, var(--down) 22%, transparent);
+}
+.widget-day-badge strong {
+  font-size: 11px !important;
   font-weight: 750 !important;
-  line-height: 1.25 !important;
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  color: var(--text);
 }
 
-.widget-price-row {
+/* 2. Current Stock Price + Total Gain/Loss */
+.widget-card-mid {
   display: flex !important;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
-  padding: 0 !important;
-  border: 0 !important;
+  margin-top: 1px;
 }
 .widget-price strong {
-  font-size: 16px !important;
+  font-size: 15px !important;
   font-weight: 850 !important;
   letter-spacing: -0.02em;
   color: var(--text);
+  line-height: 1.2;
 }
-.widget-day {
+.widget-total-gain {
   display: flex !important;
-  align-items: baseline;
-  gap: 4px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
   flex-shrink: 0;
+  min-width: 0;
 }
-.widget-day strong {
-  font-size: 13px !important;
+.widget-gain-percent strong {
+  font-size: 12px !important;
   font-weight: 750 !important;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
 }
-.widget-day-money {
-  font-size: 11px;
+.widget-total-gain.up .widget-gain-percent strong,
+.widget-total-gain.up .widget-gain-amount {
+  color: var(--up);
+}
+.widget-total-gain.down .widget-gain-percent strong,
+.widget-total-gain.down .widget-gain-amount {
+  color: var(--down);
+}
+.widget-gain-amount {
+  font-size: 9.5px;
   font-weight: 600;
   opacity: 0.85;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
-.widget-divider {
-  width: 100%;
-  height: 1px;
-  background: var(--line);
-  margin: 1px 0;
-}
-
-.widget-metrics-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px 10px;
+/* 3. Most Recent Price Fetched Time */
+.widget-card-bottom {
+  display: flex !important;
+  align-items: center;
+  gap: 4px;
   min-width: 0;
+  margin-top: 2px;
 }
-.widget-metric-item {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5px;
-  min-width: 0;
+.widget-card-bottom .quote-dot {
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
 }
-.widget-metric-item.position-col {
-  grid-column: 1 / -1;
-  padding-top: 3px;
-  border-top: 1px dashed color-mix(in srgb, var(--line) 75%, transparent);
-}
-.widget-metric-label {
-  color: var(--muted);
+.widget-fetched-time {
   font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   line-height: 1;
-}
-.widget-metric-val {
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.widget-gain-inline {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-  min-width: 0;
-}
-.widget-gain-sub {
-  font-size: 10.5px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.widget-position-val {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-  font-size: 11px;
-  min-width: 0;
-}
-.widget-position-val strong {
-  font-size: 11.5px;
-  font-weight: 700;
-}
-.widget-cost-sep {
-  color: var(--muted);
-  font-size: 10px;
-}
-.widget-position-val small {
-  color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 600;
 }
 
 .holdings-table table { width: 100%; table-layout: fixed; border-collapse: collapse; }
@@ -3762,8 +3727,8 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   .holdings-table.grid-view tbody.holdings-grid-body {
     display: grid !important;
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    gap: 6px !important;
-    padding: 6px !important;
+    gap: 5px !important;
+    padding: 5px !important;
   }
   .holdings-table.grid-view tr.holding-widget-card {
     display: flex !important;
@@ -3776,50 +3741,36 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
     border: 1px solid var(--line) !important;
     border-radius: 8px !important;
     background: var(--panel-alt) !important;
+    contain-intrinsic-size: auto 68px;
   }
   .holdings-table.grid-view .widget-card-cell {
-    padding: 8px 9px !important;
-    gap: 5px;
+    padding: 6px 8px !important;
+    gap: 2px !important;
   }
-  .holdings-table.grid-view .widget-symbol-badge {
-    font-size: 10.5px;
-    padding: 1.5px 5px;
-  }
-  .holdings-table.grid-view .widget-market-tag {
-    font-size: 9px;
-  }
-  .holdings-table.grid-view .widget-security-name strong {
+  .holdings-table.grid-view .widget-ticker {
     font-size: 12px !important;
   }
+  .holdings-table.grid-view .widget-subname {
+    font-size: 9.5px !important;
+  }
+  .holdings-table.grid-view .widget-day-badge {
+    padding: 1px 4px !important;
+    font-size: 10px !important;
+  }
+  .holdings-table.grid-view .widget-day-badge strong {
+    font-size: 10px !important;
+  }
   .holdings-table.grid-view .widget-price strong {
-    font-size: 14px !important;
+    font-size: 13.5px !important;
   }
-  .holdings-table.grid-view .widget-day strong {
-    font-size: 11.5px !important;
+  .holdings-table.grid-view .widget-gain-percent strong {
+    font-size: 11px !important;
   }
-  .holdings-table.grid-view .widget-day-money {
-    display: none;
+  .holdings-table.grid-view .widget-gain-amount {
+    font-size: 9px !important;
   }
-  .holdings-table.grid-view .widget-metrics-grid {
-    gap: 4px 6px;
-  }
-  .holdings-table.grid-view .widget-metric-label {
-    font-size: 8.5px;
-  }
-  .holdings-table.grid-view .widget-metric-val {
-    font-size: 11px;
-  }
-  .holdings-table.grid-view .widget-gain-sub {
-    font-size: 9.5px;
-  }
-  .holdings-table.grid-view .widget-position-val {
-    font-size: 10px;
-  }
-  .holdings-table.grid-view .widget-position-val strong {
-    font-size: 10.5px;
-  }
-  .holdings-table.grid-view .widget-position-val small {
-    font-size: 9.5px;
+  .holdings-table.grid-view .widget-fetched-time {
+    font-size: 8.5px !important;
   }
   .holdings-table.grid-view .position-col,
   .holdings-table.grid-view .weight-col {

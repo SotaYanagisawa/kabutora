@@ -15,6 +15,7 @@ import {
   number,
   securityPriceBasis,
   securityQuantityUnit,
+  shortDateTimeJa,
   signedPercent,
 } from "./helpers";
 import type { DashboardHolding, DisplayCurrency, RemoteQuote } from "./types";
@@ -342,6 +343,12 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   const weightVal = holding.summaryMarketValue ?? holding.marketValue;
 
   if (viewMode === "grid") {
+    const fetchedTime = quote?.fetchedAt
+      ? shortDateTimeJa(quote.fetchedAt)
+      : quote?.marketTimestamp
+      ? marketDateTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency)
+      : null;
+
     return (
       <tr
         className={`holding-widget-card ${onSelect ? "selectable" : ""}`}
@@ -356,78 +363,49 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
         aria-label={onSelect ? `${secName}の詳細を開く` : undefined}
       >
         <td className="widget-card-cell" colSpan={7}>
-          <div className="widget-card-header">
-            <div className="widget-symbol-group">
-              <span className="widget-symbol-badge">{secDisplaySymbol}</span>
-              <span className="widget-market-tag">{marketDisplayName(sec)}</span>
+          {/* 1. Ticker Name + Daily Percentage Change */}
+          <div className="widget-card-top">
+            <div className="security-col widget-ticker-group">
+              <strong className="widget-ticker">{secDisplaySymbol}</strong>
+              {secName !== secDisplaySymbol && (
+                <span className="widget-subname" title={secLegalName}>
+                  {secName}
+                </span>
+              )}
             </div>
-            <div className="widget-header-right">
-              <span className="widget-weight-tag" title="ポートフォリオ比率">
-                {totalValue != null && weightVal != null ? `${((Number(weightVal) / totalValue) * 100).toFixed(1)}%` : "—"}
-              </span>
-              <span
-                className={`quote-dot ${quote?.freshness ?? "missing"}`}
-                title={
-                  quote
-                    ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${marketDateTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency)}（市場現地）`
-                    : "価格未取得"
-                }
-              />
+            <div className={`day-col widget-day-badge ${dayPercent == null ? "" : dayPercent >= 0 ? "up" : "down"}`}>
+              <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
             </div>
           </div>
 
-          <div className="security-col widget-security-name">
-            <strong title={secLegalName}>{secName}</strong>
-          </div>
-
-          <div className="widget-price-row">
+          {/* 2. Current Stock Price + Total Gain/Loss */}
+          <div className="widget-card-mid">
             <div className="price-col widget-price">
               <strong>{maybeMoney(holding.currentPrice, rowCurrency)}</strong>
             </div>
-            <div className={`day-col widget-day ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
-              <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
-              <span className="widget-day-money" aria-label={amountsVisible ? undefined : "金額非表示"}>
-                {amountsVisible ? maybeSignedMoney(day, rowCurrency) : HIDDEN_AMOUNT}
+            <div className={`gain-col widget-total-gain ${gain == null ? "" : gain >= 0 ? "up" : "down"}`}>
+              <span className="widget-gain-percent">
+                <strong>{gainPercent == null ? "—" : signedPercent(gainPercent, 1)}</strong>
               </span>
+              <small className="widget-gain-amount" aria-label={amountsVisible ? undefined : "金額非表示"}>
+                {amountsVisible ? (gain == null ? "" : maybeSignedMoney(gain, rowCurrency)) : HIDDEN_AMOUNT}
+              </small>
             </div>
           </div>
 
-          <div className="widget-divider" aria-hidden="true" />
-
-          <div className="widget-metrics-grid">
-            <div className="widget-metric-item value-col">
-              <span className="widget-metric-label">評価額</span>
-              <strong className="widget-metric-val" aria-label={amountsVisible ? undefined : "金額非表示"}>
-                {amountsVisible ? maybeMoney(holding.marketValue, rowCurrency) : HIDDEN_AMOUNT}
-              </strong>
-            </div>
-
-            <div className="widget-metric-item gain-col">
-              <span className="widget-metric-label">含み損益</span>
-              <div className="widget-gain-inline">
-                <strong className={`widget-metric-val ${gain == null ? "" : gain >= 0 ? "up" : "down"}`}>
-                  {gainPercent == null ? "—" : signedPercent(gainPercent, 1)}
-                </strong>
-                <small className={`widget-gain-sub ${gain == null ? "" : gain >= 0 ? "up" : "down"}`} aria-label={amountsVisible ? undefined : "金額非表示"}>
-                  ({amountsVisible ? maybeSignedMoney(gain, rowCurrency) : HIDDEN_AMOUNT})
-                </small>
-              </div>
-            </div>
-
-            <div className="widget-metric-item position-col">
-              <span className="widget-metric-label">保有数 / 取得単価</span>
-              <span className="widget-position-val">
-                <strong aria-label={amountsVisible ? undefined : "保有数非表示"}>
-                  {amountsVisible ? `${number.format(Number(holding.quantity))}${securityQuantityUnit(sec, holding.securityId)}` : HIDDEN_AMOUNT}
-                </strong>
-                <span className="widget-cost-sep">·</span>
-                <small aria-label={amountsVisible ? undefined : "平均取得単価非表示"}>
-                  {amountsVisible
-                    ? `@ ${money(Number(holding.averageCost), rowCurrency)}${isFundSecurity(sec, holding.securityId) ? ` / ${securityPriceBasis(sec, holding.securityId)}` : ""}`
-                    : HIDDEN_AMOUNT}
-                </small>
-              </span>
-            </div>
+          {/* 3. Most Recent Price Fetched Time */}
+          <div className="widget-card-bottom">
+            <span
+              className={`quote-dot ${quote?.freshness ?? "missing"}`}
+              title={
+                quote
+                  ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${fetchedTime ? `${fetchedTime} 取得` : ""}`
+                  : "価格未取得"
+              }
+            />
+            <span className="widget-fetched-time">
+              {fetchedTime ? `${fetchedTime} 取得` : "未取得"}
+            </span>
           </div>
         </td>
       </tr>
