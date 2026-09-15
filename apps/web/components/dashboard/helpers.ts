@@ -211,10 +211,13 @@ export const compactPrice = (
   if (effective === "JPY") {
     if (absolute >= 100_000_000) return `¥${compactNumber(absolute / 100_000_000)}億`;
     if (absolute >= 100_000) return `¥${compactNumber(absolute / 10_000)}万`;
+    return `¥${Math.round(num).toLocaleString("en-US")}`;
   }
   if (effective === "USD") {
     if (absolute >= 1_000_000) return `$${compactNumber(absolute / 1_000_000)}M`;
     if (absolute >= 10_000) return `$${compactNumber(absolute / 1_000)}K`;
+    if (absolute >= 1_000) return `$${Math.round(num).toLocaleString("en-US")}`;
+    return `$${num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
   return maybeMoney(value, currency);
 };

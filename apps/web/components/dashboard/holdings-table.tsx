@@ -1,10 +1,9 @@
 import { useBrowserPreferences } from "../browser-preferences";
 import { memo, useEffect, useMemo, useState } from "react";
 import { canonicalDomainSecurityId, type IntradayBar, type MarketBar } from "@kabutora/domain";
-import { marketDateTimeLabel, marketTimeLabel } from "@/lib/chart-presentation";
+import { companyDisplayName, shortSecurityDisplayName } from "@/lib/company-name";
 import { marketDisplayName } from "@/lib/market-label";
 import { isUsSecurity, type PortfolioFilter } from "@/lib/portfolio-filter";
-import { LayoutGrid, List } from "lucide-react";
 import { freshnessLabel, HIDDEN_AMOUNT } from "./constants";
 import {
   compactMoney,
@@ -22,7 +21,7 @@ import {
 } from "./helpers";
 import type { DashboardHolding, DisplayCurrency, RemoteQuote } from "./types";
 
-export type HoldingsViewMode = "grid" | "table";
+export type HoldingsViewMode = "grid";
 
 export type HoldingsSort =
   | "VALUE_DESC"
@@ -57,14 +56,14 @@ export function HoldingsTable({
 }) {
   const preferenceStorage = useBrowserPreferences();
   const [sortBy, setSortBy] = useState<HoldingsSort>(() => {
-    if (typeof window === "undefined") return "VALUE_DESC";
+    if (typeof window === "undefined") return "DAY_DESC";
     try {
       const saved = preferenceStorage.getItem("kabutora-holdings-sort") as HoldingsSort | null;
       if (saved && ["VALUE_DESC", "DAY_DESC", "GAIN_DESC", "DAY_GAIN_VALUE_DESC", "PRICE_DESC", "NAME_ASC"].includes(saved)) {
         return saved;
       }
     } catch {}
-    return "VALUE_DESC";
+    return "DAY_DESC";
   });
 
   useEffect(() => {
@@ -72,21 +71,6 @@ export function HoldingsTable({
       preferenceStorage.setItem("kabutora-holdings-sort", sortBy);
     } catch {}
   }, [sortBy]);
-
-  const [viewMode, setViewMode] = useState<HoldingsViewMode>(() => {
-    if (typeof window === "undefined") return "grid";
-    try {
-      const saved = preferenceStorage.getItem("kabutora-holdings-view-mode") as HoldingsViewMode | null;
-      if (saved === "table" || saved === "grid") return saved;
-    } catch {}
-    return "grid";
-  });
-
-  useEffect(() => {
-    try {
-      preferenceStorage.setItem("kabutora-holdings-view-mode", viewMode);
-    } catch {}
-  }, [viewMode, preferenceStorage]);
 
   const sortedHoldings = useMemo(() => {
     const list = [...holdings];
@@ -145,135 +129,49 @@ export function HoldingsTable({
   };
 
   return (
-    <div className={`holdings-table ${dense ? "dense" : ""} ${viewMode === "grid" ? "grid-view" : "table-view"}`}>
-      <div className="holdings-toolbar" role="toolbar" aria-label="保有銘柄ツールバー">
-        <div className="holdings-toolbar-sorts" role="group" aria-label="並び替え">
+    <div className={`holdings-table ${dense ? "dense" : ""} grid-view`}>
+      <div className="holdings-header-bar" role="toolbar" aria-label="保有銘柄並び替え">
+        <div className="holdings-sort-chips" role="group" aria-label="並び替え">
           <button
             type="button"
-            className={`holdings-toolbar-sort-btn ${sortBy === "NAME_ASC" ? "active" : ""}`}
-            onClick={() => setSortBy("NAME_ASC")}
-          >
-            銘柄 {sortIndicator("NAME_ASC")}
-          </button>
-          <button
-            type="button"
-            className={`holdings-toolbar-sort-btn ${sortBy === "PRICE_DESC" ? "active" : ""}`}
-            onClick={() => setSortBy("PRICE_DESC")}
-          >
-            現在値 {sortIndicator("PRICE_DESC")}
-          </button>
-          <button
-            type="button"
-            className={`holdings-toolbar-sort-btn ${sortBy === "DAY_DESC" ? "active" : ""}`}
+            className={`holdings-sort-chip ${sortBy === "DAY_DESC" ? "active" : ""}`}
             onClick={() => setSortBy("DAY_DESC")}
           >
             前日比 {sortIndicator("DAY_DESC")}
           </button>
           <button
             type="button"
-            className={`holdings-toolbar-sort-btn ${sortBy === "VALUE_DESC" ? "active" : ""}`}
+            className={`holdings-sort-chip ${sortBy === "VALUE_DESC" ? "active" : ""}`}
             onClick={() => setSortBy("VALUE_DESC")}
           >
             評価額 {sortIndicator("VALUE_DESC")}
           </button>
           <button
             type="button"
-            className={`holdings-toolbar-sort-btn ${sortBy === "GAIN_DESC" ? "active" : ""}`}
+            className={`holdings-sort-chip ${sortBy === "GAIN_DESC" ? "active" : ""}`}
             onClick={() => setSortBy("GAIN_DESC")}
           >
             含み損益 {sortIndicator("GAIN_DESC")}
           </button>
-        </div>
-        <div className="holdings-view-mode-toggle" role="group" aria-label="表示形式">
           <button
             type="button"
-            className={`holdings-view-mode-btn ${viewMode === "grid" ? "active" : ""}`}
-            aria-pressed={viewMode === "grid"}
-            aria-label="グリッド表示"
-            title="グリッド表示"
-            onClick={() => setViewMode("grid")}
+            className={`holdings-sort-chip ${sortBy === "NAME_ASC" ? "active" : ""}`}
+            onClick={() => setSortBy("NAME_ASC")}
           >
-            <LayoutGrid size={15} />
-          </button>
-          <button
-            type="button"
-            className={`holdings-view-mode-btn ${viewMode === "table" ? "active" : ""}`}
-            aria-pressed={viewMode === "table"}
-            aria-label="テーブル表示"
-            title="テーブル表示"
-            onClick={() => setViewMode("table")}
-          >
-            <List size={15} />
-          </button>
-        </div>
-      </div>
-
-      <div className="holdings-mobile-header" role="row">
-        <div className="holdings-mobile-sorts">
-          <button type="button" className={`mobile-sort-btn ${sortBy === "NAME_ASC" ? "active" : ""}`} onClick={() => setSortBy("NAME_ASC")}>
             銘柄 {sortIndicator("NAME_ASC")}
           </button>
-          <button type="button" className={`mobile-sort-btn ${sortBy === "DAY_DESC" ? "active" : ""}`} onClick={() => setSortBy("DAY_DESC")}>
-            前日比 {sortIndicator("DAY_DESC")}
-          </button>
           <button
             type="button"
-            className={`mobile-sort-btn ${sortBy === "VALUE_DESC" || sortBy === "GAIN_DESC" ? "active" : ""}`}
-            onClick={() => setSortBy(sortBy === "VALUE_DESC" ? "GAIN_DESC" : "VALUE_DESC")}
+            className={`holdings-sort-chip ${sortBy === "PRICE_DESC" ? "active" : ""}`}
+            onClick={() => setSortBy("PRICE_DESC")}
           >
-            {sortBy === "GAIN_DESC" ? "含み損益" : "評価額"}{" "}
-            <span className="sort-arrow active" aria-hidden="true">
-              ↓
-            </span>
-          </button>
-        </div>
-        <div className="holdings-mobile-view-toggle" role="group" aria-label="表示形式">
-          <button
-            type="button"
-            className={`mobile-view-btn ${viewMode === "grid" ? "active" : ""}`}
-            aria-pressed={viewMode === "grid"}
-            aria-label="グリッド表示"
-            title="グリッド表示"
-            onClick={() => setViewMode("grid")}
-          >
-            <LayoutGrid size={14} />
-          </button>
-          <button
-            type="button"
-            className={`mobile-view-btn ${viewMode === "table" ? "active" : ""}`}
-            aria-pressed={viewMode === "table"}
-            aria-label="テーブル表示"
-            title="テーブル表示"
-            onClick={() => setViewMode("table")}
-          >
-            <List size={14} />
+            現在値 {sortIndicator("PRICE_DESC")}
           </button>
         </div>
       </div>
 
-      <table className={`holdings-table-content ${viewMode === "grid" ? "is-grid" : "is-table"}`}>
-        <thead>
-          <tr>
-            <th className={`sortable ${sortBy === "NAME_ASC" ? "active-sort" : ""}`} onClick={() => setSortBy("NAME_ASC")}>
-              銘柄 {sortIndicator("NAME_ASC")}
-            </th>
-            <th className={`sortable ${sortBy === "PRICE_DESC" ? "active-sort" : ""}`} onClick={() => setSortBy("PRICE_DESC")}>
-              現在値 {sortIndicator("PRICE_DESC")}
-            </th>
-            <th className={`sortable ${sortBy === "DAY_DESC" ? "active-sort" : ""}`} onClick={() => setSortBy("DAY_DESC")}>
-              前日比 {sortIndicator("DAY_DESC")}
-            </th>
-            <th>保有数 / 平均</th>
-            <th className={`sortable ${sortBy === "VALUE_DESC" ? "active-sort" : ""}`} onClick={() => setSortBy("VALUE_DESC")}>
-              評価額 {sortIndicator("VALUE_DESC")}
-            </th>
-            <th className={`sortable ${sortBy === "GAIN_DESC" ? "active-sort" : ""}`} onClick={() => setSortBy("GAIN_DESC")}>
-              含み損益率 {sortIndicator("GAIN_DESC")}
-            </th>
-            <th>比率</th>
-          </tr>
-        </thead>
-        <tbody className={viewMode === "grid" ? "holdings-grid-body" : ""}>
+      <table className="holdings-table-content is-grid">
+        <tbody className="holdings-grid-body">
           {sortedHoldings.map((holding) => {
             const canonicalId = canonicalDomainSecurityId(holding.securityId);
             return (
@@ -288,7 +186,6 @@ export function HoldingsTable({
                 marketFilter={marketFilter}
                 onSelect={onSelect}
                 currentTime={currentTime}
-                viewMode={viewMode}
               />
             );
           })}
@@ -308,7 +205,6 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   marketFilter = "ALL",
   onSelect,
   currentTime,
-  viewMode = "grid",
 }: {
   holding: DashboardHolding;
   currency: DisplayCurrency;
@@ -319,10 +215,10 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   marketFilter?: PortfolioFilter;
   onSelect?: (securityId: string) => void;
   currentTime?: number | null;
-  viewMode?: HoldingsViewMode;
 }) {
   const sec = holding.security;
   const isUs = isUsSecurity(sec, holding.securityId);
+  const isFund = isFundSecurity(sec, holding.securityId);
   const rowCurrency = (
     currency === "NATIVE"
       ? sec?.currency ?? sec?.nativeCurrency ?? (isUs ? "USD" : "JPY")
@@ -338,101 +234,37 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   const stockMic = quote?.exchangeMic || sec?.exchangeMic || (isUs ? "XNAS" : "XTKS");
   const stockTz = sec?.timezone || (isUs ? "America/New_York" : "Asia/Tokyo");
   const stockCurrency = sec?.nativeCurrency ?? quote?.currency ?? sec?.currency ?? rowCurrency;
-  const stockCountry = sec?.country || (isUs ? "US" : "JP");
   const secName = sec?.name || sec?.displaySymbol || holding.securityId;
   const secLegalName = sec?.legalName || secName;
   const secDisplaySymbol = sec?.displaySymbol || holding.securityId.replace(/^sec-(?:us-|jp-)?/i, "").toUpperCase();
-  const weightVal = holding.summaryMarketValue ?? holding.marketValue;
 
-  if (viewMode === "grid") {
-    const fetchedTime = formatWidgetFetchedTime(
-      quote?.fetchedAt,
-      quote?.marketTimestamp,
-      stockMic,
-      stockTz,
-      stockCurrency,
-    );
-    const secSub = secName !== secDisplaySymbol ? secName : marketDisplayName(sec);
+  const primaryName = shortSecurityDisplayName({
+    name: secName,
+    brandName: sec?.brandName,
+    shortName: sec?.shortName,
+    displaySymbol: secDisplaySymbol,
+    isUs,
+    isFund,
+  });
 
-    return (
-      <tr
-        className={`holding-widget-card ${onSelect ? "selectable" : ""}`}
-        onClick={() => onSelect?.(holding.securityId)}
-        onKeyDown={(event) => {
-          if (onSelect && (event.key === "Enter" || event.key === " ")) {
-            event.preventDefault();
-            onSelect(holding.securityId);
-          }
-        }}
-        tabIndex={onSelect ? 0 : undefined}
-        aria-label={onSelect ? `${secName}の詳細を開く` : undefined}
-      >
-        <td className="widget-card-cell" colSpan={7}>
-          {/* Row 1: Ticker Symbol (left) + Fetched Time (top right) */}
-          <div className="widget-card-row widget-row-header">
-            <div className="security-col widget-ticker-wrap">
-              <strong className="widget-ticker">{secDisplaySymbol}</strong>
-            </div>
-            <div
-              className="widget-time-group"
-              title={
-                quote
-                  ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${fetchedTime ? `${fetchedTime} 取得` : ""}`
-                  : "価格未取得"
-              }
-            >
-              <span className={`quote-dot ${quote?.freshness ?? "missing"}`} />
-              <span className="widget-fetched-time">
-                {fetchedTime ?? "未取得"}
-              </span>
-            </div>
-          </div>
+  const mktLabel = marketDisplayName(sec);
+  const secondarySubtitle = isUs
+    ? (companyDisplayName(sec) || secName)
+    : isFund
+    ? (secDisplaySymbol && !secDisplaySymbol.startsWith("fund-") && !secDisplaySymbol.startsWith("JP") ? secDisplaySymbol : "投資信託")
+    : `${secDisplaySymbol}${mktLabel ? ` · ${mktLabel}` : ""}`;
 
-          {/* Row 2: Security Name (full width, single line) */}
-          <div className="widget-card-row widget-row-sub">
-            <span className="widget-sec-name" title={secLegalName}>
-              {secSub}
-            </span>
-          </div>
-
-          {/* Row 3: Current Stock Price (left) + Daily Change % (right, right-aligned, bigger) */}
-          <div className="widget-card-row widget-row-price">
-            <div className="price-col widget-price">
-              <strong title={maybeMoney(holding.currentPrice, rowCurrency)}>
-                {compactPrice(holding.currentPrice, rowCurrency)}
-              </strong>
-            </div>
-            <div className={`day-col widget-day-val ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
-              <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
-            </div>
-          </div>
-
-          {/* Row 4: Total Gain/Loss (return % + compact currency amount) */}
-          <div className="widget-card-row widget-row-gain">
-            <div className={`gain-col widget-total-gain ${gain == null ? "" : gain >= 0 ? "up" : "down"}`}>
-              <div className="widget-gain-left">
-                <span className="widget-gain-label">損益</span>
-                <strong className="widget-gain-percent">
-                  {gainPercent == null ? "—" : signedPercent(gainPercent, 1)}
-                </strong>
-              </div>
-              <small
-                className="widget-gain-amount"
-                aria-label={amountsVisible ? undefined : "金額非表示"}
-                title={amountsVisible ? (gain == null ? undefined : maybeSignedMoney(gain, rowCurrency)) : undefined}
-              >
-                {amountsVisible ? (gain == null ? "" : compactMoney(Number(gain), rowCurrency, true)) : HIDDEN_AMOUNT}
-              </small>
-            </div>
-          </div>
-        </td>
-      </tr>
-    );
-  }
+  const fetchedTime = formatWidgetFetchedTime(
+    quote?.fetchedAt,
+    quote?.marketTimestamp,
+    stockMic,
+    stockTz,
+    stockCurrency,
+  );
 
   return (
     <tr
-      className={onSelect ? "selectable" : ""}
+      className={`holding-widget-card ${onSelect ? "selectable" : ""}`}
       onClick={() => onSelect?.(holding.securityId)}
       onKeyDown={(event) => {
         if (onSelect && (event.key === "Enter" || event.key === " ")) {
@@ -443,53 +275,64 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
       tabIndex={onSelect ? 0 : undefined}
       aria-label={onSelect ? `${secName}の詳細を開く` : undefined}
     >
-      <td className="security-col">
-        <strong title={secLegalName}>{secName}</strong>
-        <span className="security-symbol">
-          {secDisplaySymbol} · {marketDisplayName(sec)}
-          {quote
-            ? ` · ${marketTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency, stockCountry)}`
-            : ""}
-        </span>
-      </td>
-      <td className="price-col">
-        <strong>{maybeMoney(holding.currentPrice, rowCurrency)}</strong>
-      </td>
-      <td className={`day-col ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
-        <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
-        <span aria-label={amountsVisible ? undefined : "金額非表示"}>{amountsVisible ? maybeSignedMoney(day, rowCurrency) : HIDDEN_AMOUNT}</span>
-      </td>
-      <td className="position-col">
-        <strong aria-label={amountsVisible ? undefined : "保有数非表示"}>
-          {amountsVisible ? `${number.format(Number(holding.quantity))}${securityQuantityUnit(sec, holding.securityId)}` : HIDDEN_AMOUNT}
-        </strong>
-        <span aria-label={amountsVisible ? undefined : "平均取得単価非表示"}>
-          {amountsVisible
-            ? `@ ${money(Number(holding.averageCost), rowCurrency)}${isFundSecurity(sec, holding.securityId) ? ` / ${securityPriceBasis(sec, holding.securityId)}` : ""}`
-            : HIDDEN_AMOUNT}
-        </span>
-      </td>
-      <td className="value-col">
-        <strong aria-label={amountsVisible ? undefined : "金額非表示"}>
-          <span className="wide-number">{amountsVisible ? maybeMoney(holding.marketValue, rowCurrency) : HIDDEN_AMOUNT}</span>
-          <span className="compact-number">
-            {amountsVisible ? (holding.marketValue == null ? "—" : compactMoney(Number(holding.marketValue), rowCurrency)) : HIDDEN_AMOUNT}
+      <td className="widget-card-cell" colSpan={7}>
+        {/* Row 1: Primary Name (JP company short name / US ticker) + Fetched Time (top right) */}
+        <div className="widget-card-row widget-row-header">
+          <div className="security-col widget-ticker-wrap">
+            <strong className="widget-ticker" title={secLegalName}>{primaryName}</strong>
+          </div>
+          <div
+            className="widget-time-group"
+            title={
+              quote
+                ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${fetchedTime ? `${fetchedTime} 取得` : ""}`
+                : "価格未取得"
+            }
+          >
+            <span className={`quote-dot ${quote?.freshness ?? "missing"}`} />
+            <span className="widget-fetched-time">
+              {fetchedTime ?? "未取得"}
+            </span>
+          </div>
+        </div>
+
+        {/* Row 2: Secondary line (JP: ticker/exchange, US: company name, Fund: type) */}
+        <div className="widget-card-row widget-row-sub">
+          <span className="widget-sec-name" title={secLegalName}>
+            {secondarySubtitle}
           </span>
-        </strong>
-      </td>
-      <td className="gain-col">
-        <strong className={gain == null ? "" : gain >= 0 ? "up" : "down"}>{signedPercent(gainPercent, 1)}</strong>
-      </td>
-      <td className="weight-col">
-        <strong>{totalValue != null && weightVal != null ? `${((Number(weightVal) / totalValue) * 100).toFixed(1)}%` : "—"}</strong>
-        <span
-          className={`quote-dot ${quote?.freshness ?? "missing"}`}
-          title={
-            quote
-              ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${marketDateTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency)}（市場現地）`
-              : "価格未取得"
-          }
-        />
+        </div>
+
+        {/* Row 3: Current Stock Price (left, smaller) + Daily Change % (right, HERO metric, bold) */}
+        <div className="widget-card-row widget-row-price">
+          <div className="price-col widget-price">
+            <strong title={maybeMoney(holding.currentPrice, rowCurrency)}>
+              {compactPrice(holding.currentPrice, rowCurrency)}
+            </strong>
+          </div>
+          <div className={`day-col widget-day-val ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
+            <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
+          </div>
+        </div>
+
+        {/* Row 4: Total Gain/Loss (return % + compact currency amount) */}
+        <div className="widget-card-row widget-row-gain">
+          <div className={`gain-col widget-total-gain ${gain == null ? "" : gain >= 0 ? "up" : "down"}`}>
+            <div className="widget-gain-left">
+              <span className="widget-gain-label">損益</span>
+              <strong className="widget-gain-percent">
+                {gainPercent == null ? "—" : signedPercent(gainPercent, 1)}
+              </strong>
+            </div>
+            <small
+              className="widget-gain-amount"
+              aria-label={amountsVisible ? undefined : "金額非表示"}
+              title={amountsVisible ? (gain == null ? undefined : maybeSignedMoney(gain, rowCurrency)) : undefined}
+            >
+              {amountsVisible ? (gain == null ? "" : compactMoney(Number(gain), rowCurrency, true)) : HIDDEN_AMOUNT}
+            </small>
+          </div>
+        </div>
       </td>
     </tr>
   );

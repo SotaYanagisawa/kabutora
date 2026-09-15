@@ -618,30 +618,33 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
 
 .holdings-section { min-width: 0; background: var(--panel); border-top: 1px solid var(--line); }
 .holdings-table { width: 100%; min-width: 0; overflow: hidden; background: var(--panel); }
-.holdings-toolbar {
+/* Holdings Ultra-Slim Header Bar & Sort Chips */
+.holdings-header-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 5px 12px;
+  justify-content: flex-start;
+  padding: 2px 8px;
   background: var(--panel-alt);
   border-bottom: 1px solid var(--line);
-  min-height: 36px;
-  gap: 8px;
+  min-height: 26px;
+  height: 26px;
+  box-sizing: border-box;
 }
-.holdings-toolbar-sorts {
+.holdings-sort-chips {
   display: flex;
   align-items: center;
   gap: 4px;
   overflow-x: auto;
   scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
 }
-.holdings-toolbar-sorts::-webkit-scrollbar {
+.holdings-sort-chips::-webkit-scrollbar {
   display: none;
 }
-.holdings-toolbar-sort-btn {
-  padding: 3px 8px;
+.holdings-sort-chip {
+  padding: 2px 7px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--muted);
   font-size: 11px;
@@ -650,50 +653,21 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
+  line-height: 1.2;
   transition: all .12s ease;
   user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
-.holdings-toolbar-sort-btn:hover {
+.holdings-sort-chip:hover {
   color: var(--text);
   background: color-mix(in srgb, var(--panel) 70%, var(--line));
 }
-.holdings-toolbar-sort-btn.active {
+.holdings-sort-chip.active {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--panel));
   border-color: color-mix(in srgb, var(--accent) 25%, var(--line));
   font-weight: 750;
-}
-.holdings-view-mode-toggle {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  border-radius: 6px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  gap: 2px;
-  flex-shrink: 0;
-}
-.holdings-view-mode-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 24px;
-  border-radius: 4px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  transition: all .12s ease;
-  padding: 0;
-}
-.holdings-view-mode-btn:hover {
-  color: var(--text);
-}
-.holdings-view-mode-btn.active {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 15%, var(--panel-alt));
 }
 .holdings-mobile-header {
   display: none;
@@ -836,7 +810,7 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   width: 100%;
 }
 
-/* Row 3: Current Stock Price (left) + Daily Change % (right, bigger, right-aligned) */
+/* Row 3: Current Stock Price (left, smaller) + Daily Change % (right, HERO metric, bold) */
 .widget-row-price {
   margin: 3px 0 2px 0;
   line-height: 1.15;
@@ -846,13 +820,14 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   display: flex !important;
   align-items: baseline;
   min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
 }
 .widget-price strong {
-  font-size: 14.5px !important;
-  font-weight: 850 !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
   color: var(--text);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
   line-height: 1.15;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -864,13 +839,13 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   align-items: baseline;
   justify-content: flex-end;
   text-align: right;
-  flex-shrink: 0;
+  flex: 0 0 auto;
   margin-left: auto;
   line-height: 1.15;
 }
 .widget-day-val strong {
-  font-size: 13.5px !important;
-  font-weight: 800 !important;
+  font-size: 14.5px !important;
+  font-weight: 900 !important;
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -3771,6 +3746,18 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   .holdings-table:not(.grid-view) .day-col strong, .holdings-table:not(.grid-view) .gain-col strong { font-size: 13.5px; font-weight: 750; line-height: 1; }
   .holdings-table:not(.grid-view) .day-col > span { display: none; }
 
+  /* Mobile Holdings Header & Sort Chips (Ultra-compact) */
+  .holdings-header-bar {
+    min-height: 24px !important;
+    height: 24px !important;
+    padding: 1px 6px !important;
+  }
+  .holdings-sort-chip {
+    padding: 1px 6px !important;
+    font-size: 10px !important;
+    border-radius: 3px !important;
+  }
+
   /* Mobile Widget Grid Overrides - 3 Columns with increased card height */
   .holdings-table.grid-view tbody.holdings-grid-body {
     display: grid !important;
@@ -3798,7 +3785,8 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
     justify-content: space-between !important;
   }
   .holdings-table.grid-view .widget-ticker {
-    font-size: 12px !important;
+    font-size: 11.5px !important;
+    font-weight: 800 !important;
   }
   .holdings-table.grid-view .widget-time-group .quote-dot {
     width: 4px !important;
@@ -3813,11 +3801,21 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   .holdings-table.grid-view .widget-row-price {
     margin: 2px 0 1px 0 !important;
   }
+  .holdings-table.grid-view .widget-price {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+  }
   .holdings-table.grid-view .widget-price strong {
-    font-size: 13px !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+  }
+  .holdings-table.grid-view .widget-day-val {
+    flex: 0 0 auto !important;
+    margin-left: auto !important;
   }
   .holdings-table.grid-view .widget-day-val strong {
-    font-size: 12.5px !important;
+    font-size: 13.5px !important;
+    font-weight: 900 !important;
   }
   .holdings-table.grid-view .widget-gain-label {
     font-size: 7.5px !important;
