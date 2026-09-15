@@ -1,123 +1,106 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedInAs(uid) {
-      return request.auth != null && request.auth.uid == uid;
-    }
-
     function allowedUser(uid) {
-      return signedInAs(uid)
-        && exists(/databases/$(database)/documents/appAccess/$(uid));
+      return request.auth != null && request.auth.uid == uid && exists(/databases/$(database)/documents/appAccess/$(uid));
     }
-
-    function ownsExisting(uid) {
-      return allowedUser(uid) && resource.data.ownerUid == uid;
+    function ownsExisting(uid) { return allowedUser(uid) && resource.data.ownerUid == uid; }
+    function ownsIncoming(uid) { return allowedUser(uid) && request.resource.data.ownerUid == uid; }
+    function vaultPath(uid) { return /databases/$(database)/documents/users/$(uid)/vaults/default; }
+    function controlPath(uid) { return /databases/$(database)/documents/users/$(uid)/control/vault; }
+    function unlocked(uid) {
+      return !exists(controlPath(uid)) || get(controlPath(uid)).data.lockToken == null
+        || get(controlPath(uid)).data.lockUntil <= request.time.toMillis();
     }
-
-    function ownsIncoming(uid) {
-      return allowedUser(uid) && request.resource.data.ownerUid == uid;
+    function generation(uid) {
+      return exists(vaultPath(uid)) && get(vaultPath(uid)).data.version == 2 ? get(vaultPath(uid)).data.keyId : 'legacy';
     }
-
+    function activated(uid) {
+      return exists(controlPath(uid)) && get(controlPath(uid)).data.lockToken != null
+        && get(controlPath(uid)).data.lockUntil > request.time.toMillis()
+        && getAfter(controlPath(uid)).data.lockToken == null
+        && getAfter(controlPath(uid)).data.committedToken == get(controlPath(uid)).data.lockToken;
+    }
     function validBlock(block) {
-      return block is map
-        && block.keys().hasOnly(['algorithm', 'iv', 'ciphertext'])
-        && block.algorithm == 'AES-256-GCM'
-        && block.iv is string
-        && block.iv.size() <= 32
-        && block.ciphertext is string
-        && block.ciphertext.size() <= 900000;
+      return block is map && block.keys().hasOnly(['algorithm', 'iv', 'ciphertext'])
+        && block.algorithm == 'AES-256-GCM' && block.iv is string && block.iv.size() == 16
+        && block.ciphertext is string && block.ciphertext.size() >= 22 && block.ciphertext.size() <= 900000;
     }
-
     function validVault(uid) {
+      let data = request.resource.data;
       return ownsIncoming(uid)
-        && request.resource.data.keys().hasOnly([
-          'format', 'version', 'ownerUid', 'kdf', 'wrappedKey',
-          'recoveryWrappedKey', 'payload', 'revision', 'createdAt', 'updatedAt'
-        ])
-        && request.resource.data.format == 'kabutora-encrypted-vault'
-        && request.resource.data.version == 1
-        && request.resource.data.revision is int
-        && request.resource.data.revision > 0
-        && request.resource.data.createdAt is string
-        && request.resource.data.updatedAt is string
-        && request.resource.data.kdf is map
-        && request.resource.data.kdf.keys().hasOnly([
-          'algorithm', 'salt', 'memoryKiB', 'iterations', 'parallelism'
-        ])
-        && request.resource.data.kdf.algorithm == 'ARGON2ID'
-        && request.resource.data.kdf.salt is string
-        && request.resource.data.kdf.salt.size() <= 64
-        && request.resource.data.kdf.memoryKiB is int
-        && request.resource.data.kdf.memoryKiB >= 32768
-        && request.resource.data.kdf.iterations is int
-        && request.resource.data.kdf.iterations >= 2
-        && request.resource.data.kdf.parallelism is int
-        && request.resource.data.kdf.parallelism >= 1
-        && validBlock(request.resource.data.wrappedKey)
-        && validBlock(request.resource.data.recoveryWrappedKey)
-        && validBlock(request.resource.data.payload);
+        && data.keys().hasOnly(['format', 'version', 'ownerUid', 'keyId', 'legacyKeys', 'kdf', 'wrappedKey', 'recoveryWrappedKey', 'payload', 'revision', 'createdAt', 'updatedAt'])
+        && data.format == 'kabutora-encrypted-vault' && data.version in [1, 2]
+        && (data.version == 1 || (data.keyId is string && data.keyId.size() >= 32 && data.keyId.size() <= 64))
+        && (!data.keys().hasAny(['legacyKeys']) || validBlock(data.legacyKeys))
+        && data.revision is int && data.revision > 0 && data.createdAt is string && data.updatedAt is string
+        && data.kdf is map && data.kdf.keys().hasOnly(['algorithm', 'salt', 'memoryKiB', 'iterations', 'parallelism'])
+        && data.kdf.algorithm == 'ARGON2ID' && data.kdf.salt is string && data.kdf.salt.size() <= 64
+        && data.kdf.memoryKiB is int && data.kdf.memoryKiB >= 32768 && data.kdf.memoryKiB <= 262144
+        && data.kdf.iterations is int && data.kdf.iterations >= 2 && data.kdf.iterations <= 10
+        && data.kdf.parallelism is int && data.kdf.parallelism >= 1 && data.kdf.parallelism <= 4
+        && validBlock(data.wrappedKey) && validBlock(data.recoveryWrappedKey) && validBlock(data.payload);
     }
-
     function validEvent(uid) {
-      return ownsIncoming(uid)
-        && request.resource.data.keys().hasOnly(['ownerUid', 'payload', 'keyId'])
-        && (!request.resource.data.keys().hasAny(['keyId'])
-          || (request.resource.data.keyId is string && request.resource.data.keyId.size() <= 64))
-        && validBlock(request.resource.data.payload);
+      let data = request.resource.data;
+      return ownsIncoming(uid) && data.keys().hasOnly(['ownerUid', 'payload', 'keyId'])
+        && (!data.keys().hasAny(['keyId']) || (data.keyId is string && data.keyId.size() <= 64))
+        && validBlock(data.payload) && unlocked(uid)
+        && (generation(uid) == 'legacy' || data.keyId == generation(uid));
     }
-
-    function validGoogleAccountKey(uid) {
-      return ownsIncoming(uid)
-        && request.resource.data.keys().hasOnly([
-          'format', 'version', 'ownerUid', 'keyId', 'encodedKey', 'createdAt', 'updatedAt'
-        ])
-        && request.resource.data.format == 'kabutora-google-account-key'
-        && request.resource.data.version == 1
-        && request.resource.data.keyId is string
-        && request.resource.data.keyId.size() >= 32
-        && request.resource.data.keyId.size() <= 64
-        && request.resource.data.encodedKey is string
-        && request.resource.data.encodedKey.size() >= 42
-        && request.resource.data.encodedKey.size() <= 44
-        && request.resource.data.createdAt is string
-        && request.resource.data.updatedAt is string;
-    }
-
     match /users/{uid}/vaults/{vaultId} {
-      // A first-time user's default vault does not exist yet, so reads must not
-      // depend on resource.data. The authenticated UID in the path plus the
-      // private appAccess document is the authorization boundary.
       allow get, list: if allowedUser(uid);
-      allow create, update: if validVault(uid);
-      allow delete: if ownsExisting(uid);
-    }
-
-    match /users/{uid}/events/{eventId} {
-      allow get, list: if ownsExisting(uid);
-      allow create: if validEvent(uid);
-      allow update: if false;
-      allow delete: if ownsExisting(uid);
-    }
-
-    match /users/{uid}/keys/{keyId} {
-      allow get: if allowedUser(uid) && keyId == 'google-account';
-      allow list: if false;
-      allow create, update: if keyId == 'google-account' && validGoogleAccountKey(uid);
+      allow create: if vaultId == 'default' && validVault(uid) && request.resource.data.version == 2
+        && request.resource.data.revision == 1 && activated(uid)
+        && getAfter(controlPath(uid)).data.generation == request.resource.data.keyId;
+      allow update: if vaultId == 'default' && validVault(uid) && request.resource.data.revision == resource.data.revision + 1
+        && ((unlocked(uid) && request.resource.data.version == resource.data.version
+          && (resource.data.version == 1 || request.resource.data.keyId == resource.data.keyId))
+          || (activated(uid) && request.resource.data.version == 2 && getAfter(controlPath(uid)).data.generation == request.resource.data.keyId));
       allow delete: if false;
     }
-
+    match /users/{uid}/events/{eventId} {
+      allow get: if allowedUser(uid);
+      allow list: if ownsExisting(uid);
+      allow create: if validEvent(uid) && !exists(/databases/$(database)/documents/users/$(uid)/receipts/$(eventId));
+      allow update: if false;
+      allow delete: if allowedUser(uid) && unlocked(uid)
+        && getAfter(/databases/$(database)/documents/users/$(uid)/receipts/$(eventId)).data.ownerUid == uid;
+    }
+    match /users/{uid}/receipts/{eventId} {
+      allow get: if allowedUser(uid);
+      allow list: if false;
+      allow create, update: if ownsIncoming(uid) && unlocked(uid)
+        && request.resource.data.keys().hasOnly(['ownerUid', 'generation', 'revision'])
+        && request.resource.data.generation == generation(uid)
+        && request.resource.data.revision is int && request.resource.data.revision > 0
+        && request.resource.data.revision <= get(vaultPath(uid)).data.revision;
+      allow delete: if false;
+    }
+    match /users/{uid}/control/{controlId} {
+      allow get: if allowedUser(uid) && controlId == 'vault';
+      allow list, delete: if false;
+      allow create, update: if controlId == 'vault' && ownsIncoming(uid)
+        && request.resource.data.keys().hasOnly(['ownerUid', 'generation', 'lockToken', 'lockUntil', 'committedToken'])
+        && request.resource.data.generation is string && request.resource.data.lockUntil is int
+        && ((unlocked(uid) && request.resource.data.generation == generation(uid)
+          && request.resource.data.lockToken is string && request.resource.data.lockToken.size() >= 32 && request.resource.data.lockToken.size() <= 64
+          && request.resource.data.lockUntil > request.time.toMillis() && request.resource.data.lockUntil <= request.time.toMillis() + 120000)
+          || (exists(controlPath(uid)) && request.resource.data.lockToken == null && request.resource.data.lockUntil == 0
+            && request.resource.data.committedToken == resource.data.lockToken
+            && (request.resource.data.generation == generation(uid) || (getAfter(vaultPath(uid)).data.version == 2
+              && request.resource.data.generation == getAfter(vaultPath(uid)).data.keyId))));
+    }
+    match /users/{uid}/keys/{keyId} {
+      allow get: if allowedUser(uid) && keyId == 'google-account';
+      allow list, create, update: if false;
+      allow delete: if allowedUser(uid) && keyId == 'google-account' && activated(uid) && getAfter(vaultPath(uid)).data.version == 2;
+    }
     match /market/{document=**} {
-      allow read: if request.auth != null
-        && exists(/databases/$(database)/documents/appAccess/$(request.auth.uid));
+      allow read: if request.auth != null && exists(/databases/$(database)/documents/appAccess/$(request.auth.uid));
       allow write: if false;
     }
-
-    match /appAccess/{uid} {
-      allow read, write: if false;
-    }
-
-    match /{document=**} {
-      allow read, write: if false;
-    }
+    match /appAccess/{uid} { allow read, write: if false; }
+    match /{document=**} { allow read, write: if false; }
   }
 }

@@ -1,4 +1,4 @@
-import { calculateAverageCostPortfolio, type CorporateAction, type IntradayBar, type LedgerTransaction, type MarketBar, type MarketQuote } from "@kabutora/domain";
+import { Decimal, calculateAverageCostPortfolio, type CorporateAction, type IntradayBar, type LedgerTransaction, type MarketBar, type MarketQuote } from "@kabutora/domain";
 
 export type ExternalMarketNotice = {
   id: string;
@@ -80,14 +80,14 @@ function actionHoldingBefore(
 
 function splitNotifications(transactions: LedgerTransaction[], securities: SecurityForNotice[], actions: CorporateAction[], bars: MarketBar[]) {
   const validActions = actions.filter((action) => {
-    const factor = Number(action.numerator) / Number(action.denominator);
-    return Number.isFinite(factor) && factor > 0;
+    const factor = new Decimal(action.numerator).div(action.denominator);
+    return factor.isFinite() && factor.gt(0);
   });
 
   return validActions.flatMap((action): PortfolioNotification[] => {
     const holding = actionHoldingBefore(action, transactions, securities, actions);
     const security = securities.find((item) => item.id === action.securityId)!;
-    const factor = Number(action.numerator) / Number(action.denominator);
+    const factor = new Decimal(action.numerator).div(action.denominator);
     const securityBars = bars.filter((bar) => bar.securityId === action.securityId).sort((a, b) => a.date.localeCompare(b.date));
     const rawBeforeBar = securityBars.filter((bar) => bar.date < action.effectiveDate.slice(0, 10)).at(-1)?.close;
     const rawAfterBar = securityBars.find((bar) => bar.date >= action.effectiveDate.slice(0, 10))?.close;
@@ -95,17 +95,17 @@ function splitNotifications(transactions: LedgerTransaction[], securities: Secur
     // Cumulative multiplier for subsequent splits on or after this action to unadjust provider historical bars
     const cumulativeSubsequentFactor = validActions
       .filter((act) => act.securityId === action.securityId && act.effectiveDate.slice(0, 10) >= action.effectiveDate.slice(0, 10))
-      .reduce((acc, act) => acc * (Number(act.numerator) / Number(act.denominator)), 1);
+      .reduce((acc, act) => acc.mul(new Decimal(act.numerator).div(act.denominator)), new Decimal(1));
 
     const futureSubsequentFactor = validActions
       .filter((act) => act.securityId === action.securityId && act.effectiveDate.slice(0, 10) > action.effectiveDate.slice(0, 10))
-      .reduce((acc, act) => acc * (Number(act.numerator) / Number(act.denominator)), 1);
+      .reduce((acc, act) => acc.mul(new Decimal(act.numerator).div(act.denominator)), new Decimal(1));
 
-    const beforeReference = rawBeforeBar != null ? String(Number(rawBeforeBar) * cumulativeSubsequentFactor) : null;
-    const afterReference = rawAfterBar != null ? String(Number(rawAfterBar) * futureSubsequentFactor) : (rawBeforeBar != null ? String(Number(rawBeforeBar) * futureSubsequentFactor) : null);
-    const beforeQuantity = Number(holding?.quantity ?? 0);
-    const beforeAverageCost = Number(holding?.averageCost ?? 0);
-    const reverse = action.type === "REVERSE_SPLIT" || factor < 1;
+    const beforeReference = rawBeforeBar != null ? new Decimal(rawBeforeBar).mul(cumulativeSubsequentFactor).toString() : null;
+    const afterReference = rawAfterBar != null ? new Decimal(rawAfterBar).mul(futureSubsequentFactor).toString() : (rawBeforeBar != null ? new Decimal(rawBeforeBar).mul(futureSubsequentFactor).toString() : null);
+    const beforeQuantity = new Decimal(holding?.quantity ?? 0);
+    const beforeAverageCost = new Decimal(holding?.averageCost ?? 0);
+    const reverse = action.type === "REVERSE_SPLIT" || factor.lt(1);
     return [{
       id: `notice:${action.id}`,
       securityId: action.securityId,
@@ -116,11 +116,11 @@ function splitNotifications(transactions: LedgerTransaction[], securities: Secur
       source: action.sourceProvider,
       currency: security.currency ?? "JPY",
       portfolioImpact: "ADJUSTED",
-      ...(beforeQuantity > 0 ? {
+      ...(beforeQuantity.gt(0) ? {
         beforeQuantity: String(beforeQuantity),
-        afterQuantity: String(beforeQuantity * factor),
+        afterQuantity: beforeQuantity.mul(factor).toString(),
         beforeAverageCost: String(beforeAverageCost),
-        afterAverageCost: String(beforeAverageCost / factor),
+        afterAverageCost: beforeAverageCost.div(factor).toString(),
       } : {}),
       ...(beforeReference ? { beforeReferencePrice: beforeReference } : {}),
       ...(afterReference ? { afterReferencePrice: afterReference } : {}),
@@ -130,6 +130,20 @@ function splitNotifications(transactions: LedgerTransaction[], securities: Secur
 
 function priceNotificationId(securityId: string, type: PortfolioNotification["type"], date: string) {
   return `notice:${securityId}:${type.toLowerCase().replaceAll("_", "-")}:${date}`;
+}
+
+function actionFactorNearDate(actions: CorporateAction[], securityId: string, date: string): number {
+  const targetDate = new Date(`${date}T00:00:00Z`).getTime();
+  for (const action of actions) {
+    if (action.securityId !== securityId) continue;
+    const actionDate = new Date(`${action.effectiveDate.slice(0, 10)}T00:00:00Z`).getTime();
+    if (Math.abs(actionDate - targetDate) <= 3 * 24 * 60 * 60 * 1000) {
+      const num = Number(action.numerator);
+      const den = Number(action.denominator);
+      if (num > 0 && den > 0) return num / den;
+    }
+  }
+  return 1;
 }
 
 function currentPriceNotifications(
@@ -146,58 +160,64 @@ function currentPriceNotifications(
     if (actions.some((action) => action.securityId === security.id && action.effectiveDate.slice(0, 10) === quoteDate)) {
       return [];
     }
-    const current = Number(security.quote.price);
-    const previous = Number(security.quote.previousRegularClose);
+    let current = Number(security.quote.price);
+    let previous = Number(security.quote.previousRegularClose);
     if (!Number.isFinite(current) || !Number.isFinite(previous) || previous <= 0) return [];
-    const securityIntraday = intradayBars.filter((bar) => bar.securityId === security.id && bar.timestamp.slice(0, 10) === quoteDate);
-    if (security.exchangeMic !== "XTKS") {
-      const upper = previous * (1 + threshold);
-      const lower = previous * (1 - threshold);
-      const upperHitBar = securityIntraday.find((bar) => Number(bar.price) >= upper);
-      const lowerHitBar = securityIntraday.find((bar) => Number(bar.price) <= lower);
-      const hitUpper = current >= upper || Boolean(upperHitBar);
-      const hitLower = current <= lower || Boolean(lowerHitBar);
-      if (!hitUpper && !hitLower) return [];
-      const positive = hitUpper;
-      const occurredAt = (positive ? upperHitBar : lowerHitBar)?.timestamp ?? security.quote.marketTimestamp;
-      const date = occurredAt.slice(0, 10);
-      const observedPrice = Number((positive ? upperHitBar : lowerHitBar)?.price ?? current);
-      const changeRatio = observedPrice / previous - 1;
-      const type = positive ? "PRICE_UP" : "PRICE_DOWN";
-      return [{
-        id: priceNotificationId(security.id, type, date),
-        securityId: security.id,
-        type,
-        occurredAt,
-        title: `${security.name}が${positive ? "急騰" : "急落"}`,
-        summary: `前日終値から${Math.abs(changeRatio * 100).toFixed(1)}%${positive ? "上昇" : "下落"}`,
-        source: security.quote.provider,
-        currency: security.currency ?? "USD",
-        changeRatio: String(changeRatio),
-      }];
+    const factor = actionFactorNearDate(actions, security.id, quoteDate);
+    if (factor !== 1 && Math.abs(current / previous - 1) > 0.35) {
+      previous = previous / factor;
     }
-    const width = tseDailyPriceLimit(previous);
-    const upper = previous + width;
-    const lower = Math.max(0, previous - width);
-    const tolerance = Math.max(0.01, current * 0.00001);
-    const upperHitBar = securityIntraday.find((bar) => Number(bar.price) >= upper - tolerance);
-    const lowerHitBar = securityIntraday.find((bar) => Number(bar.price) <= lower + tolerance);
-    const hitUpper = current >= upper - tolerance || Boolean(upperHitBar);
-    const hitLower = current <= lower + tolerance || Boolean(lowerHitBar);
+    const securityIntraday = intradayBars.filter((bar) => bar.securityId === security.id && bar.timestamp.slice(0, 10) === quoteDate);
+    if (security.exchangeMic === "XTKS") {
+      const width = tseDailyPriceLimit(previous);
+      const upper = previous + width;
+      const lower = Math.max(0, previous - width);
+      const tolerance = Math.max(0.01, current * 0.00001);
+      const upperHitBar = securityIntraday.find((bar) => Number(bar.price) >= upper - tolerance);
+      const lowerHitBar = securityIntraday.find((bar) => Number(bar.price) <= lower + tolerance);
+      const hitUpper = current >= upper - tolerance || Boolean(upperHitBar);
+      const hitLower = current <= lower + tolerance || Boolean(lowerHitBar);
+      if (hitUpper || hitLower) {
+        const occurredAt = (hitUpper ? upperHitBar : lowerHitBar)?.timestamp ?? security.quote.marketTimestamp;
+        const date = occurredAt.slice(0, 10);
+        const type = hitUpper ? "LIMIT_UP" : "LIMIT_DOWN";
+        return [{
+          id: priceNotificationId(security.id, type, date),
+          securityId: security.id,
+          type,
+          occurredAt,
+          title: `${security.name}が${hitUpper ? "ストップ高" : "ストップ安"}`,
+          summary: `前日終値から値幅制限${hitUpper ? "上限" : "下限"}に到達`,
+          source: security.quote.provider,
+          currency: security.currency ?? "JPY",
+          limitPrice: String(hitUpper ? upper : lower),
+        }];
+      }
+    }
+
+    const upper = previous * (1 + threshold);
+    const lower = previous * (1 - threshold);
+    const upperHitBar = securityIntraday.find((bar) => Number(bar.price) >= upper);
+    const lowerHitBar = securityIntraday.find((bar) => Number(bar.price) <= lower);
+    const hitUpper = current >= upper || Boolean(upperHitBar);
+    const hitLower = current <= lower || Boolean(lowerHitBar);
     if (!hitUpper && !hitLower) return [];
-    const occurredAt = (hitUpper ? upperHitBar : lowerHitBar)?.timestamp ?? security.quote.marketTimestamp;
+    const positive = hitUpper;
+    const occurredAt = (positive ? upperHitBar : lowerHitBar)?.timestamp ?? security.quote.marketTimestamp;
     const date = occurredAt.slice(0, 10);
-    const type = hitUpper ? "LIMIT_UP" : "LIMIT_DOWN";
+    const observedPrice = Number((positive ? upperHitBar : lowerHitBar)?.price ?? current);
+    const changeRatio = observedPrice / previous - 1;
+    const type = positive ? "PRICE_UP" : "PRICE_DOWN";
     return [{
       id: priceNotificationId(security.id, type, date),
       securityId: security.id,
       type,
       occurredAt,
-      title: `${security.name}が${hitUpper ? "ストップ高" : "ストップ安"}`,
-      summary: `前日終値から値幅制限${hitUpper ? "上限" : "下限"}に到達`,
+      title: `${security.name}が${positive ? "急騰" : "急落"}`,
+      summary: `前日終値から${Math.abs(changeRatio * 100).toFixed(1)}%${positive ? "上昇" : "下落"}`,
       source: security.quote.provider,
-      currency: security.currency ?? "JPY",
-      limitPrice: String(hitUpper ? upper : lower),
+      currency: security.currency ?? (security.exchangeMic === "XTKS" ? "JPY" : "USD"),
+      changeRatio: String(changeRatio),
     }];
   });
 }
@@ -208,6 +228,7 @@ function historicalPriceNotifications(
   bars: MarketBar[],
   actions: CorporateAction[],
   priceMoveThreshold: number = US_PRICE_MOVE_THRESHOLD,
+  monitoredSecurityIds?: Set<string>,
 ) {
   const threshold = Number.isFinite(priceMoveThreshold) && priceMoveThreshold > 0 ? priceMoveThreshold : US_PRICE_MOVE_THRESHOLD;
   const firstTradeDates = new Map<string, string>();
@@ -220,10 +241,11 @@ function historicalPriceNotifications(
   return securities.flatMap((security): PortfolioNotification[] => {
     if (security.exchangeMic !== "XTKS" && !["XNAS", "XNYS", "ARCX", "XASE", "BATS", "OTCM"].includes(security.exchangeMic)) return [];
     const firstTradeDate = firstTradeDates.get(security.id);
-    if (!firstTradeDate) return [];
+    const isMonitoredOnly = !firstTradeDate && monitoredSecurityIds?.has(security.id);
+    if (!firstTradeDate && !isMonitoredOnly) return [];
     const securityBars = bars.filter((bar) => bar.securityId === security.id).sort((a, b) => a.date.localeCompare(b.date));
     return securityBars.slice(1).flatMap((bar, index): PortfolioNotification[] => {
-      if (bar.date.slice(0, 10) < firstTradeDate) return [];
+      if (firstTradeDate && bar.date.slice(0, 10) < firstTradeDate) return [];
       if (actions.some((action) => action.securityId === security.id && action.effectiveDate.slice(0, 10) === bar.date.slice(0, 10))) return [];
       const previous = Number(security.exchangeMic === "XTKS" ? securityBars[index].close : securityBars[index].adjustedClose ?? securityBars[index].close);
       const current = Number(security.exchangeMic === "XTKS" ? bar.close : bar.adjustedClose ?? bar.close);
@@ -236,14 +258,15 @@ function historicalPriceNotifications(
         const tolerance = Math.max(0.01, current * 0.00001);
         const hitUpper = current >= upper - tolerance;
         const hitLower = current <= lower + tolerance;
-        if (!hitUpper && !hitLower) return [];
-        const type = hitUpper ? "LIMIT_UP" : "LIMIT_DOWN";
-        return [{
-          id: priceNotificationId(security.id, type, date), securityId: security.id, type, occurredAt: bar.date,
-          title: `${security.name}が${hitUpper ? "ストップ高" : "ストップ安"}`,
-          summary: `前日終値から値幅制限${hitUpper ? "上限" : "下限"}で取引終了`,
-          source: bar.provider, currency: security.currency ?? "JPY", limitPrice: String(hitUpper ? upper : lower),
-        }];
+        if (hitUpper || hitLower) {
+          const type = hitUpper ? "LIMIT_UP" : "LIMIT_DOWN";
+          return [{
+            id: priceNotificationId(security.id, type, date), securityId: security.id, type, occurredAt: bar.date,
+            title: `${security.name}が${hitUpper ? "ストップ高" : "ストップ安"}`,
+            summary: `前日終値から値幅制限${hitUpper ? "上限" : "下限"}で取引終了`,
+            source: bar.provider, currency: security.currency ?? "JPY", limitPrice: String(hitUpper ? upper : lower),
+          }];
+        }
       }
       const changeRatio = current / previous - 1;
       if (Math.abs(changeRatio) < threshold) return [];
@@ -253,7 +276,7 @@ function historicalPriceNotifications(
         id: priceNotificationId(security.id, type, date), securityId: security.id, type, occurredAt: bar.date,
         title: `${security.name}が${positive ? "急騰" : "急落"}`,
         summary: `前日終値から${Math.abs(changeRatio * 100).toFixed(1)}%${positive ? "上昇" : "下落"}`,
-        source: bar.provider, currency: security.currency ?? "USD", changeRatio: String(changeRatio),
+        source: bar.provider, currency: security.currency ?? (security.exchangeMic === "XTKS" ? "JPY" : "USD"), changeRatio: String(changeRatio),
       }];
     });
   });
@@ -272,6 +295,7 @@ export function derivePortfolioNotifications({
   intradayBars = [],
   externalNotices = [],
   priceMoveThreshold = US_PRICE_MOVE_THRESHOLD,
+  monitoredSecurityIds,
 }: {
   transactions: LedgerTransaction[];
   securities: SecurityForNotice[];
@@ -280,14 +304,23 @@ export function derivePortfolioNotifications({
   intradayBars?: IntradayBar[];
   externalNotices?: ExternalMarketNotice[];
   priceMoveThreshold?: number;
+  monitoredSecurityIds?: Set<string>;
 }) {
   const everHeld = new Set(transactions.map((transaction) => transaction.securityId).filter((value): value is string => Boolean(value)));
-  const relevantSecurities = securities.filter((security) => everHeld.has(security.id));
+  const relevantSecurities = securities.filter((security) =>
+    everHeld.has(security.id) || (monitoredSecurityIds ? monitoredSecurityIds.has(security.id) : false),
+  );
+  const relevantActions = actions.filter((action) =>
+    everHeld.has(action.securityId) || (monitoredSecurityIds ? monitoredSecurityIds.has(action.securityId) : false),
+  );
+  const relevantNotices = externalNotices.filter((notice) =>
+    everHeld.has(notice.securityId) || (monitoredSecurityIds ? monitoredSecurityIds.has(notice.securityId) : false),
+  );
   const generated = [
-    ...splitNotifications(transactions, relevantSecurities, actions.filter((action) => everHeld.has(action.securityId)), bars),
-    ...historicalPriceNotifications(transactions, relevantSecurities, bars, actions, priceMoveThreshold),
+    ...splitNotifications(transactions, relevantSecurities, relevantActions, bars),
+    ...historicalPriceNotifications(transactions, relevantSecurities, bars, actions, priceMoveThreshold, monitoredSecurityIds),
     ...currentPriceNotifications(relevantSecurities, intradayBars, actions, priceMoveThreshold),
-    ...externalNotices.filter((notice) => everHeld.has(notice.securityId)).map((notice): PortfolioNotification => ({ ...notice })),
+    ...relevantNotices.map((notice): PortfolioNotification => ({ ...notice })),
   ];
   return mergePortfolioNotifications(generated);
 }

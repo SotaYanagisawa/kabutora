@@ -103,9 +103,10 @@ export function buildHistoryFetchPlan(
       const required = requirements.get(securityId) ?? defaultFiveYearsAgo;
       const current = coverage.get(securityId);
       const internalGap = firstInternalHistoryGap(bars, securityId, required);
+      const isMissing = !historyRequirementSatisfied(current?.first, required, HISTORY_START_GRACE_DAYS, inceptionDates[securityId]);
       return {
         securityId,
-        from: !historyRequirementSatisfied(current?.first, required, HISTORY_START_GRACE_DAYS, inceptionDates[securityId]) ? required : internalGap ?? subtractDays(current!.last, 7),
+        from: isMissing ? required : internalGap ?? subtractDays(current!.last, 7),
         forceRefresh: Boolean(internalGap),
       };
     }).sort((a, b) => Number(b.forceRefresh) - Number(a.forceRefresh) || a.from.localeCompare(b.from) || a.securityId.localeCompare(b.securityId));

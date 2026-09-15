@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseYahooJapanFundHistory, parseYahooJapanFundPage, parseYahooJapanFundSearch } from "./yahoo-japan-fund";
+import { parseBlackRockFundDistributions, parseYahooJapanFundDistributions, parseYahooJapanFundHistory, parseYahooJapanFundPage, parseYahooJapanFundSearch } from "./yahoo-japan-fund";
 
 describe("Yahoo Japan mutual fund adapter", () => {
   it("parses a fund NAV board and its page-issued token", () => {
@@ -14,6 +14,20 @@ describe("Yahoo Japan mutual fund adapter", () => {
     });
   });
 
+  it("parses the current Yahoo Next.js flight price board", () => {
+    const flightData = `6:["$","provider",null,{"preloadedStore":{"pageInfo":{"code":"02314143","jwtToken":"flight-token"},"priceBoard":{"code":"02314143","name":"インデックスファンドNYダウ30(アメリカ株式)","marketName":"","price":{"value":"57,325","changePrice":"191","changePriceRate":"0.33","updateDate":"8/28"},"nickName":"NYダウ"}}}]`;
+    const html = `<script>self.__next_f.push([1,${JSON.stringify(flightData)}])</script>`;
+    expect(parseYahooJapanFundPage(html, "02314143", new Date("2026-08-28T14:00:00Z"))).toEqual({
+      code: "02314143",
+      name: "インデックスファンドNYダウ30(アメリカ株式)",
+      nickname: "NYダウ",
+      price: 57325,
+      previousPrice: 57134,
+      priceDate: "2026-08-28",
+      token: "flight-token",
+    });
+  });
+
   it("normalizes daily NAV history and rejects malformed rows", () => {
     expect(parseYahooJapanFundHistory({ priceHistories: [
       { baseDate: "2026-08-11", closePrice: 56500 },
@@ -22,6 +36,29 @@ describe("Yahoo Japan mutual fund adapter", () => {
     ] }, "sec-jp-fund-02314143")).toEqual([
       { securityId: "sec-jp-fund-02314143", date: "2026-08-11", close: "56500", provider: "yahoo_japan_fund_unofficial" },
       { securityId: "sec-jp-fund-02314143", date: "2026-08-12", close: "57106", provider: "yahoo_japan_fund_unofficial" },
+    ]);
+  });
+
+  it("parses Yahoo Japan fund distribution rows and deduplicates flight data", () => {
+    const html = `<table aria-label="分配金実績のテーブル"><tbody><tr><td>2026/8/25</td><td><span class="_StyledNumber__value_hash">130</span><span>円</span></td></tr></tbody></table><script>self.__next_f.push([1,"{\\"date\\":\\"2026/8/25\\",\\"price\\":\\"130\\"}"])</script>`;
+    expect(parseYahooJapanFundDistributions(html, "48314059", "sec-jp-fund-48314059")).toEqual([expect.objectContaining({
+      id: "sec-jp-fund-48314059-fund-distribution-2026-08-25",
+      exDate: "2026-08-25",
+      amountPerUnit: "130",
+      distributionUnit: "10000",
+      currency: "JPY",
+      confidence: "reported",
+    })]);
+  });
+
+  it("parses the complete official BlackRock distribution table", () => {
+    const payload = { table: { aaData: [
+      [{ display: "2026年8月25日", raw: 20260825 }, { display: "¥130.0", raw: 130 }],
+      [{ display: "2024年11月25日", raw: 20241125 }, { display: "¥110.0", raw: 110 }],
+    ] } };
+    expect(parseBlackRockFundDistributions(payload, "48314059", "sec-jp-fund-48314059", "https://www.blackrock.com/distributions")).toEqual([
+      expect.objectContaining({ exDate: "2024-11-25", amountPerUnit: "110", sourceProvider: "blackrock_official", confidence: "official" }),
+      expect.objectContaining({ exDate: "2026-08-25", amountPerUnit: "130", sourceProvider: "blackrock_official", confidence: "official" }),
     ]);
   });
 
@@ -50,7 +87,7 @@ describe("Yahoo Japan mutual fund adapter", () => {
       ],
     };
     const fetchMock = (await import("vitest")).vi.fn()
-      .mockResolvedValueOnce(new Response(html, { status: 200 }))
+      .mockResolvedValueOnce(new Response(html, { status: 200, headers: { "set-cookie": "A=session-a; Path=/, B=session-b; Path=/" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify(historyJson), { status: 200 }));
     (await import("vitest")).vi.stubGlobal("fetch", fetchMock);
     const { getYahooJapanFundQuoteBundle } = await import("./yahoo-japan-fund");
@@ -58,6 +95,8 @@ describe("Yahoo Japan mutual fund adapter", () => {
     expect(result.quote.price).toBe("57106");
     expect(result.intraday).toHaveLength(2);
     expect(result.intraday[1]?.price).toBe("57106");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toContain("/bff-quote/v1/ajax/chart/ex/v1/main/fund/chart/history/02314143");
+    expect((fetchMock.mock.calls[1]?.[1]?.headers as Record<string, string>).Cookie).toBe("A=session-a; B=session-b");
     (await import("vitest")).vi.unstubAllGlobals();
   });
 });

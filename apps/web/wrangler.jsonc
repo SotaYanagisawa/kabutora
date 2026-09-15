@@ -10,6 +10,35 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
+  "triggers": {
+    "crons": ["*/10 * * * *", "* * * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "MARKET_DB",
+      "database_name": "kabutora-market",
+      "database_id": "11d6ba0e-2f8d-4506-98ee-92792185ddc8",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "MARKET_REFRESH_QUEUE",
+        "queue": "kabutora-market-refresh"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "kabutora-market-refresh",
+        "max_batch_size": 1,
+        "max_batch_timeout": 2,
+        "max_retries": 1,
+        "retry_delay": 120,
+        "max_concurrency": 2
+      }
+    ]
+  },
   "vars": {
     "KABUTORA_REQUIRE_AUTH": "true",
     "KABUTORA_REQUIRE_APP_CHECK": "true"

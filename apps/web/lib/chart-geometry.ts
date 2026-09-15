@@ -95,6 +95,32 @@ export function chartAxisTicks(domain: [number, number], count: number): number[
   return ticks.slice(0, count);
 }
 
+export function niceChartAxis(maxY: number, targetTicks = 5): { domain: [number, number]; ticks: number[] } {
+  if (!Number.isFinite(maxY) || maxY <= 0) {
+    return { domain: [0, 1], ticks: [0, 1] };
+  }
+  const count = Math.max(2, targetTicks);
+  const rawStep = maxY / (count - 1);
+  const exponent = Math.floor(Math.log10(Math.max(rawStep, Number.EPSILON)));
+  const fraction = rawStep / (10 ** exponent);
+
+  let niceFraction: number;
+  if (fraction <= 1) niceFraction = 1;
+  else if (fraction <= 2) niceFraction = 2;
+  else if (fraction <= 2.5) niceFraction = 2.5;
+  else if (fraction <= 5) niceFraction = 5;
+  else niceFraction = 10;
+
+  const step = niceFraction * (10 ** exponent);
+  const niceMax = step * (count - 1);
+  const ticks: number[] = [];
+  for (let i = 0; i < count; i++) {
+    ticks.push(Number((i * step).toFixed(6)));
+  }
+
+  return { domain: [0, niceMax], ticks };
+}
+
 const polarPoint = (cx: number, cy: number, radius: number, angle: number): SvgPoint => ({
   x: cx + radius * Math.cos(angle),
   y: cy + radius * Math.sin(angle),

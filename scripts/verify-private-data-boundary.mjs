@@ -4,10 +4,33 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkClientBoundary } from "./check-client-boundary.mjs";
 
 const workspace = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
+const clientModules = checkClientBoundary(workspace);
 const targets = process.argv.slice(2).map((value) => path.resolve(value));
 if (!targets.length) targets.push(path.join(workspace, "apps", "web", ".open-next"));
+
+const marketMigrationsPath = path.join(workspace, "apps", "web", "migrations");
+const marketSchema = fs.readdirSync(marketMigrationsPath)
+  .filter((name) => name.endsWith(".sql"))
+  .sort()
+  .map((name) => fs.readFileSync(path.join(marketMigrationsPath, name), "utf8"))
+  .join("\n");
+const forbiddenMarketColumns = /\b(transaction|account_id|portfolio_id|quantity|cost_basis|purchase_price|broker|holding|cash_balance|user_id|uid|email|owner_id|display_name)\b/giu;
+const forbiddenSchemaMatches = [...marketSchema.matchAll(forbiddenMarketColumns)].map((match) => match[0]);
+if (forbiddenSchemaMatches.length) {
+  throw new Error(`Market snapshot schema contains private portfolio fields: ${[...new Set(forbiddenSchemaMatches)].join(", ")}`);
+}
+
+const refreshRoutePath = path.join(workspace, "apps", "web", "app", "api", "market", "refresh", "route.ts");
+const refreshRoute = fs.readFileSync(refreshRoutePath, "utf8");
+if (!refreshRoute.includes('key !== "securityIds"') || !refreshRoute.includes("normalizePublicSecurityIds")) {
+  throw new Error("Manual market refresh must accept normalized public security identifiers only");
+}
+if (/\b(quantity|cost_basis|purchase_price|broker|holding|cash_balance|email)\b/iu.test(refreshRoute)) {
+  throw new Error("Manual market refresh route references a private portfolio field");
+}
 
 const vaultPath = path.join(os.homedir(), "Library", "Application Support", "株トラ", "local-vault.json");
 const account = os.userInfo().username;
@@ -42,6 +65,8 @@ const probes = realTransactions.slice(0, 40).flatMap((item) => [
   Buffer.from(`"id":"${item.id}"`),
   Buffer.from(`"id": "${item.id}"`),
 ]);
+// A build must contain neither private records nor usable local vault keys.
+probes.push(Buffer.from(keyValue), Buffer.from(key.toString("base64")), Buffer.from(key.toString("hex")));
 const forbiddenNames = new Set(["seed.json"]);
 const hits = [];
 let scannedFiles = 0;
@@ -67,4 +92,4 @@ for (const target of targets) {
 
 key.fill(0);
 if (hits.length) throw new Error(`Private-data boundary failed:\n${hits.join("\n")}`);
-console.log(JSON.stringify({ status: "private_data_absent", targets: targets.length, scannedFiles, probes: probes.length }));
+console.log(JSON.stringify({ status: "private_data_absent", targets: targets.length, scannedFiles, probes: probes.length, clientModules, marketSchema: "public_fields_only" }));

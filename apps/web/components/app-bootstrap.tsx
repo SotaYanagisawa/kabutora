@@ -7,50 +7,62 @@ import { configureDeviceTrust, firebaseConfigured, type DeviceTrustMode } from "
 import { Laptop, ShieldCheck, Users } from "lucide-react";
 import dynamic from "next/dynamic";
 import type { MarketSessionStatus } from "@/lib/market-session";
+import CloudPortfolioApp from "@/components/cloud-portfolio-app";
 import { useCallback, useEffect, useRef, useState } from "react";
-
-const CloudPortfolioApp = dynamic(() => import("@/components/cloud-portfolio-app"), {
-  ssr: false,
-  loading: () => <AppLoadingScreen label="クラウド接続を準備中" detail="暗号化された同期機能を読み込んでいます" />,
-});
+import { OPTIONAL_STORAGE_TIMEOUT_MS, timeoutSignal, withDeadline } from "@/lib/operation-deadline";
+import { validatePortfolio } from "@/lib/portfolio-validation";
 
 function storedDeviceMode(): DeviceTrustMode | null {
   if (typeof window === "undefined") return null;
-  const sessionMode = sessionStorage.getItem("kabutora-device-trust-session");
-  if (sessionMode === "trusted" || sessionMode === "shared") return sessionMode;
-  return localStorage.getItem("kabutora-device-trust") === "trusted" ? "trusted" : null;
+  try {
+    const sessionMode = sessionStorage.getItem("kabutora-device-trust-session");
+    if (sessionMode === "trusted" || sessionMode === "shared") return sessionMode;
+    return localStorage.getItem("kabutora-device-trust") === "trusted" ? "trusted" : null;
+  } catch {
+    return null;
+  }
 }
 
 export default function AppBootstrap({ initialServerTimeMs, initialMarketSessions }: { initialServerTimeMs: number; initialMarketSessions: MarketSessionStatus[] }) {
   const [localSeed, setLocalSeed] = useState<Seed | null>(null);
   const [backupSeed, setBackupSeed] = useState<Seed | null>(null);
-  const [checkedLocal, setCheckedLocal] = useState(false);
+  const [checkedLocal, setCheckedLocal] = useState(() => typeof window !== "undefined" && !["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname));
   const [deviceMode, setDeviceMode] = useState<DeviceTrustMode | null>(() => {
     const storedMode = storedDeviceMode();
     if (storedMode) configureDeviceTrust(storedMode);
     return storedMode;
   });
   const [localSaveError, setLocalSaveError] = useState("");
+  const [localLoadError, setLocalLoadError] = useState(false);
+  const [localAttempt, setLocalAttempt] = useState(0);
   const localSeedRef = useRef<Seed | null>(null);
   const localSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
-    fetch("/api/local/bootstrap", { cache: "no-store" })
+    if (!["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname)) { setCheckedLocal(true); return; }
+    let active = true;
+    setLocalLoadError(false);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), OPTIONAL_STORAGE_TIMEOUT_MS);
+    fetch("/api/local/bootstrap", { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
-        if (response.ok) {
-          const loaded = await response.json() as Seed;
+        if (response.ok && response.status !== 204) {
+          const loaded = validatePortfolio(await response.json());
+          if (!active) return;
           localSeedRef.current = loaded;
           setLocalSeed(loaded);
-        }
+        } else if (response.status !== 404 && response.status !== 204) throw new Error("local_vault_unavailable");
       })
-      .finally(() => setCheckedLocal(true));
-  }, []);
+      .catch(() => { if (active) setLocalLoadError(true); })
+      .finally(() => { clearTimeout(timer); if (active) setCheckedLocal(true); });
+    return () => { active = false; clearTimeout(timer); controller.abort(); };
+  }, [localAttempt]);
 
   useEffect(() => {
     if (!firebaseConfigured || !deviceMode) return;
     void Promise.all([
       import("@/components/cloud-portfolio-app"),
-      import("@/lib/firebase-client").then(({ getFirebaseServices }) => getFirebaseServices().auth.authStateReady()),
+      import("@/lib/firebase-client").then(({ getFirebaseServices }) => withDeadline(getFirebaseServices().auth.authStateReady(), 15_000, "auth-preload")),
     ]).catch(() => undefined);
   }, [deviceMode]);
 
@@ -62,11 +74,13 @@ export default function AppBootstrap({ initialServerTimeMs, initialMarketSession
     const saveLatest = async () => {
       if (!localSeedRef.current) return;
       try {
+        if (!["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname)) throw new Error("local_origin_required");
         const response = await fetch("/api/local/bootstrap", {
           method: "POST",
           cache: "no-store",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(localSeedRef.current),
+          signal: timeoutSignal(8_000),
         });
         if (!response.ok) throw new Error("save_failed");
         setLocalSaveError("");
@@ -80,8 +94,10 @@ export default function AppBootstrap({ initialServerTimeMs, initialMarketSession
 
   const selectDeviceMode = (mode: DeviceTrustMode) => {
     configureDeviceTrust(mode);
-    sessionStorage.setItem("kabutora-device-trust-session", mode);
-    if (mode === "trusted") localStorage.setItem("kabutora-device-trust", mode);
+    try {
+      sessionStorage.setItem("kabutora-device-trust-session", mode);
+      if (mode === "trusted") localStorage.setItem("kabutora-device-trust", mode);
+    } catch { /* Shared/private WebKit contexts may disable storage. */ }
     setDeviceMode(mode);
   };
 
@@ -92,11 +108,13 @@ export default function AppBootstrap({ initialServerTimeMs, initialMarketSession
   }, [checkedLocal, deviceMode, localSeed]);
 
   if (!checkedLocal) return <AppLoadingScreen label="保存データを確認中" detail="この端末の暗号化ポートフォリオを探しています" />;
+  if (localLoadError) return <main className="secure-gate"><h1>端末の保存データを確認できませんでした</h1><p role="alert">データは削除されていません。接続を確認して再試行してください。</p><button className="trade-button" onClick={() => { setCheckedLocal(false); setLocalAttempt((value) => value + 1); }}>再試行</button><button className="text-button" onClick={() => setLocalLoadError(false)}>クラウド保管庫へ接続</button></main>;
   if (localSeed) return <>
     <Dashboard
       seed={localSeed}
       initialServerTimeMs={initialServerTimeMs}
       initialMarketSessions={initialMarketSessions}
+      allowPersistentMarketCache={true}
       onTransactionsChange={(transactions) => persistLocalPatch({ transactions })}
       onAccountsChange={(accounts) => persistLocalPatch({ accounts })}
       onSecuritiesChange={(securities) => persistLocalPatch({ securities })}

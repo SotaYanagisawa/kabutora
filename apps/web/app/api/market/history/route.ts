@@ -1,84 +1,115 @@
-import { normalizeRequestedSecurities } from "@/lib/market-security";
-import { inspectMarketHistory } from "@/lib/market-history";
+import { canonicalDomainSecurityId } from "@kabutora/domain";
 import { authorizeMarketRequest, unauthorizedResponse } from "@/lib/server-auth";
-import { getYahooHistory } from "@/lib/yahoo-market";
+import { fetchMarketHistoryBatch } from "@/lib/server-market-provider";
+import { getMarketCloudflareContext } from "@/lib/cloudflare-market-env";
+import { mergeMarketSecurities, normalizePublicSecurityIds, readCachedHistory, upsertHistoryBatch } from "@/lib/server-market-store";
+import { inspectMarketHistory } from "@/lib/market-history";
 import { portfolioMarketSessions } from "@/lib/market-session";
-import { getYahooJapanFundHistory } from "@/lib/yahoo-japan-fund";
-import { getMonexForeignFundHistory } from "@/lib/monex-foreign-fund";
-import { stableMarketErrorMessage } from "@/lib/market-api-response";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function pooledMap<T, R>(items: T[], concurrency: number, task: (item: T) => Promise<R>) {
-  const result = new Array<R>(items.length);
-  let cursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-      while (cursor < items.length) {
-        const index = cursor++;
-        result[index] = await task(items[index]);
-      }
-    }),
-  );
-  return result;
-}
-
 export async function POST(request: Request) {
   try { await authorizeMarketRequest(request); } catch { return unauthorizedResponse(); }
   const body = await request.json().catch(() => ({})) as { refresh?: unknown; securityIds?: unknown; from?: unknown };
-  const force = body.refresh === true;
-  const selected = normalizeRequestedSecurities(typeof body.securityIds === "string" ? body.securityIds : null);
-  const requestedFrom = typeof body.from === "string" ? body.from : null;
-  const validFrom = requestedFrom && /^20\d{2}-\d{2}-\d{2}$/u.test(requestedFrom) ? requestedFrom : null;
-  const start = validFrom ? new Date(`${validFrom}T00:00:00+09:00`) : new Date(Date.now() - 5 * 365 * 24 * 60 * 60 * 1000);
-  start.setUTCDate(start.getUTCDate() - 7);
-  const period1 = Math.floor(start.getTime() / 1000);
-  const stableEnd = new Date();
-  stableEnd.setUTCHours(0, 0, 0, 0);
-  stableEnd.setUTCDate(stableEnd.getUTCDate() + 2);
-  const period2 = Math.floor(stableEnd.getTime() / 1000);
-
-  const results = await pooledMap(selected, 3, async (security) => {
+  const securityIds = typeof body.securityIds === "string" ? body.securityIds.split(",").map((value) => value.trim()).filter(Boolean) : [];
+  const requestedFrom = typeof body.from === "string" && /^20\d{2}-\d{2}-\d{2}$/u.test(body.from) ? body.from : null;
+  const marketContext = await getMarketCloudflareContext().catch(() => ({ db: undefined, ctx: undefined }));
+  if (body.refresh !== true && marketContext.db && securityIds.length > 0) {
     try {
-      const history = security.venueCode === "FUND"
-        ? security.id === "sec-foreign-fund-21070062"
-          ? await getMonexForeignFundHistory(security.providerSymbol, security.id, period1, period2, force)
-          : await getYahooJapanFundHistory(security.providerSymbol, security.id, period1, period2, force)
-        : await getYahooHistory(security.providerSymbol, security.id, period1, period2, force);
-      return { ok: true as const, securityId: security.id, ...history };
-    } catch (error) {
-      return {
-        ok: false as const,
-        failure: {
-          securityId: security.id,
-          symbol: security.displaySymbol,
-          message: stableMarketErrorMessage(error, "市場履歴を取得できませんでした"),
-        },
-      };
-    }
-  });
+      const normalizedSecurities = normalizePublicSecurityIds(securityIds);
+      const normalizedIds = normalizedSecurities.map((security) => security.securityId);
+      const cached = await readCachedHistory(marketContext.db, normalizedIds);
+      const earliestBySecurity = new Map<string, string>();
+      for (const bar of cached.bars) {
+        const earliest = earliestBySecurity.get(bar.securityId);
+        if (!earliest || bar.date < earliest) earliestBySecurity.set(bar.securityId, bar.date);
+      }
 
-  const successes = results.filter((result) => result.ok);
-  const inspected = inspectMarketHistory([], successes.flatMap((result) => result.bars), successes.flatMap((result) => result.corporateActions));
-  const bars = inspected.bars;
-  const corporateActions = inspected.actions;
-  const inceptionDates = Object.fromEntries(successes.flatMap((result) => "inceptionDate" in result && result.inceptionDate ? [[result.securityId, result.inceptionDate]] : []));
-  const failures = results.flatMap((result) => (result.ok ? [] : [result.failure]));
-  const generatedAt = new Date().toISOString();
+      const cachedIdsSet = new Set(cached.cachedSecurityIds);
+      const satisfiedIds = new Set<string>();
+      const missingIds: string[] = [];
+
+      for (const securityId of normalizedIds) {
+        const earliest = earliestBySecurity.get(securityId);
+        const inception = cached.inceptionDates[securityId];
+        const coversRange = !requestedFrom || Boolean(earliest && (earliest <= requestedFrom || (inception && inception >= requestedFrom)));
+        if (cachedIdsSet.has(securityId) && coversRange) {
+          satisfiedIds.add(securityId);
+        } else {
+          missingIds.push(securityId);
+        }
+      }
+
+      if (satisfiedIds.size === normalizedIds.length && normalizedIds.length > 0) {
+        const inspected = inspectMarketHistory([], cached.bars, cached.corporateActions);
+        const generatedAt = new Date().toISOString();
+        return Response.json({
+          generatedAt,
+          marketSessions: portfolioMarketSessions("ALL", new Date(generatedAt)),
+          bars: inspected.bars,
+          corporateActions: inspected.actions,
+          inceptionDates: cached.inceptionDates,
+          quality: inspected.quality,
+          failures: [],
+          coverage: { requested: normalizedIds.length, returned: normalizedIds.length },
+          provider: { primary: "server_market_snapshot", status: "ok" },
+        }, { headers: { "Cache-Control": "private, no-store", "X-History-Checksum": inspected.quality.checksum } });
+      }
+
+      if (satisfiedIds.size > 0 && missingIds.length > 0) {
+        const missingResult = await fetchMarketHistoryBatch(missingIds, {
+          force: false,
+          from: requestedFrom ?? undefined,
+        });
+
+        const persist = mergeMarketSecurities(marketContext.db, normalizePublicSecurityIds(missingIds))
+          .then(() => upsertHistoryBatch(marketContext.db!, { ...missingResult, distributions: [], coveredSecurityIds: [] }))
+          .catch(() => undefined);
+        if (marketContext.ctx) marketContext.ctx.waitUntil(persist);
+        else await persist;
+
+        const cachedBarsToKeep = cached.bars.filter((bar) => satisfiedIds.has(bar.securityId));
+        const cachedActionsToKeep = cached.corporateActions.filter((action) => satisfiedIds.has(action.securityId));
+        const inspected = inspectMarketHistory(cachedBarsToKeep, missingResult.bars, [...cachedActionsToKeep, ...missingResult.corporateActions]);
+        const combinedInceptionDates = { ...cached.inceptionDates, ...missingResult.inceptionDates };
+        const generatedAt = new Date().toISOString();
+        const returnedCount = satisfiedIds.size + missingResult.coverage.returned;
+
+        return Response.json({
+          generatedAt,
+          marketSessions: portfolioMarketSessions("ALL", new Date(generatedAt)),
+          bars: inspected.bars,
+          corporateActions: inspected.actions,
+          inceptionDates: combinedInceptionDates,
+          quality: inspected.quality,
+          failures: missingResult.failures,
+          coverage: { requested: normalizedIds.length, returned: returnedCount },
+          provider: { primary: "d1_and_provider_hybrid", status: missingResult.failures.length ? "partial" : "ok" },
+        }, { headers: { "Cache-Control": "private, no-store", "X-History-Checksum": inspected.quality.checksum } });
+      }
+    } catch { /* A missing/corrupt local cache falls through to the provider and is repaired asynchronously. */ }
+  }
+  const result = await fetchMarketHistoryBatch(securityIds, {
+    force: body.refresh === true,
+    from: requestedFrom ?? undefined,
+  });
+  if (marketContext.db) {
+    const persist = mergeMarketSecurities(marketContext.db, normalizePublicSecurityIds(securityIds))
+      .then(() => upsertHistoryBatch(marketContext.db!, { ...result, distributions: [], coveredSecurityIds: [] }))
+      .catch(() => undefined);
+    if (marketContext.ctx) marketContext.ctx.waitUntil(persist);
+    else await persist;
+  }
+  const { distributions: _opportunisticallyPersistedDistributions, ...historyResult } = result;
   return Response.json(
     {
-      generatedAt,
-      marketSessions: portfolioMarketSessions("ALL", new Date(generatedAt)),
-      period: { from: new Date(period1 * 1000).toISOString(), to: new Date(period2 * 1000).toISOString() },
-      bars,
-      corporateActions,
-      inceptionDates,
-      quality: inspected.quality,
-      failures,
-      coverage: { requested: selected.length, returned: successes.length },
-      provider: { primary: "yahoo_and_monex_unofficial", status: failures.length ? (successes.length ? "partial" : "unavailable") : "ok" },
+      ...historyResult,
+      provider: { primary: "yahoo_and_monex_unofficial", status: result.failures.length ? (result.coverage.returned ? "partial" : "unavailable") : "ok" },
     },
-    { status: successes.length || selected.length === 0 ? 200 : 503, headers: { "Cache-Control": "private, no-store", "X-History-Checksum": inspected.quality.checksum } },
+    {
+      status: result.coverage.returned || securityIds.length === 0 ? 200 : 503,
+      headers: { "Cache-Control": "private, no-store", "X-History-Checksum": result.quality.checksum },
+    },
   );
 }

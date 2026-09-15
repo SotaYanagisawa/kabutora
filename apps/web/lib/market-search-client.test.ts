@@ -33,4 +33,18 @@ describe("market search client", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("passes cancellation to an interactive search request", async () => {
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      if (init?.signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const { searchMarketSecurities } = await import("./market-search-client");
+    const task = searchMarketSecurities("cancel-me", { signal: controller.signal });
+    controller.abort();
+    await expect(task).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

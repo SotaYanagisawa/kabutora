@@ -1,0 +1,16 @@
+# Cursor & Copilot Indexing Ignore Patterns
+node_modules/
+.next/
+.open-next/
+.wrangler/
+.turbo/
+dist/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
+*.app/
+*.log
+firestore-debug.log
+.tmp/
+pnpm-lock.yaml

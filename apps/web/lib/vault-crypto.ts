@@ -1,4 +1,4 @@
-import { argon2idAsync } from "@noble/hashes/argon2.js";
+import { deriveArgon2Key } from "./argon2-key";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -19,7 +19,9 @@ export type EncryptedBlock = {
 
 export type KabutoraVaultEnvelope = {
   format: "kabutora-encrypted-vault";
-  version: 1;
+  version: 1 | 2;
+  keyId?: string;
+  legacyKeys?: EncryptedBlock;
   ownerUid?: string;
   kdf: {
     algorithm: "ARGON2ID";
@@ -95,23 +97,13 @@ const derivePassphraseKey = async (passphrase: string, envelope: KabutoraVaultEn
   if (passphrase.length < 16) throw new Error("暗号化パスフレーズは16文字以上にしてください。");
   if (
     envelope.algorithm !== "ARGON2ID" ||
-    envelope.memoryKiB < 32 * 1024 ||
-    envelope.iterations < 2 ||
-    envelope.parallelism < 1
+    !Number.isInteger(envelope.memoryKiB) || envelope.memoryKiB < 32 * 1024 || envelope.memoryKiB > 256 * 1024 ||
+    !Number.isInteger(envelope.iterations) || envelope.iterations < 2 || envelope.iterations > 10 ||
+    !Number.isInteger(envelope.parallelism) || envelope.parallelism < 1 || envelope.parallelism > 4
   ) throw new Error("安全でない、または未対応の鍵導出設定です。");
-  const bytes = await argon2idAsync(textEncoder.encode(passphrase), fromBase64Url(envelope.salt), {
-    m: envelope.memoryKiB,
-    t: envelope.iterations,
-    p: envelope.parallelism,
-    dkLen: 32,
-    asyncTick: 8,
-    maxmem: Math.max(128 * 1024 * 1024, envelope.memoryKiB * 2048),
-  });
-  try {
-    return await importAesKey(bytes, ["encrypt", "decrypt"]);
-  } finally {
-    bytes.fill(0);
-  }
+  const input = { password: textEncoder.encode(passphrase), salt: fromBase64Url(envelope.salt), memoryKiB: envelope.memoryKiB, iterations: envelope.iterations, parallelism: envelope.parallelism };
+  if (typeof Worker === "undefined") return deriveArgon2Key(input);
+  return (await import("./vault-kdf")).deriveResponsivePassphraseKey(input);
 };
 
 const normalizeRecoveryKey = (value: string) => value.trim().replace(/^KBT1-/u, "").replaceAll(/\s/gu, "");
@@ -121,14 +113,33 @@ const parsePayload = <T>(bytes: Uint8Array): T => {
     return JSON.parse(textDecoder.decode(bytes)) as T;
   } catch {
     throw new Error("暗号化データの内容が壊れています。");
+  } finally {
+    bytes.fill(0);
   }
 };
 
 export const isKabutoraVaultEnvelope = (value: unknown): value is KabutoraVaultEnvelope => {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<KabutoraVaultEnvelope>;
-  return item.format === "kabutora-encrypted-vault" && item.version === 1 && item.kdf?.algorithm === "ARGON2ID" && item.payload?.algorithm === "AES-256-GCM";
+  return item.format === "kabutora-encrypted-vault"
+    && (item.version === 1 || (item.version === 2 && typeof item.keyId === "string" && /^[\w-]{32,64}$/u.test(item.keyId)))
+    && Number.isSafeInteger(item.revision) && item.revision! > 0
+    && typeof item.createdAt === "string" && typeof item.updatedAt === "string"
+    && item.kdf?.algorithm === "ARGON2ID" && typeof item.kdf.salt === "string"
+    && /^[\w-]{22}$/u.test(item.kdf.salt)
+    && Number.isInteger(item.kdf.memoryKiB) && item.kdf.memoryKiB >= 32768 && item.kdf.memoryKiB <= 262144
+    && Number.isInteger(item.kdf.iterations) && item.kdf.iterations >= 2 && item.kdf.iterations <= 10
+    && Number.isInteger(item.kdf.parallelism) && item.kdf.parallelism >= 1 && item.kdf.parallelism <= 4
+    && isEncryptedBlock(item.wrappedKey) && isEncryptedBlock(item.recoveryWrappedKey) && isEncryptedBlock(item.payload)
+    && (item.legacyKeys === undefined || isEncryptedBlock(item.legacyKeys));
 };
+
+export function isEncryptedBlock(value: unknown): value is EncryptedBlock {
+  if (!value || typeof value !== "object") return false;
+  const block = value as Partial<EncryptedBlock>;
+  return block.algorithm === "AES-256-GCM" && typeof block.iv === "string" && /^[\w-]{16}$/u.test(block.iv)
+    && typeof block.ciphertext === "string" && block.ciphertext.length >= 22 && block.ciphertext.length <= 900_000 && /^[\w-]+$/u.test(block.ciphertext);
+}
 
 export async function createEncryptedVault<T>(data: T, passphrase: string, ownerUid?: string): Promise<CreatedVault<T>> {
   const now = new Date().toISOString();
@@ -292,3 +303,24 @@ export const decryptVaultRecord = async <T>(dataKey: CryptoKey, block: Encrypted
   parsePayload<T>(await decryptBytes(dataKey, block, RECORD_AAD));
 
 export const serializeVault = (envelope: KabutoraVaultEnvelope) => JSON.stringify(envelope, null, 2);
+
+/** Recovery generations never expose their usable key to a cloud-store API. */
+export async function createRecoveryVault<T>(data: T, passphrase: string, ownerUid: string, legacyKeys: Record<string, string> = {}) {
+  const created = await createEncryptedVault(data, passphrase, ownerUid);
+  const envelope: KabutoraVaultEnvelope = {
+    ...created.envelope,
+    version: 2,
+    keyId: cryptoApi().randomUUID(),
+    ...(Object.keys(legacyKeys).length ? { legacyKeys: await encryptVaultRecord(created.dataKey, legacyKeys) } : {}),
+  };
+  return { envelope, dataKey: created.dataKey, recoveryKey: created.recoveryKey };
+}
+
+export async function readLegacyVaultKeys(envelope: KabutoraVaultEnvelope, dataKey: CryptoKey): Promise<Record<string, string>> {
+  if (!envelope.legacyKeys) return {};
+  const keys = await decryptVaultRecord<Record<string, string>>(dataKey, envelope.legacyKeys);
+  if (!keys || typeof keys !== "object" || Array.isArray(keys) || Object.entries(keys).some(([id, key]) => !id || typeof key !== "string" || !/^[\w-]{43}$/u.test(key))) {
+    throw new Error("legacy_keys_invalid");
+  }
+  return keys;
+}

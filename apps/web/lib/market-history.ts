@@ -14,7 +14,7 @@ export type HistoryQuality = {
 
 export type PackedHistorySeries = Record<string, { provider: string; rows: Array<[date: string, close: string, adjustedClose?: string]> }>;
 
-const datePattern = /^20\d{2}-\d{2}-\d{2}$/u;
+const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 
 function validDate(value: string) {
   if (!datePattern.test(value)) return false;

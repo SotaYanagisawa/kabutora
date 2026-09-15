@@ -91,16 +91,18 @@ export function normalizeRequestedSecurity(securityId: string): RequestedSecurit
     const code = fund[1].toUpperCase();
     return { id: `sec-jp-fund-${code.toLowerCase()}`, displaySymbol: code, exchangeMic: "JPFD", currency: "JPY", providerSymbol: code, venueCode: "FUND" };
   }
-  const japan = /^sec-([0-9]{4}|[0-9]{3}[a-z])-xtks$/iu.exec(securityId);
+  const japan = /^(?:sec-)?([0-9]{4}|[0-9]{3}[a-z])(?:\.t)?(?:-(xtks|tse))?$/iu.exec(securityId);
   if (japan) {
     const symbol = japan[1].toUpperCase();
-    return { id: `sec-${symbol.toLowerCase()}-xtks`, displaySymbol: symbol, exchangeMic: "XTKS", currency: "JPY", providerSymbol: `${symbol}.T`, venueCode: "TSE" };
+    const id = securityId.toLowerCase().startsWith("sec-") ? securityId : `sec-${symbol.toLowerCase()}`;
+    return { id, displaySymbol: symbol, exchangeMic: "XTKS", currency: "JPY", providerSymbol: `${symbol}.T`, venueCode: "TSE" };
   }
-  const us = /^sec-us-([a-z0-9.-]{1,14})-(xnas|xnys|arcx|xase|bats|otcm)$/iu.exec(securityId);
+  const us = /^sec-us-(?:([a-z0-9.-]{1,14})-(xnas|xnys|arcx|xase|bats|otcm|xams)|([a-z0-9.-]{1,14}))$/iu.exec(securityId);
   if (us) {
-    const symbol = us[1].toUpperCase();
-    const exchangeMic = us[2].toUpperCase() as "XNAS" | "XNYS" | "ARCX" | "XASE" | "BATS" | "OTCM";
-    return { id: `sec-us-${symbol.toLowerCase()}-${exchangeMic.toLowerCase()}`, displaySymbol: symbol, exchangeMic, currency: "USD", providerSymbol: symbol, venueCode: "US" };
+    const symbol = (us[1] ?? us[3]).toUpperCase();
+    const rawMic = us[2]?.toUpperCase();
+    const exchangeMic = (rawMic === "XAMS" ? "ARCX" : rawMic || "XNAS") as "XNAS" | "XNYS" | "ARCX" | "XASE" | "BATS" | "OTCM";
+    return { id: securityId, displaySymbol: symbol, exchangeMic, currency: "USD", providerSymbol: symbol, venueCode: "US" };
   }
   const global = /^sec-gl-([0-9a-f]+)-([a-z0-9]{3,6})$/iu.exec(securityId);
   if (global) {
