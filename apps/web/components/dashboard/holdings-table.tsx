@@ -8,6 +8,8 @@ import { LayoutGrid, List } from "lucide-react";
 import { freshnessLabel, HIDDEN_AMOUNT } from "./constants";
 import {
   compactMoney,
+  compactPrice,
+  formatWidgetFetchedTime,
   isFundSecurity,
   maybeMoney,
   maybeSignedMoney,
@@ -343,11 +345,13 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   const weightVal = holding.summaryMarketValue ?? holding.marketValue;
 
   if (viewMode === "grid") {
-    const fetchedTime = quote?.fetchedAt
-      ? shortDateTimeJa(quote.fetchedAt)
-      : quote?.marketTimestamp
-      ? marketDateTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency)
-      : null;
+    const fetchedTime = formatWidgetFetchedTime(
+      quote?.fetchedAt,
+      quote?.marketTimestamp,
+      stockMic,
+      stockTz,
+      stockCurrency,
+    );
     const secSub = secName !== secDisplaySymbol ? secName : marketDisplayName(sec);
 
     return (
@@ -364,13 +368,23 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
         aria-label={onSelect ? `${secName}の詳細を開く` : undefined}
       >
         <td className="widget-card-cell" colSpan={7}>
-          {/* Row 1: Ticker Symbol (left) + Daily Percentage Change (right) */}
+          {/* Row 1: Ticker Symbol (left) + Fetched Time (top right) */}
           <div className="widget-card-row widget-row-header">
             <div className="security-col widget-ticker-wrap">
               <strong className="widget-ticker">{secDisplaySymbol}</strong>
             </div>
-            <div className={`day-col widget-day-badge ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
-              <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
+            <div
+              className="widget-time-group"
+              title={
+                quote
+                  ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${fetchedTime ? `${fetchedTime} 取得` : ""}`
+                  : "価格未取得"
+              }
+            >
+              <span className={`quote-dot ${quote?.freshness ?? "missing"}`} />
+              <span className="widget-fetched-time">
+                {fetchedTime ?? "未取得"}
+              </span>
             </div>
           </div>
 
@@ -381,14 +395,19 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
             </span>
           </div>
 
-          {/* Row 3: Current Stock Price (prominent center) */}
+          {/* Row 3: Current Stock Price (left) + Daily Change % (right, right-aligned, bigger) */}
           <div className="widget-card-row widget-row-price">
             <div className="price-col widget-price">
-              <strong>{maybeMoney(holding.currentPrice, rowCurrency)}</strong>
+              <strong title={maybeMoney(holding.currentPrice, rowCurrency)}>
+                {compactPrice(holding.currentPrice, rowCurrency)}
+              </strong>
+            </div>
+            <div className={`day-col widget-day-val ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
+              <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
             </div>
           </div>
 
-          {/* Row 4: Total Gain/Loss (return % + currency amount) */}
+          {/* Row 4: Total Gain/Loss (return % + compact currency amount) */}
           <div className="widget-card-row widget-row-gain">
             <div className={`gain-col widget-total-gain ${gain == null ? "" : gain >= 0 ? "up" : "down"}`}>
               <div className="widget-gain-left">
@@ -397,26 +416,13 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
                   {gainPercent == null ? "—" : signedPercent(gainPercent, 1)}
                 </strong>
               </div>
-              <small className="widget-gain-amount" aria-label={amountsVisible ? undefined : "金額非表示"}>
-                {amountsVisible ? (gain == null ? "" : maybeSignedMoney(gain, rowCurrency)) : HIDDEN_AMOUNT}
+              <small
+                className="widget-gain-amount"
+                aria-label={amountsVisible ? undefined : "金額非表示"}
+                title={amountsVisible ? (gain == null ? undefined : maybeSignedMoney(gain, rowCurrency)) : undefined}
+              >
+                {amountsVisible ? (gain == null ? "" : compactMoney(Number(gain), rowCurrency, true)) : HIDDEN_AMOUNT}
               </small>
-            </div>
-          </div>
-
-          {/* Row 5: Price Fetched Timestamp + Dot */}
-          <div className="widget-card-row widget-row-time">
-            <div className="widget-time-group">
-              <span
-                className={`quote-dot ${quote?.freshness ?? "missing"}`}
-                title={
-                  quote
-                    ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${fetchedTime ? `${fetchedTime} 取得` : ""}`
-                    : "価格未取得"
-                }
-              />
-              <span className="widget-fetched-time">
-                {fetchedTime ?? "未取得"}
-              </span>
             </div>
           </div>
         </td>

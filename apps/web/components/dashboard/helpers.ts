@@ -188,9 +188,58 @@ export const compactMoney = (value: number, currency: DisplayCurrency | string, 
   const sign = value < 0 ? "−" : signed && value > 0 ? "+" : "";
   const absolute = Math.abs(value);
   const effective = currency === "NATIVE" ? "JPY" : currency;
-  if (effective === "JPY" && absolute >= 10_000) return `${sign}¥${compactNumber(absolute / 10_000)}万`;
-  if (effective === "USD" && absolute >= 1_000) return `${sign}$${compactNumber(absolute / 1_000)}K`;
+  if (effective === "JPY") {
+    if (absolute >= 100_000_000) return `${sign}¥${compactNumber(absolute / 100_000_000)}億`;
+    if (absolute >= 10_000) return `${sign}¥${compactNumber(absolute / 10_000)}万`;
+  }
+  if (effective === "USD") {
+    if (absolute >= 1_000_000) return `${sign}$${compactNumber(absolute / 1_000_000)}M`;
+    if (absolute >= 1_000) return `${sign}$${compactNumber(absolute / 1_000)}K`;
+  }
   return `${sign}${money(absolute, effective)}`;
+};
+
+export const compactPrice = (
+  value: number | string | null | undefined,
+  currency: DisplayCurrency | string,
+) => {
+  if (value == null) return "—";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "—";
+  const effective = currency === "NATIVE" ? "JPY" : currency;
+  const absolute = Math.abs(num);
+  if (effective === "JPY") {
+    if (absolute >= 100_000_000) return `¥${compactNumber(absolute / 100_000_000)}億`;
+    if (absolute >= 100_000) return `¥${compactNumber(absolute / 10_000)}万`;
+  }
+  if (effective === "USD") {
+    if (absolute >= 1_000_000) return `$${compactNumber(absolute / 1_000_000)}M`;
+    if (absolute >= 10_000) return `$${compactNumber(absolute / 1_000)}K`;
+  }
+  return maybeMoney(value, currency);
+};
+
+export const formatWidgetFetchedTime = (
+  fetchedAt?: string | null,
+  marketTimestamp?: string | null,
+  stockMic?: string,
+  stockTz?: string,
+  stockCurrency?: string,
+) => {
+  if (fetchedAt) {
+    const d = new Date(fetchedAt);
+    if (Number.isFinite(d.getTime())) {
+      const now = new Date();
+      const sameDay =
+        d.toLocaleDateString("ja-JP", { timeZone: "Asia/Tokyo" }) ===
+        now.toLocaleDateString("ja-JP", { timeZone: "Asia/Tokyo" });
+      return sameDay ? timeJa(fetchedAt) : shortDateTimeJa(fetchedAt);
+    }
+  }
+  if (marketTimestamp) {
+    return marketDateTimeLabel(marketTimestamp, stockMic, stockTz, stockCurrency);
+  }
+  return null;
 };
 
 export const formatDayGainMoney = (value: number, currency: DisplayCurrency | string) => {
