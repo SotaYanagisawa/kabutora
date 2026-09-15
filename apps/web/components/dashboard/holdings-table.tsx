@@ -14,6 +14,7 @@ import {
   maybeSignedMoney,
   money,
   number,
+  quoteTradeSourceLabel,
   securityPriceBasis,
   securityQuantityUnit,
   shortDateTimeJa,
@@ -260,6 +261,7 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
     stockMic,
     stockTz,
     stockCurrency,
+    sec?.country,
   );
 
   return (
@@ -285,7 +287,7 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
             className="widget-time-group"
             title={
               quote
-                ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${fetchedTime ? `${fetchedTime} 取得` : ""}`
+                ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${fetchedTime ? `${quoteTradeSourceLabel(quote)} ${fetchedTime}` : ""}`
                 : "価格未取得"
             }
           >

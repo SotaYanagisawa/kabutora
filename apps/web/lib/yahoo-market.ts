@@ -677,8 +677,9 @@ export async function getYahooQuoteBundle(
   const metaTimestamp = finiteNumber(result.meta?.regularMarketTime);
   const nowSeconds = Date.now() / 1000;
   const session = dailyFund ? "closed" : sessionAt(nowSeconds, result);
-  const price = session === "closed" ? metaPrice ?? last?.price : last?.price ?? metaPrice;
-  const timestamp = session === "closed" ? metaTimestamp ?? last?.timestamp : last?.timestamp ?? metaTimestamp;
+  const lastIsNewer = last != null && last.timestamp != null && (metaTimestamp == null || last.timestamp > metaTimestamp);
+  const price = (lastIsNewer || session !== "closed") ? (last?.price ?? metaPrice) : (metaPrice ?? last?.price);
+  const timestamp = (lastIsNewer || session !== "closed") ? (last?.timestamp ?? metaTimestamp) : (metaTimestamp ?? last?.timestamp);
   if (price == null || price <= 0 || timestamp == null) throw new MarketDataError(`${symbol}: no usable market price`);
 
   const previousClose = finiteNumber(result.meta?.previousClose) ?? finiteNumber(result.meta?.chartPreviousClose) ?? undefined;

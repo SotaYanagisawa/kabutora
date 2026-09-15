@@ -8,7 +8,7 @@ import type { PortfolioNotification } from "../../lib/portfolio-notifications";
 import type { MarketSessionStatus } from "../../lib/market-session";
 import { calendarDateLabelJa } from "../../lib/calendar-time";
 import { compactNumber } from "../../lib/compact-number";
-import { marketDateTimeLabel } from "../../lib/chart-presentation";
+import { exchangeTimeZone, exchangeTimeZoneCode, marketDateTimeLabel } from "../../lib/chart-presentation";
 import { mergePortfolioNotifications } from "../../lib/portfolio-notifications";
 import { convertAmount, validUsdJpy } from "../../lib/money-conversion";
 export { convertAmount, validUsdJpy };
@@ -228,21 +228,39 @@ export const formatWidgetFetchedTime = (
   stockMic?: string,
   stockTz?: string,
   stockCurrency?: string,
+  stockCountry?: string,
 ) => {
-  if (fetchedAt) {
-    const d = new Date(fetchedAt);
-    if (Number.isFinite(d.getTime())) {
-      const now = new Date();
-      const sameDay =
-        d.toLocaleDateString("ja-JP", { timeZone: "Asia/Tokyo" }) ===
-        now.toLocaleDateString("ja-JP", { timeZone: "Asia/Tokyo" });
-      return sameDay ? timeJa(fetchedAt) : shortDateTimeJa(fetchedAt);
-    }
+  const ts = marketTimestamp || fetchedAt;
+  if (!ts) return null;
+  const d = new Date(ts);
+  if (!Number.isFinite(d.getTime())) return null;
+
+  const tz = exchangeTimeZone(stockMic, stockTz, stockCurrency, stockCountry);
+  const tzCode = exchangeTimeZoneCode(d, tz);
+
+  const now = new Date();
+  const sameDay =
+    d.toLocaleDateString("en-CA", { timeZone: tz }) ===
+    now.toLocaleDateString("en-CA", { timeZone: tz });
+
+  const timeStr = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: tz,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(d);
+
+  if (sameDay) {
+    return `${timeStr} ${tzCode}`;
   }
-  if (marketTimestamp) {
-    return marketDateTimeLabel(marketTimestamp, stockMic, stockTz, stockCurrency);
-  }
-  return null;
+
+  const dateStr = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: tz,
+    month: "numeric",
+    day: "numeric",
+  }).format(d);
+
+  return `${dateStr} ${timeStr} ${tzCode}`;
 };
 
 export const formatDayGainMoney = (value: number, currency: DisplayCurrency | string) => {
@@ -383,6 +401,12 @@ export function quoteTradeSourceLabel(quote: MarketQuote) {
     ? "PTS約定"
     : quote.venueCode === "TSE" && quote.priceType === "official_close"
     ? "東証終値"
+    : quote.session === "pre_market"
+    ? "プレ約定"
+    : quote.session === "after_hours"
+    ? "時間外約定"
+    : quote.priceType === "official_close"
+    ? "終値"
     : "最終約定";
 }
 

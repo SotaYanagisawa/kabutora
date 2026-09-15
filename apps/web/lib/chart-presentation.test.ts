@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   alignIntradayToQuote,
   exchangeTimeZone,
+  exchangeTimeZoneCode,
   latestIntradaySessionBars,
   latestPlottedDate,
   marketDateKey,
+  marketDateTimeLabel,
   marketSessionDateKey,
   marketTimeLabel,
+  marketTimeWithZoneLabel,
   resolveSparklineSeries,
   sparkline24HourBars,
   sparseIntradayTimeTicks,
@@ -631,6 +634,41 @@ describe("chart presentation", () => {
       });
       expect(result.map((b) => b.price)).toEqual(["3050", "3080", "3090"]);
       expect(result.at(-1)?.timestamp).toBe("2026-09-11T11:00:00.000Z");
+    });
+  });
+
+  describe("exchange timezone formatting", () => {
+    it("resolves timezone codes for major world exchanges", () => {
+      const summer = new Date("2026-07-01T12:00:00Z");
+      const winter = new Date("2026-01-01T12:00:00Z");
+
+      expect(exchangeTimeZoneCode(summer, "America/New_York")).toBe("EDT");
+      expect(exchangeTimeZoneCode(winter, "America/New_York")).toBe("EST");
+      expect(exchangeTimeZoneCode(summer, "Asia/Tokyo")).toBe("JST");
+      expect(exchangeTimeZoneCode(winter, "Asia/Tokyo")).toBe("JST");
+      expect(exchangeTimeZoneCode(summer, "Europe/London")).toBe("BST");
+      expect(exchangeTimeZoneCode(winter, "Europe/London")).toBe("GMT");
+      expect(exchangeTimeZoneCode(summer, "Asia/Hong_Kong")).toBe("HKT");
+      expect(exchangeTimeZoneCode(summer, "Europe/Berlin")).toBe("CEST");
+      expect(exchangeTimeZoneCode(winter, "Europe/Berlin")).toBe("CET");
+    });
+
+    it("formats marketDateTimeLabel with native timezone abbreviation", () => {
+      // 05:44 AM EDT (09:44 UTC) for US stock
+      const usTimestamp = "2026-09-15T09:44:00.000Z";
+      expect(marketDateTimeLabel(usTimestamp, "XNAS", undefined, "USD")).toBe("9/15 05:44 EDT");
+
+      // 15:00 JST (06:00 UTC) for Japanese stock
+      const jpTimestamp = "2026-09-15T06:00:00.000Z";
+      expect(marketDateTimeLabel(jpTimestamp, "XTKS", undefined, "JPY")).toBe("9/15 15:00 JST");
+    });
+
+    it("formats marketTimeWithZoneLabel with native time and timezone code", () => {
+      const usTimestamp = "2026-09-15T09:44:00.000Z";
+      expect(marketTimeWithZoneLabel(usTimestamp, "XNAS", undefined, "USD")).toBe("05:44 EDT");
+
+      const jpTimestamp = "2026-09-15T06:00:00.000Z";
+      expect(marketTimeWithZoneLabel(jpTimestamp, "XTKS", undefined, "JPY")).toBe("15:00 JST");
     });
   });
 });

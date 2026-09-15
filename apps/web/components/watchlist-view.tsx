@@ -13,7 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { DisplayCurrency, RemoteQuote, SearchSecurity, MarketStatus } from "./dashboard";
-import { marketTimeLabel } from "@/lib/chart-presentation";
+import { marketTimeLabel, marketTimeWithZoneLabel } from "@/lib/chart-presentation";
 import WatchlistSearchOverlay from "./watchlist-search-overlay";
 
 type WatchlistCategory = "ALL" | "JP" | "US" | "FUNDS_INDEXES";
@@ -120,7 +120,7 @@ const WatchlistTableRow = memo(function WatchlistTableRow({
         <strong title={item.name}>{item.name}</strong>
         <span className="security-symbol">
           {item.displaySymbol} · {marketDisplayName(item)}
-          {quote ? ` · ${marketTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency, stockCountry)}` : ""}
+          {quote ? ` · ${marketTimeWithZoneLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency, stockCountry)}` : ""}
         </span>
       </td>
 

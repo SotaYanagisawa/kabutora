@@ -16,6 +16,10 @@ export type YahooBatchRawQuote = {
   regularMarketDayLow?: number;
   regularMarketVolume?: number;
   regularMarketTime?: number;
+  preMarketPrice?: number;
+  preMarketTime?: number;
+  postMarketPrice?: number;
+  postMarketTime?: number;
   firstTradeDateMilliseconds?: number;
 };
 
@@ -59,15 +63,36 @@ export function normalizeBatchQuote(
   fetchedAt = new Date().toISOString(),
   host = "query1",
 ): { quote: MarketQuote; shortName?: string; longName?: string; exchangeLabel?: string } | null {
-  const price = finiteNumber(raw.regularMarketPrice);
-  const timestamp = finiteNumber(raw.regularMarketTime);
+  const regPrice = finiteNumber(raw.regularMarketPrice);
+  const regTime = finiteNumber(raw.regularMarketTime);
+  const prePrice = finiteNumber(raw.preMarketPrice);
+  const preTime = finiteNumber(raw.preMarketTime);
+  const postPrice = finiteNumber(raw.postMarketPrice);
+  const postTime = finiteNumber(raw.postMarketTime);
+
+  const session = parseSession(raw.marketState);
+
+  let price = regPrice;
+  let timestamp = regTime;
+
+  if (session === "pre_market" && prePrice != null && prePrice > 0 && preTime != null) {
+    price = prePrice;
+    timestamp = preTime;
+  } else if (session === "after_hours" && postPrice != null && postPrice > 0 && postTime != null) {
+    price = postPrice;
+    timestamp = postTime;
+  } else if (session === "closed") {
+    if (postPrice != null && postPrice > 0 && postTime != null && (regTime == null || postTime > regTime)) {
+      price = postPrice;
+      timestamp = postTime;
+    }
+  }
+
   if (price == null || price <= 0 || timestamp == null) return null;
 
   const previousClose = finiteNumber(raw.regularMarketPreviousClose);
   const changeRatio = previousClose && previousClose > 0 ? Math.abs(price / previousClose - 1) : 0;
   const validationStatus: MarketQuote["validationStatus"] = changeRatio > 0.35 ? "suspect" : "valid";
-
-  const session = parseSession(raw.marketState);
   const ageSeconds = Math.max(0, Date.now() / 1000 - timestamp);
   const freshness: MarketQuote["freshness"] =
     session === "closed"

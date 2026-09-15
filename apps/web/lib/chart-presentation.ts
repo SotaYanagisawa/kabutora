@@ -300,6 +300,53 @@ export function marketSessionDateKey(
   return `${sYear}-${sMonth}-${sDay}`;
 }
 
+export function exchangeTimeZoneCode(date: Date, timeZone: string): string {
+  if (timeZone === "Asia/Tokyo") return "JST";
+  if (timeZone === "America/New_York" || timeZone === "America/Toronto") {
+    try {
+      const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" }).formatToParts(date);
+      const name = parts.find((p) => p.type === "timeZoneName")?.value;
+      if (name && (name === "EDT" || name === "EST")) return name;
+    } catch {}
+    return "ET";
+  }
+  if (timeZone === "Europe/London") {
+    try {
+      const parts = new Intl.DateTimeFormat("en-GB", { timeZone, timeZoneName: "short" }).formatToParts(date);
+      const name = parts.find((p) => p.type === "timeZoneName")?.value;
+      if (name && (name === "BST" || name === "GMT")) return name;
+    } catch {}
+    return "GMT";
+  }
+  if (timeZone === "Asia/Hong_Kong") return "HKT";
+  if (timeZone === "Asia/Seoul") return "KST";
+  if (timeZone === "Asia/Singapore") return "SGT";
+  if (timeZone === "Asia/Taipei") return "CST";
+  if (timeZone === "Asia/Kolkata") return "IST";
+  if (timeZone === "Australia/Sydney") {
+    try {
+      const parts = new Intl.DateTimeFormat("en-AU", { timeZone, timeZoneName: "short" }).formatToParts(date);
+      const name = parts.find((p) => p.type === "timeZoneName")?.value;
+      if (name && (name === "AEST" || name === "AEDT")) return name;
+    } catch {}
+    return "AEST";
+  }
+  if (["Europe/Berlin", "Europe/Paris", "Europe/Amsterdam", "Europe/Zurich", "Europe/Frankfurt"].includes(timeZone)) {
+    try {
+      const parts = new Intl.DateTimeFormat("en-GB", { timeZone, timeZoneName: "short" }).formatToParts(date);
+      const name = parts.find((p) => p.type === "timeZoneName")?.value;
+      if (name && (name === "CEST" || name === "CET")) return name;
+    } catch {}
+    return "CET";
+  }
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" }).formatToParts(date);
+    const name = parts.find((p) => p.type === "timeZoneName")?.value;
+    if (name) return name;
+  } catch {}
+  return timeZone;
+}
+
 export function marketTimeLabel(
   value: string,
   exchangeMic?: string | null,
@@ -312,6 +359,21 @@ export function marketTimeLabel(
   return timeFormatter(exchangeTimeZone(exchangeMic, explicitTimeZone, currency, country)).format(date);
 }
 
+export function marketTimeWithZoneLabel(
+  value: string,
+  exchangeMic?: string | null,
+  explicitTimeZone?: string | null,
+  currency?: string | null,
+  country?: string | null,
+) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "—";
+  const tz = exchangeTimeZone(exchangeMic, explicitTimeZone, currency, country);
+  const tzCode = exchangeTimeZoneCode(date, tz);
+  const time = timeFormatter(tz).format(date);
+  return `${time} ${tzCode}`;
+}
+
 export function marketDateTimeLabel(
   value: string,
   exchangeMic?: string | null,
@@ -321,14 +383,17 @@ export function marketDateTimeLabel(
 ) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("ja-JP", {
-    timeZone: exchangeTimeZone(exchangeMic, explicitTimeZone, currency, country),
+  const tz = exchangeTimeZone(exchangeMic, explicitTimeZone, currency, country);
+  const tzCode = exchangeTimeZoneCode(date, tz);
+  const formatted = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: tz,
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
   }).format(date);
+  return `${formatted} ${tzCode}`;
 }
 
 export function alignIntradayToQuote(
