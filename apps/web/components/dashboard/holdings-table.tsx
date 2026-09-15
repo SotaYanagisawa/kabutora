@@ -364,28 +364,47 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
         aria-label={onSelect ? `${secName}の詳細を開く` : undefined}
       >
         <td className="widget-card-cell" colSpan={7}>
-          {/* Row 1: Ticker Symbol (left) + Current Stock Price (right) */}
-          <div className="widget-card-row widget-row-primary">
+          {/* Row 1: Ticker Symbol (left) + Daily Percentage Change (right) */}
+          <div className="widget-card-row widget-row-header">
             <div className="security-col widget-ticker-wrap">
               <strong className="widget-ticker">{secDisplaySymbol}</strong>
             </div>
-            <div className="price-col widget-price">
-              <strong>{maybeMoney(holding.currentPrice, rowCurrency)}</strong>
-            </div>
-          </div>
-
-          {/* Row 2: Security Name (left) + Daily Percentage Change (right) */}
-          <div className="widget-card-row widget-row-secondary">
-            <span className="widget-sec-name" title={secLegalName}>
-              {secSub}
-            </span>
             <div className={`day-col widget-day-badge ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
               <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
             </div>
           </div>
 
-          {/* Row 3: Fetched Time (left) + Total Gain/Loss (right) */}
-          <div className="widget-card-row widget-row-tertiary">
+          {/* Row 2: Security Name (full width, single line) */}
+          <div className="widget-card-row widget-row-sub">
+            <span className="widget-sec-name" title={secLegalName}>
+              {secSub}
+            </span>
+          </div>
+
+          {/* Row 3: Current Stock Price (prominent center) */}
+          <div className="widget-card-row widget-row-price">
+            <div className="price-col widget-price">
+              <strong>{maybeMoney(holding.currentPrice, rowCurrency)}</strong>
+            </div>
+          </div>
+
+          {/* Row 4: Total Gain/Loss (return % + currency amount) */}
+          <div className="widget-card-row widget-row-gain">
+            <div className={`gain-col widget-total-gain ${gain == null ? "" : gain >= 0 ? "up" : "down"}`}>
+              <div className="widget-gain-left">
+                <span className="widget-gain-label">損益</span>
+                <strong className="widget-gain-percent">
+                  {gainPercent == null ? "—" : signedPercent(gainPercent, 1)}
+                </strong>
+              </div>
+              <small className="widget-gain-amount" aria-label={amountsVisible ? undefined : "金額非表示"}>
+                {amountsVisible ? (gain == null ? "" : maybeSignedMoney(gain, rowCurrency)) : HIDDEN_AMOUNT}
+              </small>
+            </div>
+          </div>
+
+          {/* Row 5: Price Fetched Timestamp + Dot */}
+          <div className="widget-card-row widget-row-time">
             <div className="widget-time-group">
               <span
                 className={`quote-dot ${quote?.freshness ?? "missing"}`}
@@ -398,15 +417,6 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
               <span className="widget-fetched-time">
                 {fetchedTime ?? "未取得"}
               </span>
-            </div>
-            <div className={`gain-col widget-total-gain ${gain == null ? "" : gain >= 0 ? "up" : "down"}`}>
-              <span className="widget-gain-label">損益</span>
-              <strong className="widget-gain-percent">
-                {gainPercent == null ? "—" : signedPercent(gainPercent, 1)}
-              </strong>
-              <small className="widget-gain-amount" aria-label={amountsVisible ? undefined : "金額非表示"}>
-                {amountsVisible ? (gain == null ? "" : `(${maybeSignedMoney(gain, rowCurrency)})`) : `(${HIDDEN_AMOUNT})`}
-              </small>
             </div>
           </div>
         </td>
