@@ -348,6 +348,7 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
       : quote?.marketTimestamp
       ? marketDateTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency)
       : null;
+    const secSub = secName !== secDisplaySymbol ? secName : marketDisplayName(sec);
 
     return (
       <tr
@@ -363,49 +364,50 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
         aria-label={onSelect ? `${secName}の詳細を開く` : undefined}
       >
         <td className="widget-card-cell" colSpan={7}>
-          {/* 1. Ticker Name + Daily Percentage Change */}
-          <div className="widget-card-top">
-            <div className="security-col widget-ticker-group">
+          {/* Row 1: Ticker Symbol (left) + Current Stock Price (right) */}
+          <div className="widget-card-row widget-row-primary">
+            <div className="security-col widget-ticker-wrap">
               <strong className="widget-ticker">{secDisplaySymbol}</strong>
-              {secName !== secDisplaySymbol && (
-                <span className="widget-subname" title={secLegalName}>
-                  {secName}
-                </span>
-              )}
             </div>
-            <div className={`day-col widget-day-badge ${dayPercent == null ? "" : dayPercent >= 0 ? "up" : "down"}`}>
+            <div className="price-col widget-price">
+              <strong>{maybeMoney(holding.currentPrice, rowCurrency)}</strong>
+            </div>
+          </div>
+
+          {/* Row 2: Security Name (left) + Daily Percentage Change (right) */}
+          <div className="widget-card-row widget-row-secondary">
+            <span className="widget-sec-name" title={secLegalName}>
+              {secSub}
+            </span>
+            <div className={`day-col widget-day-badge ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
               <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
             </div>
           </div>
 
-          {/* 2. Current Stock Price + Total Gain/Loss */}
-          <div className="widget-card-mid">
-            <div className="price-col widget-price">
-              <strong>{maybeMoney(holding.currentPrice, rowCurrency)}</strong>
+          {/* Row 3: Fetched Time (left) + Total Gain/Loss (right) */}
+          <div className="widget-card-row widget-row-tertiary">
+            <div className="widget-time-group">
+              <span
+                className={`quote-dot ${quote?.freshness ?? "missing"}`}
+                title={
+                  quote
+                    ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${fetchedTime ? `${fetchedTime} 取得` : ""}`
+                    : "価格未取得"
+                }
+              />
+              <span className="widget-fetched-time">
+                {fetchedTime ?? "未取得"}
+              </span>
             </div>
             <div className={`gain-col widget-total-gain ${gain == null ? "" : gain >= 0 ? "up" : "down"}`}>
-              <span className="widget-gain-percent">
-                <strong>{gainPercent == null ? "—" : signedPercent(gainPercent, 1)}</strong>
-              </span>
+              <span className="widget-gain-label">損益</span>
+              <strong className="widget-gain-percent">
+                {gainPercent == null ? "—" : signedPercent(gainPercent, 1)}
+              </strong>
               <small className="widget-gain-amount" aria-label={amountsVisible ? undefined : "金額非表示"}>
-                {amountsVisible ? (gain == null ? "" : maybeSignedMoney(gain, rowCurrency)) : HIDDEN_AMOUNT}
+                {amountsVisible ? (gain == null ? "" : `(${maybeSignedMoney(gain, rowCurrency)})`) : `(${HIDDEN_AMOUNT})`}
               </small>
             </div>
-          </div>
-
-          {/* 3. Most Recent Price Fetched Time */}
-          <div className="widget-card-bottom">
-            <span
-              className={`quote-dot ${quote?.freshness ?? "missing"}`}
-              title={
-                quote
-                  ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${fetchedTime ? `${fetchedTime} 取得` : ""}`
-                  : "価格未取得"
-              }
-            />
-            <span className="widget-fetched-time">
-              {fetchedTime ? `${fetchedTime} 取得` : "未取得"}
-            </span>
           </div>
         </td>
       </tr>

@@ -713,9 +713,9 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
 }
 .holdings-grid-body {
   display: grid !important;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 8px;
-  padding: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 6px;
+  padding: 6px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -724,7 +724,7 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   flex-direction: column !important;
   background: var(--panel-alt);
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 8px;
   padding: 0;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
   transition: transform .12s ease, border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
@@ -732,7 +732,7 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   overflow: hidden;
   box-sizing: border-box;
   content-visibility: auto;
-  contain-intrinsic-size: auto 74px;
+  contain-intrinsic-size: auto 64px;
 }
 .holding-widget-card.selectable {
   cursor: pointer;
@@ -756,139 +756,151 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   flex-direction: column;
   width: 100% !important;
   height: auto !important;
-  padding: 7px 10px !important;
-  gap: 3px;
+  padding: 5px 9px !important;
+  gap: 2px;
   border: 0 !important;
   text-align: left !important;
   box-sizing: border-box;
 }
 
-/* 1. Ticker Name + Daily Percentage Change */
-.widget-card-top {
+/* Common Row Layout */
+.widget-card-row {
   display: flex !important;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
+  width: 100%;
 }
-.widget-ticker-group {
+
+/* Row 1: Ticker Symbol (left) + Current Stock Price (right) */
+.widget-row-primary {
+  line-height: 1.15;
+}
+.widget-ticker-wrap {
   display: flex !important;
   align-items: baseline;
-  gap: 5px;
   min-width: 0;
   overflow: hidden;
 }
 .widget-ticker {
   font-size: 13px !important;
   font-weight: 800 !important;
-  letter-spacing: -0.01em;
   color: var(--text);
-  flex-shrink: 0;
-  line-height: 1.2;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  white-space: nowrap;
 }
-.widget-subname {
-  font-size: 10.5px;
-  color: var(--muted);
+.widget-price strong {
+  font-size: 13.5px !important;
+  font-weight: 800 !important;
+  color: var(--text);
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Row 2: Security Name (left) + Daily Percentage Change (right) */
+.widget-row-secondary {
+  line-height: 1.1;
+}
+.widget-sec-name {
+  font-size: 10px;
   font-weight: 500;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  line-height: 1.2;
+  min-width: 0;
+  flex: 1;
 }
 .widget-day-badge {
   display: inline-flex !important;
   align-items: center;
-  padding: 1.5px 5px;
-  border-radius: 4px;
-  font-size: 11px !important;
+  padding: 1px 4.5px;
+  border-radius: 3.5px;
+  font-size: 10px !important;
   font-weight: 750 !important;
   letter-spacing: -0.01em;
-  line-height: 1.15;
+  line-height: 1.1;
   flex-shrink: 0;
 }
 .widget-day-badge.up {
   color: var(--up);
-  background: color-mix(in srgb, var(--up) 12%, var(--panel-alt));
-  border: 1px solid color-mix(in srgb, var(--up) 22%, transparent);
+  background: color-mix(in srgb, var(--up) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--up) 20%, transparent);
 }
 .widget-day-badge.down {
   color: var(--down);
-  background: color-mix(in srgb, var(--down) 12%, var(--panel-alt));
-  border: 1px solid color-mix(in srgb, var(--down) 22%, transparent);
+  background: color-mix(in srgb, var(--down) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--down) 20%, transparent);
 }
 .widget-day-badge strong {
-  font-size: 11px !important;
+  font-size: 10px !important;
   font-weight: 750 !important;
+  font-variant-numeric: tabular-nums;
 }
 
-/* 2. Current Stock Price + Total Gain/Loss */
-.widget-card-mid {
-  display: flex !important;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
-  min-width: 0;
-  margin-top: 1px;
-}
-.widget-price strong {
-  font-size: 15px !important;
-  font-weight: 850 !important;
-  letter-spacing: -0.02em;
-  color: var(--text);
-  line-height: 1.2;
-}
-.widget-total-gain {
-  display: flex !important;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0;
-  flex-shrink: 0;
-  min-width: 0;
-}
-.widget-gain-percent strong {
-  font-size: 12px !important;
-  font-weight: 750 !important;
-  letter-spacing: -0.01em;
-  line-height: 1.2;
-}
-.widget-total-gain.up .widget-gain-percent strong,
-.widget-total-gain.up .widget-gain-amount {
-  color: var(--up);
-}
-.widget-total-gain.down .widget-gain-percent strong,
-.widget-total-gain.down .widget-gain-amount {
-  color: var(--down);
-}
-.widget-gain-amount {
-  font-size: 9.5px;
-  font-weight: 600;
-  opacity: 0.85;
+/* Row 3: Fetched Time (left) + Total Gain/Loss (right) */
+.widget-row-tertiary {
   line-height: 1.1;
-  white-space: nowrap;
 }
-
-/* 3. Most Recent Price Fetched Time */
-.widget-card-bottom {
+.widget-time-group {
   display: flex !important;
   align-items: center;
-  gap: 4px;
+  gap: 3.5px;
   min-width: 0;
-  margin-top: 2px;
+  flex-shrink: 0;
 }
-.widget-card-bottom .quote-dot {
-  width: 5px;
-  height: 5px;
+.widget-time-group .quote-dot {
+  width: 4.5px;
+  height: 4.5px;
+  border-radius: 50%;
   flex-shrink: 0;
 }
 .widget-fetched-time {
-  font-size: 9.5px;
+  font-size: 8.5px;
   color: var(--muted);
   font-weight: 500;
   letter-spacing: 0.01em;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.widget-total-gain {
+  display: inline-flex !important;
+  align-items: baseline;
+  gap: 1.5px;
+  min-width: 0;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.widget-gain-label {
+  font-size: 8.5px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.widget-gain-percent {
+  font-size: 10px !important;
+  font-weight: 750 !important;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.widget-total-gain.up .widget-gain-percent,
+.widget-total-gain.up .widget-gain-amount {
+  color: var(--up);
+}
+.widget-total-gain.down .widget-gain-percent,
+.widget-total-gain.down .widget-gain-amount {
+  color: var(--down);
+}
+.widget-gain-amount {
+  font-size: 8.5px;
+  font-weight: 600;
+  opacity: 0.85;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
 }
 
 .holdings-table table { width: 100%; table-layout: fixed; border-collapse: collapse; }
@@ -3727,8 +3739,8 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
   .holdings-table.grid-view tbody.holdings-grid-body {
     display: grid !important;
     grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    gap: 5px !important;
-    padding: 5px !important;
+    gap: 4px !important;
+    padding: 4px !important;
   }
   .holdings-table.grid-view tr.holding-widget-card {
     display: flex !important;
@@ -3739,38 +3751,46 @@ html[data-page-visibility="hidden"] .pull-refresh-indicator.spinning { animation
     min-height: 0 !important;
     padding: 0 !important;
     border: 1px solid var(--line) !important;
-    border-radius: 8px !important;
+    border-radius: 7px !important;
     background: var(--panel-alt) !important;
-    contain-intrinsic-size: auto 68px;
+    contain-intrinsic-size: auto 58px;
   }
   .holdings-table.grid-view .widget-card-cell {
-    padding: 6px 8px !important;
-    gap: 2px !important;
+    padding: 4px 7px !important;
+    gap: 1.5px !important;
   }
   .holdings-table.grid-view .widget-ticker {
     font-size: 12px !important;
   }
-  .holdings-table.grid-view .widget-subname {
-    font-size: 9.5px !important;
-  }
-  .holdings-table.grid-view .widget-day-badge {
-    padding: 1px 4px !important;
-    font-size: 10px !important;
-  }
-  .holdings-table.grid-view .widget-day-badge strong {
-    font-size: 10px !important;
-  }
   .holdings-table.grid-view .widget-price strong {
-    font-size: 13.5px !important;
+    font-size: 12.5px !important;
   }
-  .holdings-table.grid-view .widget-gain-percent strong {
-    font-size: 11px !important;
-  }
-  .holdings-table.grid-view .widget-gain-amount {
+  .holdings-table.grid-view .widget-sec-name {
     font-size: 9px !important;
   }
+  .holdings-table.grid-view .widget-day-badge {
+    padding: 0.5px 3.5px !important;
+    font-size: 9px !important;
+    border-radius: 3px !important;
+  }
+  .holdings-table.grid-view .widget-day-badge strong {
+    font-size: 9px !important;
+  }
+  .holdings-table.grid-view .widget-time-group .quote-dot {
+    width: 4px !important;
+    height: 4px !important;
+  }
   .holdings-table.grid-view .widget-fetched-time {
-    font-size: 8.5px !important;
+    font-size: 8px !important;
+  }
+  .holdings-table.grid-view .widget-gain-label {
+    font-size: 7.5px !important;
+  }
+  .holdings-table.grid-view .widget-gain-percent {
+    font-size: 9px !important;
+  }
+  .holdings-table.grid-view .widget-gain-amount {
+    font-size: 8px !important;
   }
   .holdings-table.grid-view .position-col,
   .holdings-table.grid-view .weight-col {
