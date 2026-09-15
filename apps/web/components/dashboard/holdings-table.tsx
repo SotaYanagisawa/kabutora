@@ -4,6 +4,7 @@ import { canonicalDomainSecurityId, type IntradayBar, type MarketBar } from "@ka
 import { marketDateTimeLabel, marketTimeLabel } from "@/lib/chart-presentation";
 import { marketDisplayName } from "@/lib/market-label";
 import { isUsSecurity, type PortfolioFilter } from "@/lib/portfolio-filter";
+import { LayoutGrid, List } from "lucide-react";
 import { freshnessLabel, HIDDEN_AMOUNT } from "./constants";
 import {
   compactMoney,
@@ -17,6 +18,8 @@ import {
   signedPercent,
 } from "./helpers";
 import type { DashboardHolding, DisplayCurrency, RemoteQuote } from "./types";
+
+export type HoldingsViewMode = "grid" | "table";
 
 export type HoldingsSort =
   | "VALUE_DESC"
@@ -66,6 +69,21 @@ export function HoldingsTable({
       preferenceStorage.setItem("kabutora-holdings-sort", sortBy);
     } catch {}
   }, [sortBy]);
+
+  const [viewMode, setViewMode] = useState<HoldingsViewMode>(() => {
+    if (typeof window === "undefined") return "grid";
+    try {
+      const saved = preferenceStorage.getItem("kabutora-holdings-view-mode") as HoldingsViewMode | null;
+      if (saved === "table" || saved === "grid") return saved;
+    } catch {}
+    return "grid";
+  });
+
+  useEffect(() => {
+    try {
+      preferenceStorage.setItem("kabutora-holdings-view-mode", viewMode);
+    } catch {}
+  }, [viewMode, preferenceStorage]);
 
   const sortedHoldings = useMemo(() => {
     const list = [...holdings];
@@ -124,26 +142,113 @@ export function HoldingsTable({
   };
 
   return (
-    <div className={`holdings-table ${dense ? "dense" : ""}`}>
-      <div className="holdings-mobile-header" role="row">
-        <button type="button" className={`mobile-sort-btn ${sortBy === "NAME_ASC" ? "active" : ""}`} onClick={() => setSortBy("NAME_ASC")}>
-          銘柄 {sortIndicator("NAME_ASC")}
-        </button>
-        <button type="button" className={`mobile-sort-btn right ${sortBy === "DAY_DESC" ? "active" : ""}`} onClick={() => setSortBy("DAY_DESC")}>
-          前日比 {sortIndicator("DAY_DESC")}
-        </button>
-        <button
-          type="button"
-          className={`mobile-sort-btn right ${sortBy === "VALUE_DESC" || sortBy === "GAIN_DESC" ? "active" : ""}`}
-          onClick={() => setSortBy(sortBy === "VALUE_DESC" ? "GAIN_DESC" : "VALUE_DESC")}
-        >
-          {sortBy === "GAIN_DESC" ? "含み損益" : "評価額"}{" "}
-          <span className="sort-arrow active" aria-hidden="true">
-            ↓
-          </span>
-        </button>
+    <div className={`holdings-table ${dense ? "dense" : ""} ${viewMode === "grid" ? "grid-view" : "table-view"}`}>
+      <div className="holdings-toolbar" role="toolbar" aria-label="保有銘柄ツールバー">
+        <div className="holdings-toolbar-sorts" role="group" aria-label="並び替え">
+          <button
+            type="button"
+            className={`holdings-toolbar-sort-btn ${sortBy === "NAME_ASC" ? "active" : ""}`}
+            onClick={() => setSortBy("NAME_ASC")}
+          >
+            銘柄 {sortIndicator("NAME_ASC")}
+          </button>
+          <button
+            type="button"
+            className={`holdings-toolbar-sort-btn ${sortBy === "PRICE_DESC" ? "active" : ""}`}
+            onClick={() => setSortBy("PRICE_DESC")}
+          >
+            現在値 {sortIndicator("PRICE_DESC")}
+          </button>
+          <button
+            type="button"
+            className={`holdings-toolbar-sort-btn ${sortBy === "DAY_DESC" ? "active" : ""}`}
+            onClick={() => setSortBy("DAY_DESC")}
+          >
+            前日比 {sortIndicator("DAY_DESC")}
+          </button>
+          <button
+            type="button"
+            className={`holdings-toolbar-sort-btn ${sortBy === "VALUE_DESC" ? "active" : ""}`}
+            onClick={() => setSortBy("VALUE_DESC")}
+          >
+            評価額 {sortIndicator("VALUE_DESC")}
+          </button>
+          <button
+            type="button"
+            className={`holdings-toolbar-sort-btn ${sortBy === "GAIN_DESC" ? "active" : ""}`}
+            onClick={() => setSortBy("GAIN_DESC")}
+          >
+            含み損益 {sortIndicator("GAIN_DESC")}
+          </button>
+        </div>
+        <div className="holdings-view-mode-toggle" role="group" aria-label="表示形式">
+          <button
+            type="button"
+            className={`holdings-view-mode-btn ${viewMode === "grid" ? "active" : ""}`}
+            aria-pressed={viewMode === "grid"}
+            aria-label="グリッド表示"
+            title="グリッド表示"
+            onClick={() => setViewMode("grid")}
+          >
+            <LayoutGrid size={15} />
+          </button>
+          <button
+            type="button"
+            className={`holdings-view-mode-btn ${viewMode === "table" ? "active" : ""}`}
+            aria-pressed={viewMode === "table"}
+            aria-label="テーブル表示"
+            title="テーブル表示"
+            onClick={() => setViewMode("table")}
+          >
+            <List size={15} />
+          </button>
+        </div>
       </div>
-      <table>
+
+      <div className="holdings-mobile-header" role="row">
+        <div className="holdings-mobile-sorts">
+          <button type="button" className={`mobile-sort-btn ${sortBy === "NAME_ASC" ? "active" : ""}`} onClick={() => setSortBy("NAME_ASC")}>
+            銘柄 {sortIndicator("NAME_ASC")}
+          </button>
+          <button type="button" className={`mobile-sort-btn ${sortBy === "DAY_DESC" ? "active" : ""}`} onClick={() => setSortBy("DAY_DESC")}>
+            前日比 {sortIndicator("DAY_DESC")}
+          </button>
+          <button
+            type="button"
+            className={`mobile-sort-btn ${sortBy === "VALUE_DESC" || sortBy === "GAIN_DESC" ? "active" : ""}`}
+            onClick={() => setSortBy(sortBy === "VALUE_DESC" ? "GAIN_DESC" : "VALUE_DESC")}
+          >
+            {sortBy === "GAIN_DESC" ? "含み損益" : "評価額"}{" "}
+            <span className="sort-arrow active" aria-hidden="true">
+              ↓
+            </span>
+          </button>
+        </div>
+        <div className="holdings-mobile-view-toggle" role="group" aria-label="表示形式">
+          <button
+            type="button"
+            className={`mobile-view-btn ${viewMode === "grid" ? "active" : ""}`}
+            aria-pressed={viewMode === "grid"}
+            aria-label="グリッド表示"
+            title="グリッド表示"
+            onClick={() => setViewMode("grid")}
+          >
+            <LayoutGrid size={14} />
+          </button>
+          <button
+            type="button"
+            className={`mobile-view-btn ${viewMode === "table" ? "active" : ""}`}
+            aria-pressed={viewMode === "table"}
+            aria-label="テーブル表示"
+            title="テーブル表示"
+            onClick={() => setViewMode("table")}
+          >
+            <List size={14} />
+          </button>
+        </div>
+      </div>
+
+      <table className={`holdings-table-content ${viewMode === "grid" ? "is-grid" : "is-table"}`}>
         <thead>
           <tr>
             <th className={`sortable ${sortBy === "NAME_ASC" ? "active-sort" : ""}`} onClick={() => setSortBy("NAME_ASC")}>
@@ -165,7 +270,7 @@ export function HoldingsTable({
             <th>比率</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className={viewMode === "grid" ? "holdings-grid-body" : ""}>
           {sortedHoldings.map((holding) => {
             const canonicalId = canonicalDomainSecurityId(holding.securityId);
             return (
@@ -180,6 +285,7 @@ export function HoldingsTable({
                 marketFilter={marketFilter}
                 onSelect={onSelect}
                 currentTime={currentTime}
+                viewMode={viewMode}
               />
             );
           })}
@@ -199,6 +305,7 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   marketFilter = "ALL",
   onSelect,
   currentTime,
+  viewMode = "grid",
 }: {
   holding: DashboardHolding;
   currency: DisplayCurrency;
@@ -209,6 +316,7 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   marketFilter?: PortfolioFilter;
   onSelect?: (securityId: string) => void;
   currentTime?: number | null;
+  viewMode?: HoldingsViewMode;
 }) {
   const sec = holding.security;
   const isUs = isUsSecurity(sec, holding.securityId);
@@ -232,6 +340,99 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   const secLegalName = sec?.legalName || secName;
   const secDisplaySymbol = sec?.displaySymbol || holding.securityId.replace(/^sec-(?:us-|jp-)?/i, "").toUpperCase();
   const weightVal = holding.summaryMarketValue ?? holding.marketValue;
+
+  if (viewMode === "grid") {
+    return (
+      <tr
+        className={`holding-widget-card ${onSelect ? "selectable" : ""}`}
+        onClick={() => onSelect?.(holding.securityId)}
+        onKeyDown={(event) => {
+          if (onSelect && (event.key === "Enter" || event.key === " ")) {
+            event.preventDefault();
+            onSelect(holding.securityId);
+          }
+        }}
+        tabIndex={onSelect ? 0 : undefined}
+        aria-label={onSelect ? `${secName}の詳細を開く` : undefined}
+      >
+        <td className="widget-card-cell" colSpan={7}>
+          <div className="widget-card-header">
+            <div className="widget-symbol-group">
+              <span className="widget-symbol-badge">{secDisplaySymbol}</span>
+              <span className="widget-market-tag">{marketDisplayName(sec)}</span>
+            </div>
+            <div className="widget-header-right">
+              <span className="widget-weight-tag" title="ポートフォリオ比率">
+                {totalValue != null && weightVal != null ? `${((Number(weightVal) / totalValue) * 100).toFixed(1)}%` : "—"}
+              </span>
+              <span
+                className={`quote-dot ${quote?.freshness ?? "missing"}`}
+                title={
+                  quote
+                    ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${marketDateTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency)}（市場現地）`
+                    : "価格未取得"
+                }
+              />
+            </div>
+          </div>
+
+          <div className="security-col widget-security-name">
+            <strong title={secLegalName}>{secName}</strong>
+          </div>
+
+          <div className="widget-price-row">
+            <div className="price-col widget-price">
+              <strong>{maybeMoney(holding.currentPrice, rowCurrency)}</strong>
+            </div>
+            <div className={`day-col widget-day ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
+              <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
+              <span className="widget-day-money" aria-label={amountsVisible ? undefined : "金額非表示"}>
+                {amountsVisible ? maybeSignedMoney(day, rowCurrency) : HIDDEN_AMOUNT}
+              </span>
+            </div>
+          </div>
+
+          <div className="widget-divider" aria-hidden="true" />
+
+          <div className="widget-metrics-grid">
+            <div className="widget-metric-item value-col">
+              <span className="widget-metric-label">評価額</span>
+              <strong className="widget-metric-val" aria-label={amountsVisible ? undefined : "金額非表示"}>
+                {amountsVisible ? maybeMoney(holding.marketValue, rowCurrency) : HIDDEN_AMOUNT}
+              </strong>
+            </div>
+
+            <div className="widget-metric-item gain-col">
+              <span className="widget-metric-label">含み損益</span>
+              <div className="widget-gain-inline">
+                <strong className={`widget-metric-val ${gain == null ? "" : gain >= 0 ? "up" : "down"}`}>
+                  {gainPercent == null ? "—" : signedPercent(gainPercent, 1)}
+                </strong>
+                <small className={`widget-gain-sub ${gain == null ? "" : gain >= 0 ? "up" : "down"}`} aria-label={amountsVisible ? undefined : "金額非表示"}>
+                  ({amountsVisible ? maybeSignedMoney(gain, rowCurrency) : HIDDEN_AMOUNT})
+                </small>
+              </div>
+            </div>
+
+            <div className="widget-metric-item position-col">
+              <span className="widget-metric-label">保有数 / 取得単価</span>
+              <span className="widget-position-val">
+                <strong aria-label={amountsVisible ? undefined : "保有数非表示"}>
+                  {amountsVisible ? `${number.format(Number(holding.quantity))}${securityQuantityUnit(sec, holding.securityId)}` : HIDDEN_AMOUNT}
+                </strong>
+                <span className="widget-cost-sep">·</span>
+                <small aria-label={amountsVisible ? undefined : "平均取得単価非表示"}>
+                  {amountsVisible
+                    ? `@ ${money(Number(holding.averageCost), rowCurrency)}${isFundSecurity(sec, holding.securityId) ? ` / ${securityPriceBasis(sec, holding.securityId)}` : ""}`
+                    : HIDDEN_AMOUNT}
+                </small>
+              </span>
+            </div>
+          </div>
+        </td>
+      </tr>
+    );
+  }
 
   return (
     <tr
