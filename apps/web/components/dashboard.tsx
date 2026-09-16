@@ -276,6 +276,105 @@ export default function Dashboard(props: DashboardProps) {
   return <BrowserPreferences persistent={props.allowPersistentMarketCache !== false} namespace={props.preferenceNamespace}><DashboardContents {...props}/></BrowserPreferences>;
 }
 
+function resolveInitialPreferences(seed: Seed, preferenceStorage: Storage) {
+  const savedTheme = preferenceStorage.getItem("kabutora-theme");
+  const savedAccent = preferenceStorage.getItem("kabutora-accent") as AccentTheme | null;
+  const savedAutoRefresh = preferenceStorage.getItem("kabutora-auto-refresh");
+  const savedUpdateFrequency = Number(preferenceStorage.getItem("kabutora-update-frequency"));
+  const savedDisplayCurrency = preferenceStorage.getItem("kabutora-display-currency") as DisplayCurrency | null;
+  const savedSummaryMarketFilter = (preferenceStorage.getItem(SUMMARY_MARKET_FILTER_KEY) ?? preferenceStorage.getItem(LEGACY_MARKET_FILTER_KEY)) as PortfolioFilter | null;
+  const savedSummaryBrokerFilter = preferenceStorage.getItem(SUMMARY_BROKER_FILTER_KEY);
+  const savedDividendMarketFilter = preferenceStorage.getItem(DIVIDEND_MARKET_FILTER_KEY) as PortfolioFilter | null;
+  const savedDividendDisplayCurrency = preferenceStorage.getItem(DIVIDEND_DISPLAY_CURRENCY_KEY) as DisplayCurrency | null;
+  const savedDividendPeriod = preferenceStorage.getItem(DIVIDEND_PERIOD_KEY);
+  const savedDividendTaxMode = preferenceStorage.getItem(DIVIDEND_TAX_MODE_KEY) as "gross" | "net" | null;
+  const savedDividendTab = preferenceStorage.getItem(DIVIDEND_TAB_KEY) as "securities" | "history" | null;
+  const savedSummaryAmountsVisible = preferenceStorage.getItem(SUMMARY_AMOUNTS_VISIBLE_KEY);
+  const savedHideScrollbar = preferenceStorage.getItem(HIDE_SCROLLBAR_KEY);
+  const savedSummaryRange = preferenceStorage.getItem(SUMMARY_RANGE_KEY) as RangeKey | null;
+  const savedSummaryCustomRange = preferenceStorage.getItem(SUMMARY_CUSTOM_RANGE_KEY);
+  const savedPriceAlertThreshold = Number(preferenceStorage.getItem(PRICE_ALERT_THRESHOLD_KEY));
+  const savedAcknowledgedActions = readStoredIds(preferenceStorage, "kabutora-acknowledged-actions-v1");
+  const savedReadNotifications = readStoredIds(preferenceStorage, "kabutora-read-notifications-v1");
+  const savedNotificationHistory = readStoredNotifications(preferenceStorage);
+  const savedWatchlist = preferenceStorage.getItem("kabutora-watchlist-v1");
+
+  const cloudWatchlist = seed.watchlist;
+  const cloudPreferences = seed.preferences;
+
+  let resolvedWatchlist: SearchSecurity[] = seed.watchlist ?? [];
+  if (cloudWatchlist && Array.isArray(cloudWatchlist) && cloudWatchlist.length > 0) {
+    resolvedWatchlist = cloudWatchlist;
+  } else if (savedWatchlist) {
+    try {
+      const parsed = JSON.parse(savedWatchlist) as SearchSecurity[];
+      if (Array.isArray(parsed) && parsed.length > 0) resolvedWatchlist = parsed;
+    } catch {}
+  }
+
+  const pTheme = cloudPreferences?.theme ?? savedTheme;
+  const dark = pTheme === "dark";
+  const accentTheme = cloudPreferences?.accentTheme ?? (savedAccent && ["graphite", "blue", "forest", "plum"].includes(savedAccent) ? savedAccent : "graphite");
+  const autoRefresh = cloudPreferences?.autoRefresh ?? (savedAutoRefresh !== "false");
+  const updateFrequency = (cloudPreferences?.updateFrequency ?? (savedUpdateFrequency && [10, 15, 30, 60].includes(savedUpdateFrequency) ? savedUpdateFrequency : 15)) as UpdateFrequency;
+  const priceAlertThreshold = cloudPreferences?.priceAlertThreshold ?? (savedPriceAlertThreshold && (PRICE_ALERT_THRESHOLDS as readonly number[]).includes(savedPriceAlertThreshold) ? savedPriceAlertThreshold : DEFAULT_PRICE_ALERT_PERCENT);
+  const displayCurrency = cloudPreferences?.displayCurrency ?? (savedDisplayCurrency && ["JPY", "USD", "NATIVE"].includes(savedDisplayCurrency) ? savedDisplayCurrency : "JPY");
+  const summaryMarketFilter = cloudPreferences?.summaryMarketFilter ?? (savedSummaryMarketFilter && ["ALL", "JP", "US", "FUNDS_INDEXES"].includes(savedSummaryMarketFilter) ? savedSummaryMarketFilter : "ALL");
+  const summaryBrokerFilter = cloudPreferences?.summaryBrokerFilter ?? (savedSummaryBrokerFilter || "ALL");
+  const dividendMarketFilter = cloudPreferences?.dividendMarketFilter ?? (savedDividendMarketFilter && ["ALL", "JP", "US", "FUNDS_INDEXES"].includes(savedDividendMarketFilter) ? savedDividendMarketFilter : "ALL");
+  const dividendDisplayCurrency = cloudPreferences?.dividendDisplayCurrency ?? (savedDividendDisplayCurrency && ["JPY", "USD", "NATIVE"].includes(savedDividendDisplayCurrency) ? savedDividendDisplayCurrency : (seed.portfolio.baseCurrency === "USD" ? "USD" : "JPY"));
+  const dividendPeriod = cloudPreferences?.dividendPeriod ?? (savedDividendPeriod || "ALL");
+  const dividendTaxMode = cloudPreferences?.dividendTaxMode ?? (savedDividendTaxMode && (savedDividendTaxMode === "gross" || savedDividendTaxMode === "net") ? savedDividendTaxMode : "gross");
+  const dividendActiveTab = cloudPreferences?.dividendActiveTab ?? (savedDividendTab && (savedDividendTab === "securities" || savedDividendTab === "history") ? savedDividendTab : "securities");
+  const range = cloudPreferences?.summaryRange ?? (savedSummaryRange && (PORTFOLIO_RANGES.includes(savedSummaryRange) || savedSummaryRange === "CUSTOM") ? savedSummaryRange : "ALL");
+
+  let customRange: CustomDateRange | null = null;
+  if (cloudPreferences?.summaryCustomRange) {
+    customRange = cloudPreferences.summaryCustomRange;
+  } else if (savedSummaryCustomRange) {
+    try {
+      const parsed = JSON.parse(savedSummaryCustomRange) as CustomDateRange;
+      if (parsed && typeof parsed.from === "string" && typeof parsed.to === "string") customRange = parsed;
+    } catch {}
+  }
+
+  const summaryAmountsVisible = cloudPreferences?.summaryAmountsVisible ?? (savedSummaryAmountsVisible !== "false");
+  const hideScrollbar = cloudPreferences?.hideScrollbar ?? (savedHideScrollbar !== "false");
+  const acknowledgedActionIds = [...new Set([...(savedAcknowledgedActions ?? []), ...(cloudPreferences?.acknowledgedActions ?? [])])];
+  const readNotificationIds = [...new Set([...(savedReadNotifications ?? []), ...(cloudPreferences?.readNotifications ?? [])])];
+  const notificationHistory = cloudPreferences?.notificationHistory ?? savedNotificationHistory;
+
+  return {
+    watchlist: resolvedWatchlist,
+    dark,
+    accentTheme,
+    autoRefresh,
+    updateFrequency,
+    priceAlertThreshold,
+    displayCurrency,
+    summaryMarketFilter,
+    summaryBrokerFilter,
+    dividendMarketFilter,
+    dividendDisplayCurrency,
+    dividendPeriod,
+    dividendTaxMode,
+    dividendActiveTab,
+    range,
+    customRange,
+    summaryAmountsVisible,
+    hideScrollbar,
+    acknowledgedActionIds,
+    readNotificationIds,
+    notificationHistory,
+    cloudPreferences,
+    savedTheme,
+    savedDisplayCurrency,
+    savedAccent,
+    savedAutoRefresh,
+    pTheme,
+  };
+}
+
 function DashboardContents({
   seed,
   initialServerTimeMs,
@@ -297,32 +396,33 @@ function DashboardContents({
   onStartupReady,
 }: DashboardProps) {
   const preferenceStorage = useBrowserPreferences();
+  const initialPreferences = useMemo(() => resolveInitialPreferences(seed, preferenceStorage), [preferenceStorage, seed]);
   const [view, setView] = useState<View>("overview");
   const renderedView = view;
   const activeViewRef = useRef<View>(view);
   const detailReturnViewRef = useRef<View>("overview");
   const [detailReturnView, setDetailReturnView] = useState<View>("overview");
   const [mountedViews, setMountedViews] = useState<Set<View>>(() => new Set<View>(["overview"]));
-  const [watchlist, setWatchlist] = useState<SearchSecurity[]>(() => seed.watchlist ?? []);
-  const [range, setRange] = useState<RangeKey>("ALL");
-  const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
-  const [dark, setDark] = useState(false);
-  const [accentTheme, setAccentTheme] = useState<AccentTheme>("graphite");
+  const [watchlist, setWatchlist] = useState<SearchSecurity[]>(initialPreferences.watchlist);
+  const [range, setRange] = useState<RangeKey>(initialPreferences.range);
+  const [customRange, setCustomRange] = useState<CustomDateRange | null>(initialPreferences.customRange);
+  const [dark, setDark] = useState(initialPreferences.dark);
+  const [accentTheme, setAccentTheme] = useState<AccentTheme>(initialPreferences.accentTheme);
   const [tradeOpen, setTradeOpen] = useState(false);
   const [transactions, setTransactions] = useState<Seed["transactions"]>(seed.transactions);
   const [accounts, setAccounts] = useState<Seed["accounts"]>(seed.accounts);
-  const [summaryBrokerFilter, setSummaryBrokerFilter] = useState("ALL");
-  const [summaryMarketFilter, setSummaryMarketFilter] = useState<PortfolioFilter>("ALL");
+  const [summaryBrokerFilter, setSummaryBrokerFilter] = useState(initialPreferences.summaryBrokerFilter);
+  const [summaryMarketFilter, setSummaryMarketFilter] = useState<PortfolioFilter>(initialPreferences.summaryMarketFilter);
   const calculationBrokerFilter = useDeferredValue(summaryBrokerFilter);
   const calculationMarketFilter = useDeferredValue(summaryMarketFilter);
-  const [dividendMarketFilter, setDividendMarketFilter] = useState<PortfolioFilter>("ALL");
-  const [dividendDisplayCurrency, setDividendDisplayCurrency] = useState<DisplayCurrency>((seed.portfolio.baseCurrency === "USD" ? "USD" : "JPY"));
-  const [dividendPeriod, setDividendPeriod] = useState<string>("ALL");
-  const [dividendTaxMode, setDividendTaxMode] = useState<"gross" | "net">("gross");
-  const [dividendActiveTab, setDividendActiveTab] = useState<"securities" | "history">("securities");
-  const [summaryAmountsVisible, setSummaryAmountsVisible] = useState(true);
-  const [hideScrollbar, setHideScrollbar] = useState(true);
-  const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>((seed.portfolio.baseCurrency === "USD" ? "USD" : "JPY"));
+  const [dividendMarketFilter, setDividendMarketFilter] = useState<PortfolioFilter>(initialPreferences.dividendMarketFilter);
+  const [dividendDisplayCurrency, setDividendDisplayCurrency] = useState<DisplayCurrency>(initialPreferences.dividendDisplayCurrency);
+  const [dividendPeriod, setDividendPeriod] = useState<string>(initialPreferences.dividendPeriod);
+  const [dividendTaxMode, setDividendTaxMode] = useState<"gross" | "net">(initialPreferences.dividendTaxMode);
+  const [dividendActiveTab, setDividendActiveTab] = useState<"securities" | "history">(initialPreferences.dividendActiveTab);
+  const [summaryAmountsVisible, setSummaryAmountsVisible] = useState(initialPreferences.summaryAmountsVisible);
+  const [hideScrollbar, setHideScrollbar] = useState(initialPreferences.hideScrollbar);
+  const [displayCurrency, setDisplayCurrency] = useState<DisplayCurrency>(initialPreferences.displayCurrency);
 
   const [customSecurities, setCustomSecurities] = useState<SearchSecurity[]>([]);
   const [toast, setToast] = useState("");
@@ -351,24 +451,24 @@ function DashboardContents({
   const [distributionCacheSavedAt, setDistributionCacheSavedAt] = useState("");
   const [quoteStatus, setQuoteStatus] = useState<MarketStatus>(initialMarketSnapshot?.quotes.length ? initialMarketSnapshot.refresh.status === "ready" ? "ready" : "partial" : "loading");
   const [benchmarkStatus, setBenchmarkStatus] = useState<MarketStatus>(initialMarketSnapshot?.benchmarks.length ? "ready" : "loading");
-  const [marketStartupReady, setMarketStartupReady] = useState(Boolean(initialMarketSnapshot?.quotes.length));
+  const [marketStartupReady, setMarketStartupReady] = useState(true);
   const [startupCoverVisible, setStartupCoverVisible] = useState(false);
   const [startupCoverExiting, setStartupCoverExiting] = useState(true);
   const [historyStatus, setHistoryStatus] = useState<MarketStatus>("idle");
   const [historyRequested, setHistoryRequested] = useState(false);
   const [historyQuality, setHistoryQuality] = useState<HistoryQuality | null>(null);
   const [historyCacheMeta, setHistoryCacheMeta] = useState<HistoryCacheMeta | null>(null);
-  const [acknowledgedActionIds, setAcknowledgedActionIds] = useState<string[]>([]);
-  const [readNotificationIds, setReadNotificationIds] = useState<string[]>([]);
-  const [notificationHistory, setNotificationHistory] = useState<PortfolioNotification[]>([]);
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [updateFrequency, setUpdateFrequency] = useState<UpdateFrequency>(10);
-  const [priceAlertThreshold, setPriceAlertThreshold] = useState<number>(DEFAULT_PRICE_ALERT_PERCENT);
+  const [acknowledgedActionIds, setAcknowledgedActionIds] = useState<string[]>(initialPreferences.acknowledgedActionIds);
+  const [readNotificationIds, setReadNotificationIds] = useState<string[]>(initialPreferences.readNotificationIds);
+  const [notificationHistory, setNotificationHistory] = useState<PortfolioNotification[]>(initialPreferences.notificationHistory);
+  const [autoRefresh, setAutoRefresh] = useState(initialPreferences.autoRefresh);
+  const [updateFrequency, setUpdateFrequency] = useState<UpdateFrequency>(initialPreferences.updateFrequency);
+  const [priceAlertThreshold, setPriceAlertThreshold] = useState<number>(initialPreferences.priceAlertThreshold);
   const [marketError, setMarketError] = useState("");
   const [historyError, setHistoryError] = useState("");
   const [quoteHealth, setQuoteHealth] = useState<FetchHealth>({ requested: 0, returned: 0, failedIds: [], fallbackIds: [], updatedAt: null });
   const [historyHealth, setHistoryHealth] = useState<FetchHealth>({ requested: 0, returned: 0, failedIds: [], fallbackIds: [], updatedAt: null });
-  const [hydrated, setHydrated] = useState(false);
+  const [hydrated, setHydrated] = useState(true);
 
   const lastLocalPrefTimestampRef = useRef<number>(0);
   const localPrefTimestampsRef = useRef<Partial<Record<keyof UserPreferences, number>>>({});
@@ -3458,9 +3558,6 @@ function DashboardContents({
       if (idleId != null) idleWindow.cancelIdleCallback?.(idleId);
     };
   }, [hydrated, marketStartupReady]);
-
-  if (!hydrated) return <AppLoadingScreen label="表示設定を読み込み中" detail="テーマとポートフォリオ設定を反映しています" />;
-  if (!marketStartupReady) return <AppLoadingScreen label="市場データを取得中" detail="保有銘柄の価格と主要指標を更新しています" />;
 
   return <>
     <div

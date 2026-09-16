@@ -2,15 +2,9 @@
 
 import { CLIENT_BUILD_ID, clientErrorCode, isReleaseMismatchError, reloadClient, removeLegacyShellWorker, repairClientShell } from "@/lib/client-recovery";
 import type { MarketSessionStatus } from "@/lib/market-session";
-import AppLoadingScreen from "@/components/app-loading-screen";
-import dynamic from "next/dynamic";
+import AppBootstrap from "@/components/app-bootstrap";
 import { Component, type ErrorInfo, type ReactNode, useEffect, useState } from "react";
 import { timeoutSignal } from "@/lib/operation-deadline";
-
-const AppBootstrap = dynamic(() => import("@/components/app-bootstrap"), {
-  ssr: false,
-  loading: () => <AppLoadingScreen label="アプリ画面を準備中" detail="暗号化データと最新の画面を読み込んでいます" />,
-});
 
 class ClientErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean; code: string; releaseMismatch: boolean; error: Error | null }> {
   state = { failed: false, code: "CLIENT_RENDER", releaseMismatch: false, error: null as Error | null };
