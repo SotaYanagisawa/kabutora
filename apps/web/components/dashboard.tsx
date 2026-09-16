@@ -318,7 +318,7 @@ function resolveInitialPreferences(seed: Seed, preferenceStorage: Storage) {
   const autoRefresh = cloudPreferences?.autoRefresh ?? (savedAutoRefresh !== "false");
   const updateFrequency = (cloudPreferences?.updateFrequency ?? (savedUpdateFrequency && [10, 15, 30, 60].includes(savedUpdateFrequency) ? savedUpdateFrequency : 15)) as UpdateFrequency;
   const priceAlertThreshold = cloudPreferences?.priceAlertThreshold ?? (savedPriceAlertThreshold && (PRICE_ALERT_THRESHOLDS as readonly number[]).includes(savedPriceAlertThreshold) ? savedPriceAlertThreshold : DEFAULT_PRICE_ALERT_PERCENT);
-  const displayCurrency = cloudPreferences?.displayCurrency ?? (savedDisplayCurrency && ["JPY", "USD", "NATIVE"].includes(savedDisplayCurrency) ? savedDisplayCurrency : "JPY");
+  const displayCurrency = cloudPreferences?.displayCurrency ?? (savedDisplayCurrency && ["JPY", "USD", "NATIVE"].includes(savedDisplayCurrency) ? savedDisplayCurrency : (seed.portfolio.baseCurrency === "USD" ? "USD" : "JPY"));
   const summaryMarketFilter = cloudPreferences?.summaryMarketFilter ?? (savedSummaryMarketFilter && ["ALL", "JP", "US", "FUNDS_INDEXES"].includes(savedSummaryMarketFilter) ? savedSummaryMarketFilter : "ALL");
   const summaryBrokerFilter = cloudPreferences?.summaryBrokerFilter ?? (savedSummaryBrokerFilter || "ALL");
   const dividendMarketFilter = cloudPreferences?.dividendMarketFilter ?? (savedDividendMarketFilter && ["ALL", "JP", "US", "FUNDS_INDEXES"].includes(savedDividendMarketFilter) ? savedDividendMarketFilter : "ALL");
