@@ -88,6 +88,8 @@ Keep shared dashboard object shapes in `types.ts`. Keep leaf-only props beside t
 | One library module | `pnpm test <matching-test-file>` |
 | Market server/provider code | `pnpm test:market` |
 | Search UI | `pnpm test:e2e:search` |
+| Holdings grid UI | `pnpm exec playwright test apps/web/e2e/holdings-grid.spec.ts` |
+| Firestore security rules | `pnpm test:rules` |
 | Client/edge privacy | `pnpm verify:privacy` |
 | All types and unit tests | `pnpm check` |
 | Full browser matrix | `pnpm exec playwright test` |

@@ -10,8 +10,10 @@ import {
   matchSecurityId,
   reconstructPortfolioHistory,
   reconstructSecurityHistory,
+  type CorporateAction,
   type DistributionEvent,
   type LedgerTransaction,
+  type MarketBar,
   type SecurityQuote,
 } from "./index";
 
@@ -600,13 +602,13 @@ describe("transaction position snapshots", () => {
   it("calculates dividend income accurately across Japanese stocks, US stocks, US ETFs, and mutual funds", () => {
     const trades: LedgerTransaction[] = [
       // JP Stock (Toyota): 100 shares bought 2025-01-10
-      { id: "t-jp", accountId: "acc-tokyo", securityId: "sec-7203-xtks", type: "BUY", tradeDate: "2025-01-10", quantity: "100", pricePerShare: "3000", tradeCurrency: "JPY", grossAmount: "300000" },
+      { id: "t-jp", accountId: "acc-tokyo", securityId: "sec-7203-xtks", type: "BUY", tradeDate: "2025-01-10", quantity: "100", pricePerShare: "3000", grossAmount: "300000" },
       // US Stock (Apple): 20 shares bought 2025-01-10
-      { id: "t-us", accountId: "acc-ny", securityId: "sec-us-aapl-xnas", type: "BUY", tradeDate: "2025-01-10", quantity: "20", pricePerShare: "200", tradeCurrency: "USD", grossAmount: "4000" },
+      { id: "t-us", accountId: "acc-ny", securityId: "sec-us-aapl-xnas", type: "BUY", tradeDate: "2025-01-10", quantity: "20", pricePerShare: "200", grossAmount: "4000" },
       // US ETF (VYM): 50 shares bought 2025-01-10
-      { id: "t-etf", accountId: "acc-ny", securityId: "sec-us-vym-arcx", type: "BUY", tradeDate: "2025-01-10", quantity: "50", pricePerShare: "120", tradeCurrency: "USD", grossAmount: "6000" },
+      { id: "t-etf", accountId: "acc-ny", securityId: "sec-us-vym-arcx", type: "BUY", tradeDate: "2025-01-10", quantity: "50", pricePerShare: "120", grossAmount: "6000" },
       // JP Mutual Fund (eMAXIS): 50,000 units bought 2025-01-10
-      { id: "t-fund", accountId: "acc-tokyo", securityId: "sec-jp-fund-0331418a", type: "BUY", tradeDate: "2025-01-10", quantity: "50000", pricePerShare: "25000", tradeCurrency: "JPY", grossAmount: "125000" },
+      { id: "t-fund", accountId: "acc-tokyo", securityId: "sec-jp-fund-0331418a", type: "BUY", tradeDate: "2025-01-10", quantity: "50000", pricePerShare: "25000", grossAmount: "125000" },
     ];
 
     const distributions: DistributionEvent[] = [

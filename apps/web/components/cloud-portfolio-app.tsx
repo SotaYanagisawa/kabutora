@@ -189,7 +189,7 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
   if (locked) return <SecureGate title="ポートフォリオはロック中" description={deviceMode === "trusted" ? "この端末に保存した解除鍵で再度開きます。" : "パスフレーズまたは復旧キーで再度開きます。"} icon={<LockKeyhole/>}>
     <button className="trade-button" onClick={() => setLocked(false)}>ポートフォリオを開く</button><button className="text-button" onClick={() => void signOut()}>ログアウト</button>
   </SecureGate>;
-  if (importEnvelope || state.needsUnlock) return <SecureGate title={importEnvelope ? "バックアップを復元" : "この端末で保管庫を解除"} description={deviceMode === "trusted" ? "パスフレーズまたは復旧キーを一度入力します。次回からこの端末で自動解除します。" : "共有端末では解除鍵やポートフォリオを保存しません。"} icon={<KeyRound/>}>
+  if (importEnvelope || state.needsUnlock) return <SecureGate title={importEnvelope ? "バックアップを復元" : "この端末で保管庫を解除"} description={importEnvelope ? "バックアップのパスフレーズまたは復旧キーを入力してください。" : (deviceMode === "trusted" ? "iPhoneなど既に開いている端末がある場合は、その端末で株トラを開くだけでGoogleアカウント連携が自動修復され、この端末でも自動的に開きます。直接解除する場合はパスフレーズまたは復旧キーを入力してください。" : "共有端末では解除鍵やポートフォリオを保存しません。")} icon={<KeyRound/>}>
     {unlockForm}<button className="text-button" onClick={() => void signOut()}>別のアカウントを使用</button>
   </SecureGate>;
   if (state.startup.stage === "recoverable-error") return <SecureGate title={`${startupLabels[state.startup.failedStage]}：接続を回復できませんでした`} icon={<LockKeyhole/>}>
@@ -253,7 +253,7 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
   );
 
   return <div className="cloud-shell" data-startup-state="ready">
-    <Dashboard key={user.uid} seed={state.seed} initialServerTimeMs={initialServerTimeMs} initialMarketSessions={initialMarketSessions} initialMarketSnapshot={market} persistenceMode="cloud" preferenceNamespace={user.uid} onTransactionsChange={save(saveTransactions)} onAccountsChange={save(saveAccounts)} onSecuritiesChange={save(saveSecurities)} onWatchlistChange={save(saveWatchlist)} onPreferencesChange={schedulePreferenceSave} onEncryptedBackup={setBackupSeed} onRestoreBackup={(file) => void importFile(file)} allowPlaintextExport={false} allowPersistentMarketCache={deviceMode === "trusted"} onLock={lock} onLogout={signOut} onStartupReady={() => performance.mark("kabutora:dashboard-interactive")}/>
+    <Dashboard key={user.uid} seed={state.seed} initialServerTimeMs={initialServerTimeMs} initialMarketSessions={initialMarketSessions} initialMarketSnapshot={market} persistenceMode="cloud" preferenceNamespace={user.uid} onTransactionsChange={save(saveTransactions)} onAccountsChange={save(saveAccounts)} onSecuritiesChange={save(saveSecurities)} onWatchlistChange={save(saveWatchlist)} onPreferencesChange={schedulePreferenceSave} onEncryptedBackup={setBackupSeed} onRestoreBackup={(file) => void importFile(file)} allowPlaintextExport={true} allowPersistentMarketCache={deviceMode === "trusted"} onLock={lock} onLogout={signOut} onStartupReady={() => performance.mark("kabutora:dashboard-interactive")}/>
     {showSyncBanner && <div className="sync-status" role="status">
       <div className="sync-status-content">
         {queue.storageUnavailable && <span>端末の保存領域を確認できません。以前の未同期データは削除されていません。保存領域の回復後に再試行してください。 </span>}

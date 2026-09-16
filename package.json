@@ -5,10 +5,10 @@
   "scripts": {
     "dev": "pnpm --filter @kabutora/web dev",
     "build": "pnpm --filter @kabutora/web build",
-    "typecheck": "pnpm --filter @kabutora/web typecheck",
-    "tc": "pnpm --filter @kabutora/web typecheck",
+    "typecheck": "pnpm --filter @kabutora/domain typecheck && pnpm --filter @kabutora/market-data typecheck && pnpm --filter @kabutora/web typecheck",
+    "tc": "pnpm typecheck",
     "check": "pnpm typecheck && pnpm test",
-    "check:full": "pnpm check && pnpm verify:privacy && pnpm exec playwright test",
+    "check:full": "pnpm check && pnpm test:rules && pnpm verify:privacy && pnpm exec playwright test",
     "test": "vitest run",
     "test:fast": "vitest run --exclude '**/vault-crypto.test.ts'",
     "test:domain": "vitest run packages/domain",

@@ -1,5 +1,5 @@
 import {
-  collection, doc, getDocFromServer, getDocsFromServer, onSnapshot, query, runTransaction, where,
+  collection, doc, getDocFromServer, getDocsFromServer, onSnapshot, query, runTransaction, setDoc, where,
   type Firestore, type Unsubscribe,
 } from "firebase/firestore";
 import { isKabutoraVaultEnvelope, type EncryptedBlock, type KabutoraVaultEnvelope } from "./vault-crypto";
@@ -18,6 +18,9 @@ export type PortfolioCloudStore = {
   subscribeVault: (uid: string, value: (value: unknown | null, fromCache: boolean) => void, error: (cause: unknown) => void) => Unsubscribe;
   subscribeAccountKey: (uid: string, value: (value: GoogleAccountVaultKey | null) => void, error: (cause: unknown) => void) => Unsubscribe;
   subscribeEvents: (uid: string, value: (events: StoredPortfolioEvent[], fromCache: boolean) => void, error: (cause: unknown) => void) => Unsubscribe;
+  saveAccountKey: (uid: string, value: GoogleAccountVaultKey) => Promise<void>;
+  saveVault: (uid: string, value: KabutoraVaultEnvelope) => Promise<void>;
+  saveGoogleProtectedVault: (uid: string, envelope: KabutoraVaultEnvelope, key: GoogleAccountVaultKey) => Promise<void>;
   saveEvent: (uid: string, id: string, value: EncryptedPortfolioEvent) => Promise<void>;
   acquireWriteLock: (uid: string, expectedRevision: number) => Promise<VaultLease>;
   releaseWriteLock: (uid: string, lease: VaultLease) => Promise<void>;
@@ -49,6 +52,26 @@ export function createFirebasePortfolioCloudStore(db: Firestore): PortfolioCloud
     },
     subscribeEvents(uid, value, error) {
       return onSnapshot(eventsQuery(uid), { includeMetadataChanges: true }, (snapshot) => value(snapshot.docs.map((item) => ({ ...item.data(), id: item.id } as StoredPortfolioEvent)), snapshot.metadata.fromCache), error);
+    },
+    async saveAccountKey(uid, value) {
+      if (value.ownerUid !== uid) throw new Error("key_owner_mismatch");
+      await deadline(setDoc(doc(db, "users", uid, "keys", "google-account"), value));
+    },
+    async saveVault(uid, value) {
+      if (value.ownerUid !== uid) throw new Error("vault_owner_mismatch");
+      await deadline(setDoc(vaultRef(uid), value));
+    },
+    async saveGoogleProtectedVault(uid, envelope, key) {
+      if (envelope.ownerUid !== uid || key.ownerUid !== uid) throw new Error("owner_mismatch");
+      await deadline(runTransaction(db, async (transaction) => {
+        const existing = await transaction.get(vaultRef(uid));
+        if (existing.exists()) {
+          const current = existing.data() as KabutoraVaultEnvelope;
+          if (envelope.revision !== current.revision + 1) throw new Error("vault_revision_changed");
+        }
+        transaction.set(vaultRef(uid), envelope);
+        transaction.set(doc(db, "users", uid, "keys", "google-account"), key);
+      }));
     },
     async saveEvent(uid, id, value) {
       if (value.ownerUid !== uid) throw new Error("event_owner_mismatch");

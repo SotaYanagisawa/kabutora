@@ -9,7 +9,18 @@ import { checkClientBoundary } from "./check-client-boundary.mjs";
 const workspace = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const clientModules = checkClientBoundary(workspace);
 const targets = process.argv.slice(2).map((value) => path.resolve(value));
-if (!targets.length) targets.push(path.join(workspace, "apps", "web", ".open-next"));
+if (!targets.length) {
+  const openNextPath = path.join(workspace, "apps", "web", ".open-next");
+  const nextPath = path.join(workspace, "apps", "web", ".next");
+  if (fs.existsSync(openNextPath)) {
+    targets.push(openNextPath);
+  } else if (fs.existsSync(nextPath)) {
+    targets.push(nextPath);
+  } else {
+    execFileSync("node", ["scripts/build-release.mjs", "cloudflare"], { cwd: workspace, stdio: "inherit" });
+    targets.push(openNextPath);
+  }
+}
 
 const marketMigrationsPath = path.join(workspace, "apps", "web", "migrations");
 const marketSchema = fs.readdirSync(marketMigrationsPath)

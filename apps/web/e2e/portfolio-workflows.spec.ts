@@ -60,7 +60,15 @@ test("fund trade drafts, accounts, edit, delete, calendar and encrypted backup p
   await expect.poll(() => saved.accounts.find((account) => account.id === created.accountId)?.archivedAt).toBeTruthy();
   await form.getByRole("button", { name: "閉じる", exact: true }).click();
   await page.getByRole("button", { name: "設定", exact: true }).click();
-  await page.getByRole("button", { name: "バックアップ", exact: true }).click();
+  await expect(page.getByRole("button", { name: "ロック", exact: true })).toHaveCount(0);
+  const backupButton = page.getByRole("button", { name: "バックアップ", exact: true });
+  await expect(backupButton).toBeVisible();
+  const backupBox = await backupButton.boundingBox();
+  const viewport = page.viewportSize();
+  if (viewport && backupBox) {
+    expect(backupBox.x + backupBox.width).toBeLessThanOrEqual(viewport.width);
+  }
+  await backupButton.click();
   await page.getByRole("button", { name: "進む", exact: true }).click();
   const passphrase = "synthetic export passphrase only";
   await page.getByLabel("暗号化パスフレーズ", { exact: true }).fill(passphrase);

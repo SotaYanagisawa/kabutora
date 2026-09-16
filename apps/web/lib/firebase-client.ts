@@ -1,7 +1,7 @@
 "use client";
 
 import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
-import { initializeAppCheck, ReCaptchaV3Provider, getToken as getAppCheckToken, type AppCheck } from "firebase/app-check";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider, ReCaptchaV3Provider, getToken as getAppCheckToken, type AppCheck } from "firebase/app-check";
 import {
   browserLocalPersistence,
   browserPopupRedirectResolver,
@@ -73,10 +73,19 @@ export function getFirebaseServices() {
     emulatorsConnected = true;
   }
   if (!emulatorMode() && !appCheck && typeof window !== "undefined" && process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY) {
-    appCheck = initializeAppCheck(firebaseApp, {
-      provider: new ReCaptchaV3Provider(process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY),
-      isTokenAutoRefreshEnabled: true,
-    });
+    try {
+      const siteKey = process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY;
+      const isV3 = process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_PROVIDER === "v3";
+      const provider = isV3
+        ? new ReCaptchaV3Provider(siteKey)
+        : new ReCaptchaEnterpriseProvider(siteKey);
+      appCheck = initializeAppCheck(firebaseApp, {
+        provider,
+        isTokenAutoRefreshEnabled: true,
+      });
+    } catch (error) {
+      console.error("Firebase App Check (reCAPTCHA) initialization failed:", error);
+    }
   }
   return { app: firebaseApp, auth: firebaseAuth, db: firestore, appCheck };
 }

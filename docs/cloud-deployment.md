@@ -22,7 +22,11 @@ flowchart LR
 1. Create a Firebase project in the [Firebase Console](https://console.firebase.google.com/).
 2. Enable **Authentication** with Google Sign-In.
 3. Enable **Cloud Firestore** in Production mode.
-4. Enable **reCAPTCHA Enterprise App Check** for your web app.
+4. Enable **reCAPTCHA Enterprise App Check** (or reCAPTCHA v3) for your web app:
+   - In Firebase Console > App Check > Apps, register your web app with **reCAPTCHA Enterprise** (recommended) or **reCAPTCHA v3**.
+   - Copy the generated site key to `NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY` in `apps/web/.env.production.local`.
+   - Set `NEXT_PUBLIC_FIREBASE_APP_CHECK_PROVIDER` to `enterprise` (default) or `v3` depending on your key type.
+   - Verify your production domain (and any preview domains) are added to the allowed domains list in Google Cloud Console (under **Security > Fraud Defense > reCAPTCHA**).
 5. Deploy Firestore security rules and composite indexes:
    ```bash
    npx firebase-tools deploy --only firestore
@@ -82,6 +86,7 @@ sequenceDiagram
 - [ ] Production URL returns `HTTP 200` with strict Content Security Policy headers.
 - [ ] Unauthenticated API requests to `/api/market/*` return `HTTP 401 Unauthorized`.
 - [ ] Authenticated requests from authorized Google UID return live quotes with `HTTP 200`.
+- [ ] App Check tokens are actively generated and verified (`X-Firebase-AppCheck`), and reCAPTCHA assessment traffic appears in Google Cloud / Firebase Console.
 - [ ] Firestore contains only encrypted ciphertext blobs (no plaintext ticker symbols or quantities).
 - [ ] D1 contains public security IDs and market values only; its schema has no transaction, account, quantity, cost-basis, balance, or portfolio fields.
 - [ ] The Queue consumer and both the `*/10 * * * *` market refresh and `* * * * *` PTS collection Cron triggers are attached to the existing `kabutora` Worker.

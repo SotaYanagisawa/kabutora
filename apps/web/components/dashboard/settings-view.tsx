@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { portfolioFilterLabel, type PortfolioFilter } from "@/lib/portfolio-filter";
 import { DEFAULT_PRICE_ALERT_PERCENT, PRICE_ALERT_THRESHOLDS } from "@/lib/portfolio-notifications";
 import type { HistoryQuality } from "@/lib/market-history";
-import { Download, LockKeyhole, LogOut, ShieldCheck } from "lucide-react";
+import { Download, LogOut, ShieldCheck } from "lucide-react";
 import { ACCENT_THEMES, APP_RELEASE_DATE, APP_VERSION, UPDATE_FREQUENCIES } from "./constants";
 import { CLIENT_BUILD_ID } from "@/lib/client-recovery";
 import { benchmarkNumber, shortDateTimeJa, timeJa } from "./helpers";
@@ -156,12 +156,6 @@ export function SettingsView({
           confirmLabel: "書き出す",
           danger: false,
         },
-        lock: {
-          title: "ロックしますか？",
-          description: "個人端末は保存した解除鍵、共有端末はパスフレーズまたは復旧キーで再度開きます。",
-          confirmLabel: "ロック",
-          danger: false,
-        },
         logout: {
           title: "ログアウトしますか？",
           description: "この端末のセッションを終了します。",
@@ -186,7 +180,6 @@ export function SettingsView({
     if (action === "encrypted-backup") onEncryptedBackup?.(seed);
     if (action === "export-csv") exportCsv();
     if (action === "export-json") exportJson();
-    if (action === "lock") void onLock?.();
     if (action === "logout") void onLogout?.();
   };
 
@@ -365,31 +358,27 @@ export function SettingsView({
             {onRestoreBackup && <label className="file-button">バックアップを復元<input type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; if (file) onRestoreBackup(file); event.target.value = ""; }}/></label>}
             {onEncryptedBackup && (
               <button className="trade-button" onClick={() => setPendingAction("encrypted-backup")}>
-                <ShieldCheck size={14} />
+                <ShieldCheck size={13} />
                 バックアップ
               </button>
             )}
             {allowPlaintextExport && (
               <>
                 <button className="secondary-button" onClick={() => setPendingAction("export-csv")}>
-                  <Download size={14} />
+                  <Download size={13} />
                   CSV
                 </button>
                 <button className="secondary-button" onClick={() => setPendingAction("export-json")}>
-                  <Download size={14} />
+                  <Download size={13} />
                   JSON
                 </button>
               </>
             )}
           </div>
-          {onLock && onLogout && (
+          {onLogout && (
             <div className="settings-session">
-              <button type="button" className="secondary-button" onClick={() => setPendingAction("lock")}>
-                <LockKeyhole size={14} />
-                ロック
-              </button>
               <button type="button" className="danger-button" onClick={() => setPendingAction("logout")}>
-                <LogOut size={14} />
+                <LogOut size={13} />
                 ログアウト
               </button>
             </div>

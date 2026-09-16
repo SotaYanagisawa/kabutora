@@ -229,6 +229,7 @@ export const formatWidgetFetchedTime = (
   stockTz?: string,
   stockCurrency?: string,
   stockCountry?: string,
+  currentTime?: number | Date | null,
 ) => {
   const ts = marketTimestamp || fetchedAt;
   if (!ts) return null;
@@ -238,7 +239,7 @@ export const formatWidgetFetchedTime = (
   const tz = exchangeTimeZone(stockMic, stockTz, stockCurrency, stockCountry);
   const tzCode = exchangeTimeZoneCode(d, tz);
 
-  const now = new Date();
+  const now = currentTime ? new Date(currentTime) : new Date();
   const sameDay =
     d.toLocaleDateString("en-CA", { timeZone: tz }) ===
     now.toLocaleDateString("en-CA", { timeZone: tz });

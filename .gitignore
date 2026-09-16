@@ -25,3 +25,4 @@ firestore-debug.log
 *.tsbuildinfo
 .firebase
 .pnpm-store
+tmp/

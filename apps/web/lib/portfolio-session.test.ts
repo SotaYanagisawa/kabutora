@@ -27,6 +27,9 @@ function fixture(envelope: KabutoraVaultEnvelope | null, events: StoredPortfolio
     subscribeVault: (_uid, listener) => { vaultListener = listener; if (!stalled) queueMicrotask(() => listener(vault, false)); return () => {}; },
     subscribeEvents: (_uid, listener) => { eventListener = listener; queueMicrotask(() => listener(deltas, false)); return () => {}; },
     subscribeAccountKey: (_uid, listener) => { queueMicrotask(() => listener(keyRecord ? { format: "kabutora-google-account-key", version: 1, ownerUid: "u1", keyId: "old-key", encodedKey: legacy.accountKey, createdAt: "", updatedAt: "" } : null)); return () => {}; },
+    saveAccountKey: vi.fn(async () => {}),
+    saveVault: vi.fn(async () => {}),
+    saveGoogleProtectedVault: vi.fn(async () => {}),
     saveEvent: async (_uid, id, event) => {
       if (receipts.has(id)) return;
       if (vault?.version === 2 && event.keyId !== vault.keyId) throw new Error("obsolete");
@@ -97,6 +100,7 @@ describe("encrypted cloud startup and recovery", () => {
     expect(app.state?.seed?.transactions).toEqual(seed.transactions);
   });
   it("migrates only after local recovery verification, preserving encrypted pending changes", async () => {
+    vi.stubEnv("NEXT_PUBLIC_KABUTORA_RECOVERY_MIGRATION", "enabled");
     const account = { ...seed.accounts[0]!, name: "offline account edit", version: 2, updatedAt: "2026-09-01T00:00:00Z" };
     await enqueuePendingPortfolioEvent("u1", "pending", { ownerUid: "u1", keyId: "old-key", payload: await encryptVaultRecord(legacy.dataKey, { kind: "account", value: account, clientSeq: Date.parse(account.updatedAt) }) });
     const app = fixture(legacy.envelope, [], true);
@@ -135,6 +139,7 @@ describe("encrypted cloud startup and recovery", () => {
     expect(app.state?.seed?.transactions).toEqual(seed.transactions);
   });
   it("resumes a locally verified generation after interrupted activation", async () => {
+    vi.stubEnv("NEXT_PUBLIC_KABUTORA_RECOVERY_MIGRATION", "enabled");
     const first = fixture(legacy.envelope, [], true, "trusted");
     await vi.waitFor(() => expect(first.state?.startup.stage).toBe("enrollment"));
     const prepared = await first.session.prepareRecovery(passphrase);
@@ -158,5 +163,34 @@ describe("encrypted cloud startup and recovery", () => {
     expect(app.state?.seed).toBeNull();
     await expect(app.session.save([{ kind: "preferences", value: { theme: "dark" } }])).rejects.toThrow();
     expect(app.saved).toEqual([]);
+  });
+  it("authenticates and unlocks directly with Google account key without passphrase or recovery key", async () => {
+    const app = fixture(legacy.envelope, [], true);
+    await vi.waitFor(() => expect(app.state?.startup.stage).toBe("ready"));
+    expect(app.state?.needsUnlock).toBe(false);
+    expect(app.state?.seed?.transactions).toEqual(seed.transactions);
+    expect(app.state?.seed?.accounts).toEqual(seed.accounts);
+  });
+  it("automatically syncs Google account key when active decrypted seed is present and account key is missing", async () => {
+    // Trusted device with key in IndexedDB but no account key in Firestore
+    vi.mocked(loadTrustedDeviceKey).mockResolvedValue(legacy.dataKey);
+    const app = fixture(legacy.envelope, [], false, "trusted");
+    await vi.waitFor(() => expect(app.state?.startup.stage).toBe("ready"));
+    expect(app.state?.needsUnlock).toBe(false);
+    // Should have called saveGoogleProtectedVault or saveAccountKey to publish the Google account key
+    await vi.waitFor(() => expect(
+      (app.store.saveGoogleProtectedVault as ReturnType<typeof vi.fn>).mock.calls.length +
+      (app.store.saveAccountKey as ReturnType<typeof vi.fn>).mock.calls.length
+    ).toBeGreaterThanOrEqual(1));
+  });
+  it("allows importing and restoring a backup even when the cloud vault is initially locked", async () => {
+    const app = fixture(modern.envelope);
+    await vi.waitFor(() => expect(app.state?.needsUnlock).toBe(true));
+    // Create an encrypted backup
+    const backup = await createEncryptedVault(seed, "temporary-backup-passphrase-16chars", "u1");
+    // Unlock using the backup envelope
+    await app.session.unlock("temporary-backup-passphrase-16chars", "passphrase", backup.envelope);
+    expect(app.state?.needsUnlock).toBe(false);
+    expect(app.state?.seed?.transactions).toEqual(seed.transactions);
   });
 });

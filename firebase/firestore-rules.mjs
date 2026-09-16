@@ -33,7 +33,9 @@ try {
   await no(getDoc(doc(other, "users", uid, "vaults", "default")));
   await no(getDoc(doc(anon, "users", uid, "vaults", "default")));
   await no(setDoc(vault, legacy));
-  await no(setDoc(key, legacyKey));
+  await ok(setDoc(key, legacyKey));
+  await no(setDoc(doc(other, "users", uid, "keys", "google-account"), legacyKey));
+  await no(setDoc(key, { ...legacyKey, encodedKey: "short" }));
   await environment.withSecurityRulesDisabled(async (context) => {
     await setDoc(doc(context.firestore(), "users", uid, "vaults", "default"), legacy);
     await setDoc(doc(context.firestore(), "users", uid, "keys", "google-account"), legacyKey);
@@ -64,7 +66,7 @@ try {
   await ok(getDoc(vault));
   if ((await getDoc(key)).exists()) throw new Error("raw_key_was_not_removed");
   checks++;
-  await no(setDoc(key, legacyKey));
+  await ok(setDoc(key, { ...legacyKey, keyId: next.keyId }));
   await no(setDoc(vault, { ...legacy, revision: 3 }));
   await no(setDoc(doc(db, "users", uid, "events", "old-generation"), { ownerUid: uid, keyId: legacyKey.keyId, payload: block }));
   await ok(setDoc(doc(db, "users", uid, "events", "new-generation"), { ownerUid: uid, keyId: next.keyId, payload: block }));

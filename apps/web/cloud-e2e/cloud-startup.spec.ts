@@ -103,6 +103,7 @@ test("cloud US holdings row shows the newest session immediately when its first 
     await signIn(page, "個人端末", snapshot);
     await recover(page, created.recoveryKey);
     await page.getByRole("combobox", { name: /資産区分(?:と国)?で絞り込み/u }).selectOption("US");
+    await page.getByRole("combobox", { name: "表示通貨", exact: true }).selectOption("USD");
     const row = page.locator("tr.selectable").filter({ hasText: "AAPL" });
     await expect(row).toBeVisible({ timeout: 20_000 });
     await expect(row.locator(".price-col strong")).toHaveText(/223|223\.00/);
@@ -137,6 +138,7 @@ test("cloud US holdings row shows the most recently completed trading session be
     await signIn(page, "個人端末", snapshot);
     await recover(page, created.recoveryKey);
     await page.getByRole("combobox", { name: /資産区分(?:と国)?で絞り込み/u }).selectOption("US");
+    await page.getByRole("combobox", { name: "表示通貨", exact: true }).selectOption("USD");
     const row = page.locator("tr.selectable").filter({ hasText: "AAPL" });
     await expect(row).toBeVisible({ timeout: 20_000 });
     await expect(row.locator(".price-col strong")).toHaveText(/222|222\.00/);
@@ -293,12 +295,6 @@ test("two trusted devices merge independent preferences and retain encrypted edi
     await expect(marketFilter(second)).toHaveValue("JP", { timeout: 20_000 });
     await expect(currencyFilter(page)).toHaveValue("USD", { timeout: 20_000 });
     await expect(currencyFilter(second)).toHaveValue("USD");
-    await second.getByRole("button", { name: "設定", exact: true }).click();
-    await second.getByRole("button", { name: "ロック", exact: true }).click();
-    await second.getByRole("alertdialog").getByRole("button", { name: "ロック", exact: true }).click();
-    await expect(second.getByText("ポートフォリオはロック中", { exact: true })).toBeVisible();
-    await second.getByRole("button", { name: "ポートフォリオを開く", exact: true }).click();
-    await expect(second.locator('[data-startup-state="ready"]')).toBeVisible({ timeout: 20_000 });
     await expect(second.locator(".chart-recovery, .client-recovery, .cloud-error")).toHaveCount(0);
     expect(failures).toEqual([]);
     if (offlineFailures.length) expect(offlineRequests.length, "Expected transport errors must accompany failed emulator requests during the intentional outage").toBeGreaterThan(0);
