@@ -44,7 +44,7 @@ import { dynamicChartDomain } from "@/lib/chart-domain";
 import { derivePortfolioNotifications, mergePortfolioNotifications, DEFAULT_PRICE_ALERT_PERCENT, PRICE_ALERT_THRESHOLDS, type ExternalMarketNotice, type PortfolioNotification } from "@/lib/portfolio-notifications";
 import { portfolioMarketSessions, selectReliableMarketSessions, type MarketSessionStatus } from "@/lib/market-session";
 import { resolveMarketClock, trustedMarketClockAnchor, type TrustedMarketClockAnchor } from "@/lib/market-clock";
-import { latestIntradaySessionBars, marketDateKey, marketDateTimeLabel, marketSessionDateKey, marketTimeLabel, recentIntradaySessionBars, sparkline24HourBars, sparseIntradayTimeTicks, trailingHours } from "@/lib/chart-presentation";
+import { latestIntradaySessionBars, marketDateKey, marketDateTimeLabel, marketSessionDateKey, marketTimeLabel, recentIntradaySessionBars, sanitizeDatedPoints, sparkline24HourBars, sparseIntradayTimeTicks, trailingHours } from "@/lib/chart-presentation";
 import { calendarDateLabelJa, localDateInputValue, shiftCalendarMonths } from "@/lib/calendar-time";
 import { compactNumber } from "@/lib/compact-number";
 import { companyDisplayName, companyLegalName } from "@/lib/company-name";
@@ -2872,7 +2872,7 @@ function DashboardContents({
     for (const holding of holdings) {
       const quote = (holding.security as { quote?: MarketQuote | RemoteQuote } | undefined)?.quote;
       const securityBars = intradayBySecurity.get(holding.securityId) ?? [];
-      const startingPrice = String(securityBars.length ? securityBars[0].price : quote?.previousRegularClose ?? holding.currentPrice ?? "0");
+      const startingPrice = String(securityBars.length ? securityBars[0].price : holding.currentPrice ?? quote?.previousRegularClose ?? "0");
       const unit = securityPriceUnit(holding.security);
       const openingHoldingValue = new Decimal(holding.quantity).mul(startingPrice).div(unit);
       holdingValues.set(holding.securityId, openingHoldingValue);
@@ -2900,7 +2900,7 @@ function DashboardContents({
       }
       points.push({ date: timestamp, value: portfolioValue.toNumber(), dividendAdjustedValue: portfolioValue.plus(cumulativeDividends).toNumber(), capital: Number(activeSummary.netDeposits) });
     }
-    return points;
+    return sanitizeDatedPoints(points, "value");
   }, [activeSummary.costBasis, activeSummary.netDeposits, summaryDividendSummary.totalIncome, holdings, intradayBySecurity]);
 
   const portfolioHistoryByRange = useMemo(() => {

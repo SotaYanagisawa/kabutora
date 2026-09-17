@@ -88,9 +88,9 @@ function sanitizeHistoryBars(
       const ratioNext = pCurr / pNext;
       const neighborRatio = pNext / pPrev;
 
-      const neighborsConsistent = neighborRatio >= 0.4 && neighborRatio <= 2.5;
-      const isIsolatedDip = neighborsConsistent && ratioPrev <= 0.55 && ratioNext <= 0.55;
-      const isIsolatedSpike = neighborsConsistent && ratioPrev >= 1.8 && ratioNext >= 1.8;
+      const neighborsConsistent = neighborRatio >= 0.5 && neighborRatio <= 2.0;
+      const isIsolatedDip = neighborsConsistent && ratioPrev <= 0.65 && ratioNext <= 0.65;
+      const isIsolatedSpike = neighborsConsistent && ratioPrev >= 1.5 && ratioNext >= 1.5;
 
       if (isIsolatedDip || isIsolatedSpike) {
         const tPrev = new Date(`${prev.date}T00:00:00Z`).getTime();
@@ -106,6 +106,52 @@ function sanitizeHistoryBars(
           curr.adjustedClose = String(Math.round(aRepaired * 10000) / 10000);
         }
         repairedCount += 1;
+      }
+    }
+
+    // Pass 1b: Two-bar consecutive isolated anomalies
+    for (let i = 1; i < n - 2; i += 1) {
+      const prev = currentBars[i - 1];
+      const curr1 = currentBars[i];
+      const curr2 = currentBars[i + 1];
+      const next = currentBars[i + 2];
+
+      const pPrev = Number(prev.close);
+      const pCurr1 = Number(curr1.close);
+      const pCurr2 = Number(curr2.close);
+      const pNext = Number(next.close);
+      if (!Number.isFinite(pPrev) || !Number.isFinite(pCurr1) || !Number.isFinite(pCurr2) || !Number.isFinite(pNext) || pPrev <= 0 || pNext <= 0) continue;
+
+      const tCurr1 = new Date(`${curr1.date}T00:00:00Z`).getTime();
+      const tCurr2 = new Date(`${curr2.date}T00:00:00Z`).getTime();
+      if (hasSplitNear(securityId, tCurr1) || hasSplitNear(securityId, tCurr2)) continue;
+
+      const neighborRatio = pNext / pPrev;
+      const neighborsConsistent = neighborRatio >= 0.5 && neighborRatio <= 2.0;
+      const areBothDips = neighborsConsistent &&
+        pCurr1 / pPrev <= 0.65 && pCurr1 / pNext <= 0.65 &&
+        pCurr2 / pPrev <= 0.65 && pCurr2 / pNext <= 0.65;
+      const areBothSpikes = neighborsConsistent &&
+        pCurr1 / pPrev >= 1.5 && pCurr1 / pNext >= 1.5 &&
+        pCurr2 / pPrev >= 1.5 && pCurr2 / pNext >= 1.5;
+
+      if (areBothDips || areBothSpikes) {
+        const tPrev = new Date(`${prev.date}T00:00:00Z`).getTime();
+        const tNext = new Date(`${next.date}T00:00:00Z`).getTime();
+        const span = tNext - tPrev;
+        if (span > 0) {
+          const alpha1 = Math.max(0, Math.min(1, (tCurr1 - tPrev) / span));
+          const alpha2 = Math.max(0, Math.min(1, (tCurr2 - tPrev) / span));
+          curr1.close = String(Math.round((pPrev + alpha1 * (pNext - pPrev)) * 10000) / 10000);
+          curr2.close = String(Math.round((pPrev + alpha2 * (pNext - pPrev)) * 10000) / 10000);
+          if (curr1.adjustedClose != null) {
+            const aPrev = prev.adjustedClose ? Number(prev.adjustedClose) : pPrev;
+            const aNext = next.adjustedClose ? Number(next.adjustedClose) : pNext;
+            curr1.adjustedClose = String(Math.round((aPrev + alpha1 * (aNext - aPrev)) * 10000) / 10000);
+            curr2.adjustedClose = String(Math.round((aPrev + alpha2 * (aNext - aPrev)) * 10000) / 10000);
+          }
+          repairedCount += 2;
+        }
       }
     }
 
@@ -125,9 +171,9 @@ function sanitizeHistoryBars(
       if (hasSplitNear(securityId, tCurr)) continue;
 
       const aNeighborRatio = aNext / aPrev;
-      const aNeighborsConsistent = aNeighborRatio >= 0.4 && aNeighborRatio <= 2.5;
-      const isAdjDip = aNeighborsConsistent && aCurr / aPrev <= 0.55 && aCurr / aNext <= 0.55;
-      const isAdjSpike = aNeighborsConsistent && aCurr / aPrev >= 1.8 && aCurr / aNext >= 1.8;
+      const aNeighborsConsistent = aNeighborRatio >= 0.5 && aNeighborRatio <= 2.0;
+      const isAdjDip = aNeighborsConsistent && aCurr / aPrev <= 0.65 && aCurr / aNext <= 0.65;
+      const isAdjSpike = aNeighborsConsistent && aCurr / aPrev >= 1.5 && aCurr / aNext >= 1.5;
 
       if (isAdjDip || isAdjSpike) {
         const tPrev = new Date(`${prev.date}T00:00:00Z`).getTime();
@@ -149,7 +195,7 @@ function sanitizeHistoryBars(
 
       if (Number.isFinite(pLast) && Number.isFinite(pSecondLast) && pSecondLast > 0 && !hasSplitNear(securityId, tLast)) {
         const tailRatio = pLast / pSecondLast;
-        if (tailRatio <= 0.35 || tailRatio >= 3.0) {
+        if (tailRatio <= 0.65 || tailRatio >= 1.50) {
           last.close = secondLast.close;
           if (last.adjustedClose != null && secondLast.adjustedClose != null) {
             last.adjustedClose = secondLast.adjustedClose;
@@ -164,8 +210,8 @@ function sanitizeHistoryBars(
       const pSecond = Number(second.close);
       const tFirst = new Date(`${first.date}T00:00:00Z`).getTime();
       if (Number.isFinite(pFirst) && Number.isFinite(pSecond) && pFirst > 0 && !hasSplitNear(securityId, tFirst)) {
-        const leadRatio = pSecond / pFirst;
-        if (leadRatio >= 4.0 || leadRatio <= 0.25) {
+        const leadRatio = pFirst / pSecond;
+        if (leadRatio <= 0.65 || leadRatio >= 1.50) {
           first.close = second.close;
           if (first.adjustedClose != null && second.adjustedClose != null) {
             first.adjustedClose = second.adjustedClose;

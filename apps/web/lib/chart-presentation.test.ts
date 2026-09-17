@@ -14,6 +14,7 @@ import {
   sparkline24HourBars,
   sparseIntradayTimeTicks,
   trailingHours,
+  sanitizeDatedPoints,
 } from "./chart-presentation";
 
 describe("chart presentation", () => {
@@ -669,6 +670,39 @@ describe("chart presentation", () => {
 
       const jpTimestamp = "2026-09-15T06:00:00.000Z";
       expect(marketTimeWithZoneLabel(jpTimestamp, "XTKS", undefined, "JPY")).toBe("15:00 JST");
+    });
+  });
+
+  describe("sanitizeDatedPoints", () => {
+    it("detects and repairs isolated dip in performance value points", () => {
+      const points = [
+        { date: "2026-09-15T10:00:00.000Z", value: 1000000, dividendAdjustedValue: 1000000 },
+        { date: "2026-09-15T10:05:00.000Z", value: 100000, dividendAdjustedValue: 100000 }, // 90% plunge
+        { date: "2026-09-15T10:10:00.000Z", value: 1020000, dividendAdjustedValue: 1020000 },
+      ];
+      const sanitized = sanitizeDatedPoints(points, "value");
+      expect(sanitized[1].value).toBe(1010000);
+      expect(sanitized[1].dividendAdjustedValue).toBe(1010000);
+    });
+
+    it("detects and repairs isolated dip in stock price points", () => {
+      const points = [
+        { date: "2026-09-15", price: 3000 },
+        { date: "2026-09-16", price: 300 }, // 90% plunge
+        { date: "2026-09-17", price: 3020 },
+      ];
+      const sanitized = sanitizeDatedPoints(points, "price");
+      expect(sanitized[1].price).toBe(3010);
+    });
+
+    it("guards against trailing edge drop", () => {
+      const points = [
+        { date: "2026-09-15", price: 3000 },
+        { date: "2026-09-16", price: 3010 },
+        { date: "2026-09-17", price: 300 }, // 90% plunge at tail
+      ];
+      const sanitized = sanitizeDatedPoints(points, "price");
+      expect(sanitized[2].price).toBe(3010);
     });
   });
 });

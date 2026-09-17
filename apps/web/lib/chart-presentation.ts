@@ -22,6 +22,59 @@ export function trailingHours<T extends DatedPoint>(points: T[], hours: number) 
   });
 }
 
+export function sanitizeDatedPoints<T extends DatedPoint & { value?: number; price?: number; dividendAdjustedValue?: number }>(
+  points: T[],
+  valueKey: "value" | "price" = "value",
+): T[] {
+  if (points.length < 3) return points;
+  const result = points.map((p) => ({ ...p }));
+  const n = result.length;
+
+  for (let i = 1; i < n - 1; i += 1) {
+    const prevVal = Number(result[i - 1][valueKey]);
+    const currVal = Number(result[i][valueKey]);
+    const nextVal = Number(result[i + 1][valueKey]);
+    if (!Number.isFinite(prevVal) || !Number.isFinite(currVal) || !Number.isFinite(nextVal) || prevVal <= 0 || nextVal <= 0) continue;
+
+    const neighborRatio = nextVal / prevVal;
+    if (neighborRatio >= 0.5 && neighborRatio <= 2.0) {
+      const isDip = currVal / prevVal <= 0.70 && currVal / nextVal <= 0.70;
+      const isSpike = currVal / prevVal >= 1.45 && currVal / nextVal >= 1.45;
+      if (isDip || isSpike) {
+        const tPrev = Date.parse(result[i - 1].date);
+        const tCurr = Date.parse(result[i].date);
+        const tNext = Date.parse(result[i + 1].date);
+        const alpha = tNext > tPrev ? Math.max(0, Math.min(1, (tCurr - tPrev) / (tNext - tPrev))) : 0.5;
+        const repaired = prevVal + alpha * (nextVal - prevVal);
+        result[i][valueKey] = (Math.round(repaired * 10000) / 10000) as unknown as T[typeof valueKey];
+
+        if (result[i].dividendAdjustedValue != null && result[i - 1].dividendAdjustedValue != null && result[i + 1].dividendAdjustedValue != null) {
+          const dPrev = Number(result[i - 1].dividendAdjustedValue);
+          const dNext = Number(result[i + 1].dividendAdjustedValue);
+          result[i].dividendAdjustedValue = (dPrev + alpha * (dNext - dPrev)) as unknown as T["dividendAdjustedValue"];
+        }
+      }
+    }
+  }
+
+  // Edge check (trailing edge)
+  if (n >= 2) {
+    const lastVal = Number(result[n - 1][valueKey]);
+    const secondLastVal = Number(result[n - 2][valueKey]);
+    if (Number.isFinite(lastVal) && Number.isFinite(secondLastVal) && secondLastVal > 0) {
+      const tailRatio = lastVal / secondLastVal;
+      if (tailRatio <= 0.65 || tailRatio >= 1.50) {
+        result[n - 1][valueKey] = secondLastVal as unknown as T[typeof valueKey];
+        if (result[n - 1].dividendAdjustedValue != null && result[n - 2].dividendAdjustedValue != null) {
+          result[n - 1].dividendAdjustedValue = result[n - 2].dividendAdjustedValue;
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 export function sparseIntradayTimeTicks<T extends { timestamp: string }>(points: T[]): string[] {
   if (!points.length) return [];
   const lastIndex = points.length - 1;

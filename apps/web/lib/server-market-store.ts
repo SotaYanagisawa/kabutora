@@ -1,5 +1,6 @@
 import { canonicalDomainSecurityId, type CorporateAction, type DistributionEvent, type IntradayBar, type MarketBar } from "@kabutora/domain";
 import { inspectMarketHistory } from "./market-history";
+import { sanitizeIntradayBars } from "./intraday-cache";
 import { portfolioMarketSessions } from "./market-session";
 import { exchangeTimeZone, latestIntradaySessionBars, marketSessionDateKey, recentIntradaySessionBars, sparkline24HourBars } from "./chart-presentation";
 import { readLatestJapannextPtsBars } from "./server-pts-collector";
@@ -316,7 +317,7 @@ export async function upsertQuoteBatch(db: D1DatabaseLike, result: MarketQuoteBa
           if (!Number.isFinite(timestamp) || timestamp < retentionCutoff || !Number.isFinite(Number(bar.price))) continue;
           merged.set(bar.timestamp, bar);
         }
-        const variantBars = [...merged.values()].sort((a, b) => a.timestamp.localeCompare(b.timestamp)).slice(-250);
+        const variantBars = sanitizeIntradayBars([...merged.values()]).slice(-250);
         statements.push(db.prepare(`
           INSERT INTO market_intraday (security_id, payload_json, first_timestamp, last_timestamp, updated_at)
           VALUES (?, ?, ?, ?, ?)
@@ -564,14 +565,14 @@ export async function readMarketSnapshot(db: D1DatabaseLike, includeIntraday = t
     group.push(bar);
     reconciledGroups.set(bar.securityId, group);
   }
-  const reconciledIntraday = [...reconciledGroups].flatMap(([securityId, bars]) => {
+  const reconciledIntraday = sanitizeIntradayBars([...reconciledGroups].flatMap(([securityId, bars]) => {
     const security = securityByCanonicalId.get(securityId);
     return sparkline24HourBars(bars, {
       now: Date.now(),
       exchangeMic: security?.exchange_mic,
       currency: security?.currency,
     });
-  });
+  }));
 
   const isStale = (quote: ServerRemoteQuote) => {
     const maxAge = quote.venueCode === "FUND" ? 26 * 60 * 60 * 1000 : quote.session === "closed" ? 6 * 60 * 60 * 1000 : 20 * 60 * 1000;

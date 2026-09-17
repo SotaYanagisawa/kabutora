@@ -107,7 +107,25 @@ describe("market history integrity", () => {
     expect(result.quality.status).toBe("valid");
 
     const finalBar = result.bars.at(-1);
-    expect(finalBar?.date).toBe("2026-03-04");
+    expect(finalBar?.date === "2026-03-04").toBe(true);
     expect(finalBar?.close).toBe("3010");
+  });
+
+  it("detects and repairs two consecutive anomalous bars", () => {
+    const bars = [
+      { securityId: "sec-7203", date: "2026-03-02", close: "3000", provider: "network" },
+      { securityId: "sec-7203", date: "2026-03-03", close: "300", provider: "network" }, // glitch day 1
+      { securityId: "sec-7203", date: "2026-03-04", close: "310", provider: "network" }, // glitch day 2
+      { securityId: "sec-7203", date: "2026-03-05", close: "3030", provider: "network" },
+    ];
+    const result = inspectMarketHistory([], bars, []);
+
+    expect(result.quality.repairedBars).toBe(2);
+    expect(result.quality.status).toBe("valid");
+
+    const bar1 = result.bars.find((b) => b.date === "2026-03-03");
+    const bar2 = result.bars.find((b) => b.date === "2026-03-04");
+    expect(Number(bar1?.close)).toBeGreaterThan(2900);
+    expect(Number(bar2?.close)).toBeGreaterThan(2900);
   });
 });
