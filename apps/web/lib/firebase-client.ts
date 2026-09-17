@@ -75,10 +75,13 @@ export function getFirebaseServices() {
   if (!emulatorMode() && !appCheck && typeof window !== "undefined" && process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY) {
     try {
       const siteKey = process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY;
-      const isV3 = process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_PROVIDER === "v3";
-      const provider = isV3
-        ? new ReCaptchaV3Provider(siteKey)
-        : new ReCaptchaEnterpriseProvider(siteKey);
+      // Existing deployments registered their key with App Check's v3
+      // exchange. Enterprise requires a separate server-side registration;
+      // an Enterprise-managed key alone does not select that exchange.
+      const isEnterprise = process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_PROVIDER === "enterprise";
+      const provider = isEnterprise
+        ? new ReCaptchaEnterpriseProvider(siteKey)
+        : new ReCaptchaV3Provider(siteKey);
       appCheck = initializeAppCheck(firebaseApp, {
         provider,
         isTokenAutoRefreshEnabled: true,

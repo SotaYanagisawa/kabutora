@@ -73,7 +73,7 @@ describe("firebase-client App Check reCAPTCHA provider", () => {
     process.env = { ...originalEnv };
   });
 
-  it("instantiates ReCaptchaEnterpriseProvider by default when site key is set", async () => {
+  it("preserves the registered v3 exchange when the provider setting is absent", async () => {
     vi.resetModules();
     process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY = "6Lcqg3-mock-key";
     delete process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_PROVIDER;
@@ -81,8 +81,8 @@ describe("firebase-client App Check reCAPTCHA provider", () => {
     const { getFirebaseServices, getMarketAuthHeaders } = await import("./firebase-client");
     const services = getFirebaseServices();
 
-    expect(mockReCaptchaEnterpriseProvider).toHaveBeenCalledWith("6Lcqg3-mock-key");
-    expect(mockReCaptchaV3Provider).not.toHaveBeenCalled();
+    expect(mockReCaptchaV3Provider).toHaveBeenCalledWith("6Lcqg3-mock-key");
+    expect(mockReCaptchaEnterpriseProvider).not.toHaveBeenCalled();
     expect(mockInitializeAppCheck).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -109,5 +109,34 @@ describe("firebase-client App Check reCAPTCHA provider", () => {
     expect(mockReCaptchaV3Provider).toHaveBeenCalledWith("6Lcqg3-mock-v3-key");
     expect(mockReCaptchaEnterpriseProvider).not.toHaveBeenCalled();
     expect(services.appCheck).toBeTruthy();
+  });
+
+  it("uses Enterprise only when explicitly configured for that exchange", async () => {
+    vi.resetModules();
+    process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY = "enterprise-key";
+    process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_PROVIDER = "enterprise";
+
+    const { getMarketAuthHeaders } = await import("./firebase-client");
+    await expect(getMarketAuthHeaders()).resolves.toEqual({
+      Authorization: "Bearer mock-id-token",
+      "X-Firebase-AppCheck": "app-check-token-xyz",
+    });
+    expect(mockReCaptchaEnterpriseProvider).toHaveBeenCalledWith("enterprise-key");
+    expect(mockReCaptchaV3Provider).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on App Check failure and retries token acquisition on the next request", async () => {
+    vi.resetModules();
+    process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY = "registered-v3-key";
+    delete process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_PROVIDER;
+    mockGetToken.mockRejectedValueOnce(new Error("app-check rejected"));
+
+    const { getMarketAuthHeaders } = await import("./firebase-client");
+    await expect(getMarketAuthHeaders()).rejects.toThrow("app-check rejected");
+    await expect(getMarketAuthHeaders()).resolves.toEqual({
+      Authorization: "Bearer mock-id-token",
+      "X-Firebase-AppCheck": "app-check-token-xyz",
+    });
+    expect(mockGetToken).toHaveBeenCalledTimes(2);
   });
 });
