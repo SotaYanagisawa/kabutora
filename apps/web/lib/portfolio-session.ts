@@ -63,10 +63,17 @@ export class PortfolioSession {
   start() {
     configurePortfolioQueue(this.mode);
     this.deadline();
-    if (this.mode === "trusted") void readVerifiedVault(this.uid).then((cached) => {
+    if (this.mode === "trusted") void readVerifiedVault(this.uid).then(async (cached) => {
       if (cached?.uid === this.uid && isKabutoraVaultEnvelope(cached.envelope) && cached.envelope.ownerUid === this.uid) {
         this.cachedVault = cached;
         this.emit({ cachedAvailable: true });
+        if (!this.state.seed && !this.key) {
+          try {
+            await this.openCached();
+          } catch {
+            /* Keep stored ciphertext and allow recovery unlock or cloud replay. */
+          }
+        }
       }
     }).catch(() => this.emit({ warning: "端末の保存領域を利用できません。復旧キーで解除でき、変更はこのタブのメモリに保持されます。" }));
     this.unsubscribe.push(this.store.subscribeVault(this.uid, (value, fromCache) => {
@@ -397,6 +404,7 @@ export class PortfolioSession {
     }, force).catch(() => undefined);
   }
   async openCached() {
+    if (this.state.seed && !this.state.cached) return;
     if (!this.cachedVault || this.mode !== "trusted") throw new Error("verified_cache_unavailable");
     const key = await loadTrustedDeviceKey(this.uid, this.cachedVault.envelope.keyId);
     if (!key) throw new Error("端末の解除鍵を確認できません。パスフレーズまたは復旧キーで解除してください。");
