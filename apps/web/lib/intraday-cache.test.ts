@@ -56,4 +56,37 @@ describe("intraday cache compaction", () => {
     expect(merged).toHaveLength(3);
     expect(merged[2].price).toBe("3010");
   });
+
+  it("detects and repairs after-hours aberrant bad tick (e.g. GOOGL 5.4% drop)", () => {
+    const bars = [
+      { securityId: "sec-googl", timestamp: "2026-09-16T20:55:00Z", price: "343.15", provider: "yahoo" },
+      { securityId: "sec-googl", timestamp: "2026-09-16T21:00:00Z", price: "324.65", provider: "yahoo" }, // 5.39% off-market drop
+      { securityId: "sec-googl", timestamp: "2026-09-16T21:05:00Z", price: "343.33", provider: "yahoo" },
+    ];
+    const merged = mergeIntradayBars([], bars, new Date("2026-09-16T22:00:00Z").getTime());
+    expect(merged).toHaveLength(3);
+    expect(merged[1].price).toBe("343.24");
+  });
+
+  it("detects and repairs after-hours aberrant spike (e.g. AMZN 4.9% spike)", () => {
+    const bars = [
+      { securityId: "sec-amzn", timestamp: "2026-09-10T20:45:00Z", price: "252.00", provider: "yahoo" },
+      { securityId: "sec-amzn", timestamp: "2026-09-10T20:50:00Z", price: "264.35", provider: "yahoo" }, // 4.9% spike
+      { securityId: "sec-amzn", timestamp: "2026-09-10T20:55:00Z", price: "251.84", provider: "yahoo" },
+    ];
+    const merged = mergeIntradayBars([], bars, new Date("2026-09-10T22:00:00Z").getTime());
+    expect(merged).toHaveLength(3);
+    expect(merged[1].price).toBe("251.92");
+  });
+
+  it("preserves legitimate market moves", () => {
+    const bars = [
+      { securityId: "sec-a", timestamp: "2026-08-12T10:00:00Z", price: "100.00", provider: "test" },
+      { securityId: "sec-a", timestamp: "2026-08-12T10:05:00Z", price: "98.50", provider: "test" }, // 1.5% normal dip
+      { securityId: "sec-a", timestamp: "2026-08-12T10:10:00Z", price: "99.00", provider: "test" },
+    ];
+    const merged = mergeIntradayBars([], bars, new Date("2026-08-12T11:00:00Z").getTime());
+    expect(merged).toHaveLength(3);
+    expect(merged[1].price).toBe("98.50");
+  });
 });

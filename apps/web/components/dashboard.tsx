@@ -25,7 +25,7 @@ import {
 import AppLoadingScreen from "@/components/app-loading-screen";
 import { getMarketAuthHeaders } from "@/lib/firebase-client";
 import { readMarketCache, writeMarketCache, readCompactQuotesCache, writeCompactQuotesCache } from "@/lib/client-market-cache";
-import { mergeIntradayBars } from "@/lib/intraday-cache";
+import { mergeIntradayBars, sanitizeIntradayBars } from "@/lib/intraday-cache";
 import { quoteRefreshTargets, quoteSessionTransitionTargets } from "@/lib/market-refresh-plan";
 import { earliestHistoryDate, inspectMarketHistory, packHistoryBars, unpackHistoryBars, type HistoryQuality, type PackedHistorySeries } from "@/lib/market-history";
 import { buildHistoryFetchPlan, historyCoverage, MARKET_REQUEST_BATCH_SIZE, missingHistoryRequirements, splitSecurityIds } from "@/lib/market-fetch-plan";
@@ -447,7 +447,7 @@ function DashboardContents({
     return {};
   });
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>(() => initialMarketSnapshot?.benchmarks ?? []);
-  const [intradayBars, setIntradayBars] = useState<IntradayBar[]>(() => initialMarketSnapshot?.intraday ?? []);
+  const [intradayBars, setIntradayBars] = useState<IntradayBar[]>(() => initialMarketSnapshot?.intraday ? sanitizeIntradayBars(initialMarketSnapshot.intraday) : []);
   const [historyBars, setHistoryBars] = useState<MarketBar[]>([]);
   const [historyInceptionDates, setHistoryInceptionDates] = useState<Record<string, string>>({});
   const [corporateActions, setCorporateActions] = useState<CorporateAction[]>(seededActions);
