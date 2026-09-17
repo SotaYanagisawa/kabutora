@@ -24,7 +24,7 @@ import {
 } from "@kabutora/domain";
 import AppLoadingScreen from "@/components/app-loading-screen";
 import { getMarketAuthHeaders } from "@/lib/firebase-client";
-import { readMarketCache, writeMarketCache } from "@/lib/client-market-cache";
+import { readMarketCache, writeMarketCache, readCompactQuotesCache, writeCompactQuotesCache } from "@/lib/client-market-cache";
 import { mergeIntradayBars } from "@/lib/intraday-cache";
 import { quoteRefreshTargets, quoteSessionTransitionTargets } from "@/lib/market-refresh-plan";
 import { earliestHistoryDate, inspectMarketHistory, packHistoryBars, unpackHistoryBars, type HistoryQuality, type PackedHistorySeries } from "@/lib/market-history";
@@ -438,7 +438,14 @@ function DashboardContents({
   const [selectedAccountId, setSelectedAccountId] = useState(seed.accounts.find((account) => account.broker !== "現金口座")?.id ?? seed.accounts[0]?.id ?? "");
   const [customBroker, setCustomBroker] = useState("");
   const [tradeSearchActive, setTradeSearchActive] = useState(false);
-  const [quotes, setQuotes] = useState<Record<string, RemoteQuote>>(() => Object.fromEntries((initialMarketSnapshot?.quotes ?? []).map((quote) => [quote.securityId, quote])));
+  const [quotes, setQuotes] = useState<Record<string, RemoteQuote>>(() => {
+    const fromSnapshot = Object.fromEntries((initialMarketSnapshot?.quotes ?? []).map((quote) => [quote.securityId, quote]));
+    if (Object.keys(fromSnapshot).length) return fromSnapshot;
+    if (allowPersistentMarketCache) {
+      return readCompactQuotesCache();
+    }
+    return {};
+  });
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>(() => initialMarketSnapshot?.benchmarks ?? []);
   const [intradayBars, setIntradayBars] = useState<IntradayBar[]>(() => initialMarketSnapshot?.intraday ?? []);
   const [historyBars, setHistoryBars] = useState<MarketBar[]>([]);
@@ -449,7 +456,15 @@ function DashboardContents({
   const [distributionStatus, setDistributionStatus] = useState<MarketStatus>("idle");
   const [distributionError, setDistributionError] = useState("");
   const [distributionCacheSavedAt, setDistributionCacheSavedAt] = useState("");
-  const [quoteStatus, setQuoteStatus] = useState<MarketStatus>(initialMarketSnapshot?.quotes.length ? initialMarketSnapshot.refresh.status === "ready" ? "ready" : "partial" : "loading");
+  const [quoteStatus, setQuoteStatus] = useState<MarketStatus>(() => {
+    if (initialMarketSnapshot?.quotes.length) {
+      return initialMarketSnapshot.refresh.status === "ready" ? "ready" : "partial";
+    }
+    if (allowPersistentMarketCache && typeof window !== "undefined" && Object.keys(readCompactQuotesCache()).length) {
+      return "partial";
+    }
+    return "loading";
+  });
   const [benchmarkStatus, setBenchmarkStatus] = useState<MarketStatus>(initialMarketSnapshot?.benchmarks.length ? "ready" : "loading");
   const [marketStartupReady, setMarketStartupReady] = useState(true);
   const [startupCoverVisible, setStartupCoverVisible] = useState(false);
@@ -1169,6 +1184,7 @@ function DashboardContents({
   useEffect(() => {
     if (!allowPersistentMarketCache || !hydrated || !Object.keys(quotes).length) return;
     const timer = window.setTimeout(() => {
+      writeCompactQuotesCache(quotes);
       void writeMarketCache<MarketCachePayload>(MARKET_CACHE_KEY, {
         schemaVersion: 7,
         savedAt: new Date().toISOString(),

@@ -14,6 +14,7 @@ import { startupLabels, type PortfolioStartupState, type StartupStage } from "@/
 import { diffTransactionChanges } from "@/lib/transaction-event-merge";
 import { isNewerAccountRevision } from "@/lib/account-event-merge";
 import { getCachedServerMarketSnapshot, loadServerMarketSnapshot } from "@/lib/client-market-service";
+import { clearCompactQuotesCache } from "@/lib/client-market-cache";
 import type { ServerMarketSnapshot } from "@/lib/server-market-types";
 import type { MarketSessionStatus } from "@/lib/market-session";
 import type { DeviceTrustMode } from "@/lib/firebase-config";
@@ -82,6 +83,7 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
           setActiveUid(next.uid);
         }
         setAuthState({ stage: "vault" });
+        session.current?.connectCloud();
       } else {
         if (deviceMode === "trusted") {
           try { localStorage.removeItem("kabutora-active-uid"); } catch {}
@@ -111,6 +113,10 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
       () => {
         const current = getFirebaseServices().auth.currentUser;
         return !current || current.uid === targetUid;
+      },
+      () => {
+        const current = getFirebaseServices().auth.currentUser;
+        return Boolean(current && current.uid === targetUid);
       },
     );
     session.current = next;
@@ -159,7 +165,7 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
     let active = true;
     void loadServerMarketSnapshot({ includeIntraday: true, allowPersistentCache: deviceMode === "trusted" }).then((value) => { if (active) setMarket(value); }).catch(() => { if (active) setMarket(null); });
     return () => { active = false; };
-  }, [deviceMode, targetUid]);
+  }, [deviceMode, targetUid, user]);
 
   const lock = useCallback(() => { session.current?.stop(); setLocked(true); setUnlockValue(""); setPassphrase(""); setConfirmation(""); setSetup(null); setBackupSeed(null); }, []);
   useEffect(() => {
@@ -183,7 +189,10 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
   };
   const signOut = () => run(async () => {
     if (deviceMode === "trusted") {
-      try { localStorage.removeItem("kabutora-active-uid"); } catch {}
+      try {
+        localStorage.removeItem("kabutora-active-uid");
+        clearCompactQuotesCache();
+      } catch {}
       setActiveUid(null);
     }
     lock();

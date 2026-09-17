@@ -120,6 +120,13 @@ export async function signOutOfKabutora() {
 export async function getMarketAuthHeaders(): Promise<Record<string, string>> {
   if (!firebaseConfigured) return {};
   const { auth, appCheck: currentAppCheck } = getFirebaseServices();
+  if (!auth.currentUser) {
+    try {
+      await withDeadline(auth.authStateReady(), 4_000, "market-auth-ready");
+    } catch {
+      /* Timeout or unconfigured auth leaves headers empty */
+    }
+  }
   if (!auth.currentUser) return {};
   if (marketAuthHeadersTask && marketAuthHeadersUid === auth.currentUser.uid && Date.now() < marketAuthHeadersExpiresAt) return marketAuthHeadersTask;
   const user = auth.currentUser;

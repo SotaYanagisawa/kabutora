@@ -42,8 +42,16 @@ export class PortfolioSession {
   private draftLoaded = false;
   private failedSaves: PortfolioEventPayload[] = [];
   private deferLegacyRecovery = process.env.NEXT_PUBLIC_KABUTORA_RECOVERY_MIGRATION !== "enabled";
+  private cloudConnected = false;
 
-  constructor(readonly uid: string, private mode: DeviceTrustMode, private store: PortfolioCloudStore, private publish: (state: SessionState) => void, private isCurrentUser: () => boolean) {}
+  constructor(
+    readonly uid: string,
+    private mode: DeviceTrustMode,
+    private store: PortfolioCloudStore,
+    private publish: (state: SessionState) => void,
+    private isCurrentUser: () => boolean,
+    private isAuthenticated: () => boolean = () => true,
+  ) {}
   private active() { return !this.stopped && this.isCurrentUser(); }
   private emit(patch: Partial<SessionState>) { if (this.active()) { this.state = { ...this.state, ...patch }; this.publish(this.state); } }
   private stage(stage: PortfolioStartupState) { this.emit({ startup: stage }); }
@@ -69,13 +77,20 @@ export class PortfolioSession {
         this.emit({ cachedAvailable: true });
         if (!this.state.seed && !this.key) {
           try {
-            await this.openCached();
+            await this.openCached(false);
           } catch {
             /* Keep stored ciphertext and allow recovery unlock or cloud replay. */
           }
         }
       }
     }).catch(() => this.emit({ warning: "端末の保存領域を利用できません。復旧キーで解除でき、変更はこのタブのメモリに保持されます。" }));
+    if (this.isAuthenticated()) {
+      this.connectCloud();
+    }
+  }
+  connectCloud() {
+    if (this.cloudConnected || this.stopped || !this.active()) return;
+    this.cloudConnected = true;
     this.unsubscribe.push(this.store.subscribeVault(this.uid, (value, fromCache) => {
       if (!this.active() || fromCache) return;
       if (value && (!isKabutoraVaultEnvelope(value) || value.ownerUid !== this.uid)) return this.fail(new Error("暗号化保管庫の形式を確認できませんでした。"), "vault");
@@ -194,7 +209,7 @@ export class PortfolioSession {
     const seed = replayPortfolioEvents(cloudSeed, [...this.localEvents.values()]);
     this.clearDeadline();
     const recoveryPending = Boolean(this.draft && this.draft.previousGeneration === generation);
-    this.emit({ seed, needsUnlock: false, cached: false, recoveryPending, startup: { stage: (envelope.version === 1 && !this.deferLegacyRecovery) || this.imported || recoveryPending ? "enrollment" : "ready" } });
+    this.emit({ seed, needsUnlock: false, cached: false, warning: "", recoveryPending, startup: { stage: (envelope.version === 1 && !this.deferLegacyRecovery) || this.imported || recoveryPending ? "enrollment" : "ready" } });
     if (this.mode === "trusted") void (async () => {
       await saveTrustedDeviceKey(this.uid, key, envelope.keyId).catch(() => undefined);
       const cached = await updateEncryptedVault(envelope, key, cloudSeed);
@@ -403,7 +418,7 @@ export class PortfolioSession {
       await this.store.saveEvent(uid, id, event);
     }, force).catch(() => undefined);
   }
-  async openCached() {
+  async openCached(emitWarning = true) {
     if (this.state.seed && !this.state.cached) return;
     if (!this.cachedVault || this.mode !== "trusted") throw new Error("verified_cache_unavailable");
     const key = await loadTrustedDeviceKey(this.uid, this.cachedVault.envelope.keyId);
@@ -416,10 +431,11 @@ export class PortfolioSession {
     const pending = await getPendingPortfolioEvents(this.uid);
     const decoded = await this.decryptEvents(pending.map((item) => ({ id: item.id, ...item.event })), envelope, base);
     this.clearDeadline();
-    this.emit({ envelope, seed: replayPortfolioEvents(base, decoded), cached: true, needsUnlock: false, startup: { stage: "ready" }, warning: `確認済みキャッシュ（${this.cachedVault.verifiedAt}）。最新のクラウド変更は未確認です。` });
+    this.emit({ envelope, seed: replayPortfolioEvents(base, decoded), cached: true, needsUnlock: false, startup: { stage: "ready" }, warning: emitWarning ? `確認済みキャッシュ（${this.cachedVault.verifiedAt}）。最新のクラウド変更は未確認です。` : "" });
   }
   stop() {
     this.stopped = true;
+    this.cloudConnected = false;
     this.clearDeadline();
     for (const unsubscribe of this.unsubscribe) unsubscribe();
     this.unsubscribe = [];
