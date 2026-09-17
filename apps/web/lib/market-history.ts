@@ -7,6 +7,7 @@ export type HistoryQuality = {
   rejectedBars: number;
   duplicateBars: number;
   suspectMoves: number;
+  repairedBars?: number;
   acceptedActions: number;
   rejectedActions: number;
   checksum: string;
@@ -31,6 +32,158 @@ function checksum(value: string) {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
+function sanitizeHistoryBars(
+  bars: MarketBar[],
+  actions: CorporateAction[],
+): { bars: MarketBar[]; repairedCount: number } {
+  if (bars.length < 2) return { bars, repairedCount: 0 };
+
+  const actionDates = new Map<string, number[]>();
+  for (const action of actions) {
+    const dates = actionDates.get(action.securityId) ?? [];
+    dates.push(new Date(`${action.effectiveDate}T00:00:00Z`).getTime());
+    actionDates.set(action.securityId, dates);
+  }
+
+  const hasSplitNear = (securityId: string, timestamp: number) => {
+    const dates = actionDates.get(securityId) ?? [];
+    return dates.some((actionDate) => Math.abs(actionDate - timestamp) <= 4 * 24 * 60 * 60 * 1000);
+  };
+
+  const bySecurity = new Map<string, MarketBar[]>();
+  for (const bar of bars) {
+    const list = bySecurity.get(bar.securityId) ?? [];
+    list.push(bar);
+    bySecurity.set(bar.securityId, list);
+  }
+
+  let repairedCount = 0;
+  const result: MarketBar[] = [];
+
+  for (const [securityId, secBars] of bySecurity) {
+    const sorted = [...secBars].sort((a, b) => a.date.localeCompare(b.date));
+    const n = sorted.length;
+    if (n < 2) {
+      result.push(...sorted);
+      continue;
+    }
+
+    const currentBars = sorted.map((b) => ({ ...b }));
+
+    // Pass 1: Single-bar isolated anomalies (dips and spikes in close price)
+    for (let i = 1; i < n - 1; i += 1) {
+      const prev = currentBars[i - 1];
+      const curr = currentBars[i];
+      const next = currentBars[i + 1];
+
+      const pPrev = Number(prev.close);
+      const pCurr = Number(curr.close);
+      const pNext = Number(next.close);
+      if (!Number.isFinite(pPrev) || !Number.isFinite(pCurr) || !Number.isFinite(pNext) || pPrev <= 0 || pNext <= 0) continue;
+
+      const tCurr = new Date(`${curr.date}T00:00:00Z`).getTime();
+      if (hasSplitNear(securityId, tCurr)) continue;
+
+      const ratioPrev = pCurr / pPrev;
+      const ratioNext = pCurr / pNext;
+      const neighborRatio = pNext / pPrev;
+
+      const neighborsConsistent = neighborRatio >= 0.4 && neighborRatio <= 2.5;
+      const isIsolatedDip = neighborsConsistent && ratioPrev <= 0.55 && ratioNext <= 0.55;
+      const isIsolatedSpike = neighborsConsistent && ratioPrev >= 1.8 && ratioNext >= 1.8;
+
+      if (isIsolatedDip || isIsolatedSpike) {
+        const tPrev = new Date(`${prev.date}T00:00:00Z`).getTime();
+        const tNext = new Date(`${next.date}T00:00:00Z`).getTime();
+        const alpha = tNext > tPrev ? Math.max(0, Math.min(1, (tCurr - tPrev) / (tNext - tPrev))) : 0.5;
+        const pRepaired = pPrev + alpha * (pNext - pPrev);
+        curr.close = String(Math.round(pRepaired * 10000) / 10000);
+
+        if (curr.adjustedClose != null) {
+          const aPrev = prev.adjustedClose ? Number(prev.adjustedClose) : pPrev;
+          const aNext = next.adjustedClose ? Number(next.adjustedClose) : pNext;
+          const aRepaired = aPrev + alpha * (aNext - aPrev);
+          curr.adjustedClose = String(Math.round(aRepaired * 10000) / 10000);
+        }
+        repairedCount += 1;
+      }
+    }
+
+    // Pass 2: AdjustedClose isolated anomalies
+    for (let i = 1; i < n - 1; i += 1) {
+      const prev = currentBars[i - 1];
+      const curr = currentBars[i];
+      const next = currentBars[i + 1];
+      if (curr.adjustedClose == null) continue;
+
+      const aPrev = prev.adjustedClose ? Number(prev.adjustedClose) : Number(prev.close);
+      const aCurr = Number(curr.adjustedClose);
+      const aNext = next.adjustedClose ? Number(next.adjustedClose) : Number(next.close);
+      if (!Number.isFinite(aPrev) || !Number.isFinite(aCurr) || !Number.isFinite(aNext) || aPrev <= 0 || aNext <= 0) continue;
+
+      const tCurr = new Date(`${curr.date}T00:00:00Z`).getTime();
+      if (hasSplitNear(securityId, tCurr)) continue;
+
+      const aNeighborRatio = aNext / aPrev;
+      const aNeighborsConsistent = aNeighborRatio >= 0.4 && aNeighborRatio <= 2.5;
+      const isAdjDip = aNeighborsConsistent && aCurr / aPrev <= 0.55 && aCurr / aNext <= 0.55;
+      const isAdjSpike = aNeighborsConsistent && aCurr / aPrev >= 1.8 && aCurr / aNext >= 1.8;
+
+      if (isAdjDip || isAdjSpike) {
+        const tPrev = new Date(`${prev.date}T00:00:00Z`).getTime();
+        const tNext = new Date(`${next.date}T00:00:00Z`).getTime();
+        const alpha = tNext > tPrev ? Math.max(0, Math.min(1, (tCurr - tPrev) / (tNext - tPrev))) : 0.5;
+        const aRepaired = aPrev + alpha * (aNext - aPrev);
+        curr.adjustedClose = String(Math.round(aRepaired * 10000) / 10000);
+        repairedCount += 1;
+      }
+    }
+
+    // Pass 3: Edge bar anomalies (tail bar and leading bar)
+    if (n >= 2) {
+      const last = currentBars[n - 1];
+      const secondLast = currentBars[n - 2];
+      const pLast = Number(last.close);
+      const pSecondLast = Number(secondLast.close);
+      const tLast = new Date(`${last.date}T00:00:00Z`).getTime();
+
+      if (Number.isFinite(pLast) && Number.isFinite(pSecondLast) && pSecondLast > 0 && !hasSplitNear(securityId, tLast)) {
+        const tailRatio = pLast / pSecondLast;
+        if (tailRatio <= 0.35 || tailRatio >= 3.0) {
+          last.close = secondLast.close;
+          if (last.adjustedClose != null && secondLast.adjustedClose != null) {
+            last.adjustedClose = secondLast.adjustedClose;
+          }
+          repairedCount += 1;
+        }
+      }
+
+      const first = currentBars[0];
+      const second = currentBars[1];
+      const pFirst = Number(first.close);
+      const pSecond = Number(second.close);
+      const tFirst = new Date(`${first.date}T00:00:00Z`).getTime();
+      if (Number.isFinite(pFirst) && Number.isFinite(pSecond) && pFirst > 0 && !hasSplitNear(securityId, tFirst)) {
+        const leadRatio = pSecond / pFirst;
+        if (leadRatio >= 4.0 || leadRatio <= 0.25) {
+          first.close = second.close;
+          if (first.adjustedClose != null && second.adjustedClose != null) {
+            first.adjustedClose = second.adjustedClose;
+          }
+          repairedCount += 1;
+        }
+      }
+    }
+
+    result.push(...currentBars);
+  }
+
+  return {
+    bars: result.sort((a, b) => a.date.localeCompare(b.date) || a.securityId.localeCompare(b.securityId)),
+    repairedCount,
+  };
+}
+
 export function inspectMarketHistory(existingBars: MarketBar[], incomingBars: MarketBar[], candidateActions: CorporateAction[]) {
   const barMap = new Map<string, MarketBar>();
   let rejectedBars = 0;
@@ -51,7 +204,7 @@ export function inspectMarketHistory(existingBars: MarketBar[], incomingBars: Ma
       ...(Number.isFinite(adjustedClose) && adjustedClose > 0 ? { adjustedClose: String(adjustedClose) } : {}),
     });
   }
-  const bars = [...barMap.values()].sort((a, b) => a.date.localeCompare(b.date) || a.securityId.localeCompare(b.securityId));
+  const rawBars = [...barMap.values()].sort((a, b) => a.date.localeCompare(b.date) || a.securityId.localeCompare(b.securityId));
 
   const actionMap = new Map<string, CorporateAction>();
   let rejectedActions = 0;
@@ -71,6 +224,8 @@ export function inspectMarketHistory(existingBars: MarketBar[], incomingBars: Ma
     dates.push(new Date(`${action.effectiveDate}T00:00:00Z`).getTime());
     actionDates.set(action.securityId, dates);
   }
+
+  const { bars, repairedCount } = sanitizeHistoryBars(rawBars, actions);
 
   let suspectMoves = 0;
   const previous = new Map<string, MarketBar>();
@@ -96,6 +251,7 @@ export function inspectMarketHistory(existingBars: MarketBar[], incomingBars: Ma
     rejectedBars,
     duplicateBars,
     suspectMoves,
+    repairedBars: repairedCount,
     acceptedActions: actions.length,
     rejectedActions,
     checksum: digest,

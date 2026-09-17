@@ -46,7 +46,17 @@ export async function getTokyoQuoteBundle(
   const expectedPtsSession = session === "pts_day" || session === "pts_night" ? session : undefined;
   let lastError: unknown;
   try {
-    return await getYahooQuoteBundle(providerSymbol, securityId, "TSE", force, intradayRange, expectedPtsSession);
+    const bundle = await getYahooQuoteBundle(providerSymbol, securityId, "TSE", force, intradayRange, expectedPtsSession);
+    if (bundle.quote.validationStatus !== "suspect") {
+      return bundle;
+    }
+    try {
+      const japanBundle = await getYahooJapanQuoteBundle(providerSymbol, securityId, force, expectedPtsSession);
+      if (japanBundle.quote.validationStatus !== "suspect") {
+        return japanBundle;
+      }
+    } catch {}
+    return bundle;
   } catch (error) {
     lastError = error;
     try {

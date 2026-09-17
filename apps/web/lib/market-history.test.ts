@@ -58,4 +58,56 @@ describe("market history integrity", () => {
     expect(unpackHistoryBars(packed)).toEqual(bars);
     expect(inspectMarketHistory([], bars, []).quality.status).toBe("valid");
   });
+
+  it("detects and repairs an isolated sharp price dip by interpolation", () => {
+    const bars = [
+      { securityId: "sec-us-aapl", date: "2026-01-02", close: "250", adjustedClose: "250", provider: "network" },
+      { securityId: "sec-us-aapl", date: "2026-01-05", close: "25", adjustedClose: "25", provider: "network" }, // 90% dip anomaly
+      { securityId: "sec-us-aapl", date: "2026-01-06", close: "252", adjustedClose: "252", provider: "network" },
+    ];
+    const result = inspectMarketHistory([], bars, []);
+
+    expect(result.quality.repairedBars).toBe(1);
+    expect(result.quality.status).toBe("valid");
+    expect(result.quality.suspectMoves).toBe(0);
+
+    const repairedBar = result.bars.find((b) => b.date === "2026-01-05");
+    expect(repairedBar).toBeDefined();
+    // Linear interpolation between 2026-01-02 (250) and 2026-01-06 (252) for 2026-01-05 (3 days of 4) is 251.5
+    expect(repairedBar!.close).toBe("251.5");
+    expect(repairedBar!.adjustedClose).toBe("251.5");
+  });
+
+  it("detects and repairs an isolated adjustedClose glitch while close was fine", () => {
+    const bars = [
+      { securityId: "sec-us-msft", date: "2026-02-02", close: "400", adjustedClose: "400", provider: "network" },
+      { securityId: "sec-us-msft", date: "2026-02-03", close: "402", adjustedClose: "4", provider: "network" }, // 99% adjustedClose glitch
+      { securityId: "sec-us-msft", date: "2026-02-04", close: "404", adjustedClose: "404", provider: "network" },
+    ];
+    const result = inspectMarketHistory([], bars, []);
+
+    expect(result.quality.repairedBars).toBe(1);
+    expect(result.quality.status).toBe("valid");
+
+    const repairedBar = result.bars.find((b) => b.date === "2026-02-03");
+    expect(repairedBar).toBeDefined();
+    expect(repairedBar!.close).toBe("402");
+    expect(repairedBar!.adjustedClose).toBe("402");
+  });
+
+  it("guards against a sharp dip on the trailing edge bar", () => {
+    const bars = [
+      { securityId: "sec-7203", date: "2026-03-02", close: "3000", provider: "network" },
+      { securityId: "sec-7203", date: "2026-03-03", close: "3010", provider: "network" },
+      { securityId: "sec-7203", date: "2026-03-04", close: "300", provider: "network" }, // 90% plunge on final bar without split
+    ];
+    const result = inspectMarketHistory([], bars, []);
+
+    expect(result.quality.repairedBars).toBe(1);
+    expect(result.quality.status).toBe("valid");
+
+    const finalBar = result.bars.at(-1);
+    expect(finalBar?.date).toBe("2026-03-04");
+    expect(finalBar?.close).toBe("3010");
+  });
 });

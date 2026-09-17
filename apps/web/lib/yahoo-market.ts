@@ -678,13 +678,30 @@ export async function getYahooQuoteBundle(
   const nowSeconds = Date.now() / 1000;
   const session = dailyFund ? "closed" : sessionAt(nowSeconds, result);
   const lastIsNewer = last != null && last.timestamp != null && (metaTimestamp == null || last.timestamp > metaTimestamp);
-  const price = (lastIsNewer || session !== "closed") ? (last?.price ?? metaPrice) : (metaPrice ?? last?.price);
-  const timestamp = (lastIsNewer || session !== "closed") ? (last?.timestamp ?? metaTimestamp) : (metaTimestamp ?? last?.timestamp);
-  if (price == null || price <= 0 || timestamp == null) throw new MarketDataError(`${symbol}: no usable market price`);
+  let price = (lastIsNewer || session !== "closed") ? (last?.price ?? metaPrice) : (metaPrice ?? last?.price);
+  let timestamp = (lastIsNewer || session !== "closed") ? (last?.timestamp ?? metaTimestamp) : (metaTimestamp ?? last?.timestamp);
 
   const previousClose = finiteNumber(result.meta?.previousClose) ?? finiteNumber(result.meta?.chartPreviousClose) ?? undefined;
-  const changeRatio = previousClose && previousClose > 0 ? Math.abs(price / previousClose - 1) : 0;
   const hasRecentSplit = Object.keys(result.events?.splits ?? {}).length > 0;
+
+  if (
+    price != null &&
+    metaPrice != null &&
+    metaPrice > 0 &&
+    price !== metaPrice &&
+    previousClose &&
+    previousClose > 0 &&
+    !hasRecentSplit &&
+    Math.abs(price / previousClose - 1) > 0.35 &&
+    Math.abs(metaPrice / previousClose - 1) <= 0.35
+  ) {
+    price = metaPrice;
+    timestamp = metaTimestamp ?? timestamp;
+  }
+
+  if (price == null || price <= 0 || timestamp == null) throw new MarketDataError(`${symbol}: no usable market price`);
+
+  const changeRatio = previousClose && previousClose > 0 ? Math.abs(price / previousClose - 1) : 0;
   const validationStatus: MarketQuote["validationStatus"] = changeRatio > 0.35 && !hasRecentSplit ? "suspect" : "valid";
   const ageSeconds = Math.max(0, nowSeconds - timestamp);
   const quote: MarketQuote = {

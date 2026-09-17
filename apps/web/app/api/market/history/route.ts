@@ -43,6 +43,23 @@ export async function POST(request: Request) {
 
       if (satisfiedIds.size === normalizedIds.length && normalizedIds.length > 0) {
         const inspected = inspectMarketHistory([], cached.bars, cached.corporateActions);
+        if (marketContext.db && (inspected.quality.repairedBars ?? 0) > 0) {
+          const persist = upsertHistoryBatch(marketContext.db, {
+            generatedAt: new Date().toISOString(),
+            requestedFrom: requestedFrom ?? "",
+            marketSessions: [],
+            bars: inspected.bars,
+            corporateActions: inspected.actions,
+            distributions: [],
+            inceptionDates: cached.inceptionDates,
+            quality: inspected.quality,
+            failures: [],
+            coverage: { requested: normalizedIds.length, returned: normalizedIds.length },
+            coveredSecurityIds: [...satisfiedIds],
+          }).catch(() => undefined);
+          if (marketContext.ctx) marketContext.ctx.waitUntil(persist);
+          else await persist;
+        }
         const generatedAt = new Date().toISOString();
         return Response.json({
           generatedAt,
