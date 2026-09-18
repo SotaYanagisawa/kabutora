@@ -93,12 +93,10 @@ function secondsToIso(value: number) {
 }
 
 function ymdInTokyo(value: number) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(value * 1000));
+  // Japan has no daylight-saving transitions in the provider's history range.
+  // Constructing an Intl formatter per bar exhausted Workers Free CPU while
+  // normalizing years of daily prices and dividend events.
+  return new Date((value + 9 * 60 * 60) * 1000).toISOString().slice(0, 10);
 }
 
 function queryString(params: Record<string, string>) {
@@ -646,10 +644,9 @@ export async function getYahooQuoteBundle(
   const fetchedAt = new Date().toISOString();
   const dailyFund = venueCode === "FUND";
   const shouldFetchJapanBoard = venueCode === "TSE" && (
-    tseSessionNow() !== "regular" ||
     expectedPtsSession === "pts_day" ||
     expectedPtsSession === "pts_night" ||
-    force
+    (tseSessionNow() === "closed" && force)
   );
   const japanBoardTask = shouldFetchJapanBoard
     ? getYahooJapanBoard(symbol, force).catch(() => null)

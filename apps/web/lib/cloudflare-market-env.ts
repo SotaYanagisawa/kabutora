@@ -1,4 +1,5 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { currentMarketRequestContext } from "./server-market-request-context";
 
 export type D1ResultLike<T = Record<string, unknown>> = {
   success: boolean;
@@ -28,7 +29,7 @@ export type MarketWorkerEnv = {
 };
 
 export async function getMarketCloudflareContext() {
-  const context = await getCloudflareContext({ async: true });
+  const context = currentMarketRequestContext() ?? await getCloudflareContext({ async: true });
   return {
     db: (context.env as MarketWorkerEnv).MARKET_DB,
     queue: (context.env as MarketWorkerEnv).MARKET_REFRESH_QUEUE,

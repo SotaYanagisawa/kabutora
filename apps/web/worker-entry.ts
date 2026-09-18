@@ -6,6 +6,9 @@ import openNextWorker, {
 import type { D1DatabaseLike, MarketWorkerEnv } from "./lib/cloudflare-market-env";
 import { collectJapannextPts } from "./lib/server-pts-collector";
 import { isD1DailyLimitError, isMarketRefreshJob, processMarketRefreshJob, scheduleMarketRefresh } from "./lib/server-market-scheduler";
+import { routeMarketRequest } from "./lib/server-market-router";
+import type { MarketRequestContext } from "./lib/server-market-request-context";
+import { prepareMarketSnapshotResponses } from "./lib/server-market-response-cache";
 
 export { BucketCachePurge, DOQueueHandler, DOShardedTagCache };
 
@@ -48,7 +51,9 @@ async function proxyFirebaseAuthHelper(request: Request) {
 }
 
 export default {
-  async fetch(request: Request, env: unknown, ctx: unknown) {
+  async fetch(request: Request, env: MarketRequestContext["env"], ctx: MarketRequestContext["ctx"]) {
+    const marketResponse = await routeMarketRequest(request, { env, ctx });
+    if (marketResponse) return marketResponse;
     const authResponse = await proxyFirebaseAuthHelper(request);
     if (authResponse) return authResponse;
     return openNextWorker.fetch(request, env, ctx);
@@ -82,6 +87,9 @@ export default {
       }
       try {
         await processMarketRefreshJob(db, message.body);
+        if (message.body.kind === "quotes" || message.body.kind === "benchmarks") {
+          await prepareMarketSnapshotResponses(db);
+        }
         message.ack();
       } catch (error) {
         // Retrying quota-rejected writes every two minutes builds a backlog

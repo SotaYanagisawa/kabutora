@@ -349,6 +349,44 @@ describe("portfolio history", () => {
     expect(points.every((point, index) => index === 0 || new Date(`${point.date}T00:00:00Z`).getTime() - new Date(`${points[index - 1].date}T00:00:00Z`).getTime() === 86_400_000)).toBe(true);
   });
 
+  it("falls back to live security quote price when bar for latest date is not yet available", () => {
+    const points = reconstructPortfolioHistory(
+      [
+        { id: "buy-1", accountId: "a", securityId: "sec-jp", type: "BUY", tradeDate: "2026-09-15", quantity: "10", pricePerShare: "1000", grossAmount: "10000" },
+      ],
+      [
+        {
+          id: "sec-jp",
+          displaySymbol: "7974",
+          name: "Nintendo",
+          exchangeMic: "XTKS",
+          quote: {
+            price: "1200",
+            marketTimestamp: "2026-09-16T02:30:00Z",
+            fetchedAt: "2026-09-16T02:30:00Z",
+            freshness: "live",
+            provider: "fixture",
+            session: "regular",
+            priceType: "last_trade",
+            venueCode: "TSE",
+            validationStatus: "valid",
+          },
+        },
+      ],
+      [
+        { securityId: "sec-jp", date: "2026-09-15", close: "1050", provider: "fixture" },
+      ],
+      [],
+      "2026-09-16",
+    );
+
+    expect(points).toHaveLength(2);
+    expect(points[0].date).toBe("2026-09-15");
+    expect(points[0].totalValue).toBe("10500");
+    expect(points[1].date).toBe("2026-09-16");
+    expect(points[1].totalValue).toBe("12000");
+  });
+
   it("handles multi-year history with split, partial sell, and dividends incrementally", () => {
     const transactions: LedgerTransaction[] = [
       { id: "buy-1", accountId: "a", securityId: "sec-a", type: "BUY", tradeDate: "2023-01-10", quantity: "100", pricePerShare: "1000", grossAmount: "100000" },

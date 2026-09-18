@@ -313,7 +313,7 @@ export function packHistoryBars(bars: MarketBar[]): PackedHistorySeries {
   const series: PackedHistorySeries = {};
   for (const bar of bars) {
     const current = series[bar.securityId] ?? { provider: bar.provider, rows: [] };
-    current.provider = bar.provider || current.provider;
+    current.provider = current.provider && current.provider !== "quote_log" ? current.provider : (bar.provider || current.provider);
     current.rows.push(bar.adjustedClose ? [bar.date, bar.close, bar.adjustedClose] : [bar.date, bar.close]);
     series[bar.securityId] = current;
   }

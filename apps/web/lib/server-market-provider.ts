@@ -220,9 +220,43 @@ export async function fetchMarketQuoteBatch(
       ? await pooledMap(failedBatchSecurities, Math.max(1, Math.min(6, options.concurrency ?? 6)), async (security) => {
           try {
             const securityForce = force || options.forceSecurityIds?.has(security.id) === true;
-            const bundle = security.venueCode === "TSE"
-              ? await getTokyoQuoteBundle(security.providerSymbol, security.id, securityForce, intradayRange)
-              : await getUsQuoteBundleWithFallback(security.providerSymbol, security.id, security.venueCode, securityForce, intradayRange);
+            let bundle: QuoteBundle;
+            if (security.venueCode === "TSE") {
+              bundle = await getTokyoQuoteBundle(security.providerSymbol, security.id, securityForce, intradayRange);
+            } else if (security.id === "sec-fx-usdjpy" || security.venueCode === "FX") {
+              try {
+                bundle = await getYahooQuoteBundle(security.providerSymbol, security.id, security.venueCode, securityForce, intradayRange);
+              } catch {
+                const yj = await getUsdJpyFromYahooJapan(securityForce);
+                const price = String(yj.value);
+                const previousClose = yj.changeRatio != null && 1 + yj.changeRatio > 0 ? String(yj.value / (1 + yj.changeRatio)) : undefined;
+                bundle = {
+                  quote: {
+                    price,
+                    ...(previousClose ? { previousRegularClose: previousClose } : {}),
+                    marketTimestamp: yj.marketTimestamp,
+                    fetchedAt: new Date().toISOString(),
+                    freshness: yj.freshness,
+                    provider: "yahoo_japan_fx_html:fallback",
+                    session: "regular",
+                    priceType: "last_trade",
+                    venueCode: "FX",
+                    validationStatus: "valid",
+                  },
+                  intraday: [],
+                  exchangeLabel: "FX",
+                  shortName: "USD/JPY",
+                };
+              }
+            } else {
+              bundle = await getUsQuoteBundleWithFallback(
+                security.providerSymbol,
+                security.id,
+                security.venueCode === "USD_FUND" ? "FUND" : security.venueCode,
+                securityForce,
+                intradayRange,
+              );
+            }
             return {
               ok: true as const,
               intraday: [],

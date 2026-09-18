@@ -28,7 +28,7 @@ import { readMarketCache, writeMarketCache, readCompactQuotesCache, writeCompact
 import { mergeIntradayBars, sanitizeIntradayBars } from "@/lib/intraday-cache";
 import { quoteRefreshTargets, quoteSessionTransitionTargets } from "@/lib/market-refresh-plan";
 import { earliestHistoryDate, inspectMarketHistory, packHistoryBars, unpackHistoryBars, type HistoryQuality, type PackedHistorySeries } from "@/lib/market-history";
-import { buildHistoryFetchPlan, historyCoverage, MARKET_REQUEST_BATCH_SIZE, missingHistoryRequirements, splitSecurityIds } from "@/lib/market-fetch-plan";
+import { buildHistoryFetchPlan, daysBetween, historyCoverage, MARKET_REQUEST_BATCH_SIZE, missingHistoryRequirements, splitSecurityIds } from "@/lib/market-fetch-plan";
 import { readMarketApiResponse, stableMarketErrorMessage } from "@/lib/market-api-response";
 import { loadServerMarketSnapshot, loadServerPtsIntraday, loadServerUsIntraday, requestServerMarketRefresh, syncServerMarketRegistry } from "@/lib/client-market-service";
 import { timeoutSignal } from "@/lib/operation-deadline";
@@ -605,6 +605,14 @@ function DashboardContents({
   const quotesRef = useRef(quotes);
   const benchmarksRef = useRef(benchmarks);
   const intradayBarsRef = useRef(intradayBars);
+  const historyBarsRef = useRef(historyBars);
+  const historyInceptionDatesRef = useRef(historyInceptionDates);
+  const corporateActionsRef = useRef(corporateActions);
+  const historyCacheMetaRef = useRef(historyCacheMeta);
+  historyBarsRef.current = historyBars;
+  historyInceptionDatesRef.current = historyInceptionDates;
+  corporateActionsRef.current = corporateActions;
+  historyCacheMetaRef.current = historyCacheMeta;
   const historyRequestInFlight = useRef(false);
   const historyReloadPending = useRef(false);
   const distributionRequestInFlight = useRef(false);
@@ -728,6 +736,75 @@ function DashboardContents({
     setSessionClock(serverMs);
   }, []);
 
+  const logQuotesToHistory = useCallback((incomingQuotes: RemoteQuote[]) => {
+    if (!incomingQuotes.length) return;
+    const currentBars = historyBarsRef.current;
+    if (!currentBars.length) return;
+    const latestBarBySecurity = new Map<string, MarketBar>();
+    const barBySecurityDate = new Map<string, MarketBar>();
+    for (const bar of currentBars) {
+      barBySecurityDate.set(`${bar.securityId}:${bar.date}`, bar);
+      const prev = latestBarBySecurity.get(bar.securityId);
+      if (!prev || bar.date > prev.date) {
+        latestBarBySecurity.set(bar.securityId, bar);
+      }
+    }
+    const quoteBars: MarketBar[] = [];
+
+    for (const quote of incomingQuotes) {
+      if (quote.validationStatus === "rejected") continue;
+      const dateKey = quote.marketTimestamp
+        ? (marketDateKey(quote.marketTimestamp, quote.exchangeMic, undefined, quote.currency, quote.venueCode === "US" ? "US" : "JP") || quote.marketTimestamp.slice(0, 10))
+        : "";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) continue;
+      const priceNum = Number(quote.price);
+      if (!Number.isFinite(priceNum) || priceNum <= 0) continue;
+
+      const targetIds = [quote.securityId, ...domainSecurityIdVariants(quote.securityId)];
+      for (const secId of new Set(targetIds)) {
+        const latest = latestBarBySecurity.get(secId);
+        if (!latest) continue;
+        const diff = daysBetween(latest.date, dateKey);
+        if (diff > 5) continue;
+
+        const existing = barBySecurityDate.get(`${secId}:${dateKey}`);
+        if (!existing || existing.provider === "quote_log") {
+          quoteBars.push({
+            securityId: secId,
+            date: dateKey,
+            close: quote.price,
+            adjustedClose: quote.price,
+            provider: "quote_log",
+          });
+        }
+      }
+    }
+
+    if (quoteBars.length > 0) {
+      const inspected = inspectMarketHistory(currentBars, quoteBars, corporateActionsRef.current);
+      if (inspected.bars.length !== currentBars.length || inspected.quality.checksum !== historyCacheMetaRef.current?.checksum) {
+        historyBarsRef.current = inspected.bars;
+        setHistoryBars(inspected.bars);
+        setHistoryQuality(inspected.quality);
+        const savedAt = new Date().toISOString();
+        const nextMeta: HistoryCacheMeta = { savedAt, checksum: inspected.quality.checksum };
+        historyCacheMetaRef.current = nextMeta;
+        setHistoryCacheMeta(nextMeta);
+        if (allowPersistentMarketCache) {
+          void writeMarketCache<HistoryCachePayload>(HISTORY_CACHE_KEY, {
+            schemaVersion: 11,
+            derivationVersion: PERFORMANCE_DERIVATION_VERSION,
+            savedAt,
+            checksum: inspected.quality.checksum,
+            series: packHistoryBars(inspected.bars),
+            corporateActions: inspected.actions,
+            inceptionDates: historyInceptionDatesRef.current,
+          }, LEGACY_HISTORY_CACHE_KEYS);
+        }
+      }
+    }
+  }, [allowPersistentMarketCache]);
+
   const applyServerMarketSnapshot = useCallback((snapshot: ServerMarketSnapshot) => {
     if (!snapshot.quotes.length) return false;
     const incomingQuotes: Record<string, RemoteQuote> = {};
@@ -757,6 +834,7 @@ function DashboardContents({
     setQuotes(mergedQuotes);
     setBenchmarks(mergedBenchmarks);
     setIntradayBars(mergedIntraday);
+    logQuotesToHistory(snapshot.quotes);
     setQuoteStatus(snapshot.refresh.status === "ready" ? "ready" : "partial");
     setBenchmarkStatus(mergedBenchmarks.length ? "ready" : "partial");
     setQuoteHealth({
@@ -770,7 +848,7 @@ function DashboardContents({
     acceptTrustedServerTime(snapshot.generatedAt);
     setMarketStartupReady(true);
     return true;
-  }, [acceptTrustedServerTime]);
+  }, [acceptTrustedServerTime, logQuotesToHistory]);
 
   useEffect(() => {
     if (initialMarketSnapshot) applyServerMarketSnapshot(initialMarketSnapshot);
@@ -954,11 +1032,16 @@ function DashboardContents({
           const inspected = inspectMarketHistory([], cachedBars, mergeActions(seededActions, cachedHistory.corporateActions ?? []));
           const integrityMismatch = Boolean(cachedHistory.checksum && cachedHistory.checksum !== inspected.quality.checksum);
           const savedAt = cachedHistory.savedAt ?? "";
+          historyBarsRef.current = inspected.bars;
           setHistoryBars(inspected.bars);
+          historyInceptionDatesRef.current = cachedHistory.inceptionDates ?? {};
           setHistoryInceptionDates(cachedHistory.inceptionDates ?? {});
+          corporateActionsRef.current = inspected.actions;
           setCorporateActions(inspected.actions);
           setHistoryQuality({ ...inspected.quality, status: integrityMismatch ? "warning" : inspected.quality.status });
-          setHistoryCacheMeta({ savedAt, checksum: inspected.quality.checksum, integrityMismatch });
+          const nextMeta: HistoryCacheMeta = { savedAt, checksum: inspected.quality.checksum, integrityMismatch };
+          historyCacheMetaRef.current = nextMeta;
+          setHistoryCacheMeta(nextMeta);
           if (inspected.bars.length) setHistoryStatus(integrityMismatch ? "partial" : "ready");
           setApiUsage((current) => ({ ...current, integrityChecks: current.integrityChecks + 1 }));
           void writeMarketCache<HistoryCachePayload>(HISTORY_CACHE_KEY, {
@@ -991,6 +1074,9 @@ function DashboardContents({
         setDistributionCoverage(cachedDistributions.coverage ?? []);
         setDistributionCacheSavedAt(cachedDistributions.savedAt ?? "");
         setDistributionStatus((cachedDistributions.coverage ?? []).some((item) => item.status === "error" || item.status === "partial") ? "partial" : "ready");
+      }
+      if (Object.keys(quotesRef.current).length && historyBarsRef.current.length) {
+        logQuotesToHistory(Object.values(quotesRef.current));
       }
       setMarketStartupReady(true);
       setHydrated(true);
@@ -1441,7 +1527,7 @@ function DashboardContents({
     }
     return earliestBySecurity;
   }, [detailSecurityScope, needsFxHistory, transactions, watchlist]);
-  const needsHistoryBackfill = useCallback((bars: MarketBar[]) => missingHistoryRequirements(bars, historyCoverageRequired, historyInceptionDates).length > 0, [historyCoverageRequired, historyInceptionDates]);
+  const needsHistoryBackfill = useCallback((bars: MarketBar[]) => missingHistoryRequirements(bars, historyCoverageRequired, historyInceptionDates, todayKey).length > 0, [historyCoverageRequired, historyInceptionDates, todayKey]);
 
   const loadQuotes = useCallback(async (force = false, mode: "full" | "incremental" | "scheduled" = "incremental") => {
     if (!quoteSecurityIds) return;
@@ -1548,6 +1634,7 @@ function DashboardContents({
       const nextBars = mergeIntradayBars(intradayBarsRef.current, incomingBars);
       intradayBarsRef.current = nextBars;
       setIntradayBars(nextBars);
+      logQuotesToHistory(payload.quotes);
       const suspect = payload.quotes.filter((quote) => quote.validationStatus === "suspect").length;
       const requestedIds = batches.flat();
       const cachedFallbackIds = requestedIds.filter((securityId) => !returnedIds.has(securityId) && Boolean(quotesRef.current[securityId]));
@@ -1584,7 +1671,7 @@ function DashboardContents({
         }
       }
     }
-  }, [acceptTrustedServerTime, quoteSecurityIds]);
+  }, [acceptTrustedServerTime, logQuotesToHistory, quoteSecurityIds]);
 
   const loadBenchmarks = useCallback(async (force = false) => {
     const cached = benchmarksRef.current;
@@ -1627,7 +1714,7 @@ function DashboardContents({
       return;
     }
     historyRequestInFlight.current = true;
-    const plan = buildHistoryFetchPlan(historySecurityIds, historyCoverageRequired, force ? [] : historyBars, MARKET_REQUEST_BATCH_SIZE, historyInceptionDates);
+    const plan = buildHistoryFetchPlan(historySecurityIds, historyCoverageRequired, force ? [] : historyBars, MARKET_REQUEST_BATCH_SIZE, historyInceptionDates, todayKey);
     setApiUsage((current) => ({ ...current, historyRequests: current.historyRequests + plan.length, lastHistoryRequest: new Date().toISOString() }));
     setHistoryStatus("loading");
     setHistoryError("");
@@ -1673,11 +1760,16 @@ function DashboardContents({
       const cachedFallbackIds = requestedIds.filter((securityId) => failedResponseIds.has(securityId) && historyCoverage(inspected.bars).has(securityId));
       const failedIds = [...new Set([...missingRequiredIds, ...[...failedResponseIds].filter((securityId) => !cachedFallbackIds.includes(securityId))])];
       const savedAt = new Date().toISOString();
+      historyBarsRef.current = inspected.bars;
       setHistoryBars(inspected.bars);
+      historyInceptionDatesRef.current = nextInceptionDates;
       setHistoryInceptionDates(nextInceptionDates);
+      corporateActionsRef.current = inspected.actions;
       setCorporateActions(inspected.actions);
       setHistoryQuality(inspected.quality);
-      setHistoryCacheMeta({ savedAt, checksum: inspected.quality.checksum });
+      const nextMeta: HistoryCacheMeta = { savedAt, checksum: inspected.quality.checksum };
+      historyCacheMetaRef.current = nextMeta;
+      setHistoryCacheMeta(nextMeta);
       setHistoryHealth({ requested: requestedIds.length, returned: requestedIds.length - failedResponseIds.size, failedIds, fallbackIds: cachedFallbackIds, updatedAt: savedAt });
       setApiUsage((current) => ({ ...current, integrityChecks: current.integrityChecks + 1 }));
       if (allowPersistentMarketCache) {
@@ -1709,7 +1801,7 @@ function DashboardContents({
         setHistoryRequested(false);
       }
     }
-  }, [acceptTrustedServerTime, allowPersistentMarketCache, allSecurities, corporateActions, historyBars, historyCoverageRequired, historyInceptionDates, historySecurityIds]);
+  }, [acceptTrustedServerTime, allowPersistentMarketCache, allSecurities, corporateActions, historyBars, historyCoverageRequired, historyInceptionDates, historySecurityIds, todayKey]);
 
   const loadDistributions = useCallback(async (force = false) => {
     const requestedIds = splitSecurityIds(distributionSecurityIds, Number.MAX_SAFE_INTEGER).flat();
@@ -1789,6 +1881,10 @@ function DashboardContents({
   useEffect(() => { quotesRef.current = quotes; }, [quotes]);
   useEffect(() => { benchmarksRef.current = benchmarks; }, [benchmarks]);
   useEffect(() => { intradayBarsRef.current = intradayBars; }, [intradayBars]);
+  useEffect(() => { historyBarsRef.current = historyBars; }, [historyBars]);
+  useEffect(() => { historyInceptionDatesRef.current = historyInceptionDates; }, [historyInceptionDates]);
+  useEffect(() => { corporateActionsRef.current = corporateActions; }, [corporateActions]);
+  useEffect(() => { historyCacheMetaRef.current = historyCacheMeta; }, [historyCacheMeta]);
   useEffect(() => () => {
     if (quoteReloadTimerRef.current !== null) window.clearTimeout(quoteReloadTimerRef.current);
   }, []);
@@ -1870,7 +1966,7 @@ function DashboardContents({
     void loadDistributions(false);
   }, [distributionCacheSavedAt, distributionCoverage, distributionSecurityIds, hydrated, loadDistributions, view]);
 
-  const requirementSignature = useMemo(() => [...historyCoverageRequired].map(([securityId, date]) => `${securityId}:${date}`).sort().join("|"), [historyCoverageRequired]);
+  const requirementSignature = useMemo(() => `${[...historyCoverageRequired].map(([securityId, date]) => `${securityId}:${date}`).sort().join("|")}|${todayKey}`, [historyCoverageRequired, todayKey]);
   useEffect(() => {
     if (!hydrated) return;
     if (historyRequirementKey.current && historyRequirementKey.current !== requirementSignature && needsHistoryBackfill(historyBars)) setHistoryRequested(false);
@@ -3126,29 +3222,22 @@ function DashboardContents({
     setIsManualRefreshing(true);
     setMarketError("");
     setHistoryError("");
-    const refreshTask = (persistenceMode === "cloud"
-      ? Promise.all([
-          requestServerMarketRefresh(splitSecurityIds(quoteSecurityIds, Number.MAX_SAFE_INTEGER).flat()).then((result) => {
-            showToast(result?.budgetLimited ? "更新上限内で取得を依頼しました" : "価格更新をサーバーへ依頼しました");
-            const previousSavedAt = initialMarketSnapshot?.savedAt ?? Object.values(quotesRef.current).map((quote) => quote.fetchedAt).sort().at(-1) ?? null;
-            void (async () => {
-              for (const delay of [900, 1_800, 3_000, 4_000]) {
-                await new Promise((resolve) => window.setTimeout(resolve, delay));
-                const snapshot = await loadServerMarketSnapshot({
-                  includeIntraday: true,
-                  allowPersistentCache: allowPersistentMarketCache,
-                }).catch(() => null);
-                if (snapshot) applyServerMarketSnapshot(snapshot);
-                if (snapshot?.savedAt && snapshot.savedAt !== previousSavedAt) break;
-              }
-            })();
-          }),
-          refreshServerUsIntraday(true),
-          loadDistributions(isForced),
-        ])
-      : Promise.all([loadQuotes(isForced, isForced ? "full" : "incremental"), loadBenchmarks(isForced), loadDistributions(isForced)]))
+
+    const marketTask = Promise.all([
+      loadQuotes(isForced, isForced ? "full" : "incremental"),
+      loadBenchmarks(isForced),
+      loadDistributions(isForced),
+      ...(persistenceMode === "cloud" ? [refreshServerUsIntraday(true)] : []),
+    ]);
+    if (persistenceMode === "cloud") {
+      const securityIds = splitSecurityIds(quoteSecurityIds, Number.MAX_SAFE_INTEGER).flat();
+      void syncServerMarketRegistry(securityIds).catch(() => undefined);
+    }
+    const refreshTask = (["overview", "watchlist", "performance", "security", "notifications"].includes(activeViewRef.current)
+      ? marketTask.then(() => loadHistory(isForced))
+      : marketTask)
       .then(() => {
-        if (persistenceMode !== "cloud") showToast("市場データを更新しました");
+        showToast("市場データを更新しました");
       })
       .catch((err) => {
         showToast("更新に失敗しました");
@@ -3160,7 +3249,7 @@ function DashboardContents({
       });
     manualRefreshInFlight.current = refreshTask;
     return refreshTask;
-  }, [allowPersistentMarketCache, applyServerMarketSnapshot, initialMarketSnapshot?.savedAt, loadBenchmarks, loadDistributions, loadQuotes, persistenceMode, quoteSecurityIds, refreshServerUsIntraday, showToast]);
+  }, [loadBenchmarks, loadDistributions, loadHistory, loadQuotes, persistenceMode, quoteSecurityIds, refreshServerUsIntraday, showToast]);
 
 
   const openSecurity = useCallback((securityOrId: string | SearchSecurity, origin?: View) => {

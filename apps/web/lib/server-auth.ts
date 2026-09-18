@@ -1,4 +1,6 @@
 import { createRemoteJWKSet, decodeProtectedHeader, importX509, jwtVerify, type JWTPayload } from "jose";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { currentMarketRequestContext } from "./server-market-request-context";
 
 const FIREBASE_CERTS_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
 const appCheckKeys = createRemoteJWKSet(new URL("https://firebaseappcheck.googleapis.com/v1/jwks"));
@@ -49,20 +51,23 @@ async function verifyAppCheckToken(token: string, projectNumber: string, appId?:
 }
 
 export async function authorizeMarketRequest(request: Request) {
-  const localPrivateMode = Boolean(process.env.KABUTORA_LOCAL_VAULT_PATH) || process.env.NODE_ENV === "development";
-  if (localPrivateMode && process.env.KABUTORA_REQUIRE_AUTH !== "true") return { uid: "local" };
-  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const nativeContext = currentMarketRequestContext();
+  const cloudflareEnv = nativeContext?.env ?? (await getCloudflareContext({ async: true }).catch(() => null))?.env;
+  const env = (cloudflareEnv ?? process.env) as Record<string, string | undefined>;
+  const localPrivateMode = !nativeContext && (Boolean(process.env.KABUTORA_LOCAL_VAULT_PATH) || process.env.NODE_ENV === "development");
+  if (localPrivateMode && env.KABUTORA_REQUIRE_AUTH !== "true") return { uid: "local" };
+  const projectId = env.FIREBASE_PROJECT_ID;
   if (!projectId) throw new Error("FIREBASE_PROJECT_ID is not configured");
   const authorization = request.headers.get("Authorization");
   if (!authorization?.startsWith("Bearer ")) throw new Error("Authentication required");
   const token = await verifyFirebaseIdToken(authorization.slice(7), projectId);
-  const allowedUid = process.env.KABUTORA_ALLOWED_UID;
+  const allowedUid = env.KABUTORA_ALLOWED_UID;
   if (!allowedUid || token.sub !== allowedUid) throw new Error("Account is not authorized");
-  if (process.env.KABUTORA_REQUIRE_APP_CHECK === "true") {
-    const projectNumber = process.env.FIREBASE_PROJECT_NUMBER;
+  if (env.KABUTORA_REQUIRE_APP_CHECK === "true") {
+    const projectNumber = env.FIREBASE_PROJECT_NUMBER;
     const appCheckToken = request.headers.get("X-Firebase-AppCheck");
     if (!projectNumber || !appCheckToken) throw new Error("App verification required");
-    await verifyAppCheckToken(appCheckToken, projectNumber, process.env.FIREBASE_WEB_APP_ID);
+    await verifyAppCheckToken(appCheckToken, projectNumber, env.FIREBASE_WEB_APP_ID);
   }
   return { uid: token.sub! };
 }

@@ -300,8 +300,9 @@ async function fetchFundPage(code: string, force: boolean) {
 }
 
 export async function getYahooJapanFundQuoteBundle(code: string, securityId: string, force = false) {
-  if (!/^[A-Z0-9]{8}$/u.test(code)) throw new Error("Invalid Japanese fund code");
-  const { page, cacheState } = await fetchFundPage(code, force);
+  const cleanCode = code.trim().toUpperCase();
+  if (!/^[A-Z0-9]{8}$/u.test(cleanCode)) throw new Error("Invalid Japanese fund code");
+  const { page, cacheState } = await fetchFundPage(cleanCode, force);
   const marketTimestamp = new Date(`${page.priceDate}T15:00:00+09:00`).toISOString();
   let intraday: IntradayBar[] = [];
   try {

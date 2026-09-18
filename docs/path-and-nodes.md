@@ -33,6 +33,8 @@ flowchart LR
 | Encrypted sync and replay | [`apps/web/lib/portfolio-session.ts`](../apps/web/lib/portfolio-session.ts) | `portfolio-cloud-store.ts`, `portfolio-offline-queue.ts`, `*-event-merge.ts` |
 | Client market loading/cache | [`apps/web/lib/client-market-service.ts`](../apps/web/lib/client-market-service.ts) | `client-market-cache.ts`, `market-snapshot-merge.ts` |
 | Market API route | [`apps/web/app/api/market/`](../apps/web/app/api/market) | matching server service in `apps/web/lib` |
+| Free-tier market request path | [`apps/web/lib/server-market-router.ts`](../apps/web/lib/server-market-router.ts) | `worker-entry.ts`, `server-market-request-context.ts`; reuses authenticated routes without Next.js request overhead |
+| Prepared market snapshots | [`apps/web/lib/server-market-response-cache.ts`](../apps/web/lib/server-market-response-cache.ts) | queue jobs prepare full/compact public JSON; HTTP reads preserve ETags and a live server clock |
 | D1 persistence | [`apps/web/lib/server-market-store.ts`](../apps/web/lib/server-market-store.ts) | `apps/web/migrations/` |
 | Scheduled refresh | [`apps/web/lib/server-market-scheduler.ts`](../apps/web/lib/server-market-scheduler.ts) | `worker-entry.ts`, `server-market-provider.ts` |
 | Provider parsing/fallback | [`apps/web/lib/server-market-provider.ts`](../apps/web/lib/server-market-provider.ts) | `yahoo-*`, `cnbc-quote-provider.ts`, `monex-foreign-fund.ts`, `japannext-pts.ts` |

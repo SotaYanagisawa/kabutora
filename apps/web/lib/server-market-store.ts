@@ -341,10 +341,9 @@ export async function upsertHistoryBatch(db: D1DatabaseLike, result: MarketHisto
   const now = isoNow();
   const resultSecurityIds = [...new Set([
     ...result.bars.map((bar) => bar.securityId),
-    ...result.corporateActions.map((action) => action.securityId),
-    ...result.distributions.map((event) => event.securityId),
-    ...Object.keys(result.inceptionDates),
   ])];
+  // A dividend-only refresh must not load, repair and rewrite decades of price
+  // history. Actions and distributions have their own persistence below.
   const cached = await readCachedHistory(db, resultSecurityIds);
   const inspected = inspectMarketHistory(cached.bars, result.bars, [...cached.corporateActions, ...result.corporateActions]);
   const barsBySecurity = new Map<string, MarketBar[]>();
@@ -370,6 +369,12 @@ export async function upsertHistoryBatch(db: D1DatabaseLike, result: MarketHisto
         OR market_history.payload_json != excluded.payload_json
     `).bind(securityId, JSON.stringify(ordered), ordered[0]?.date ?? null, ordered.at(-1)?.date ?? null, result.inceptionDates[securityId] ?? cached.inceptionDates[securityId] ?? null, inspected.quality.checksum, now);
   });
+  for (const [securityId, inceptionDate] of Object.entries(result.inceptionDates)) {
+    if (!barsBySecurity.has(securityId)) statements.push(db.prepare(`
+      UPDATE market_history SET inception_date = ?
+      WHERE security_id = ? AND inception_date IS NOT ?
+    `).bind(inceptionDate, securityId, inceptionDate));
+  }
   for (const action of result.corporateActions) {
     statements.push(db.prepare(`
       INSERT INTO market_corporate_actions (action_id, security_id, payload_json, effective_date, updated_at)

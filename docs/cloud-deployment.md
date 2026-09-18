@@ -2,6 +2,8 @@
 
 Kabutora is deployed globally on **Cloudflare Workers** (edge compute & market proxy) and uses **Firebase** (Google Authentication, App Check, and Cloud Firestore for ciphertext storage).
 
+Market JSON requests run directly in the existing Worker, using the same authenticated route handlers as local Next.js development. Keep this path on Workers Free: quote/benchmark queue jobs prepare full and compact snapshot responses in `market_response_cache`, so HTTP requests do not repeatedly reconcile chart histories. Apply `0006_market_response_cache.sql` with the existing D1 migrations before deploying this path. Snapshot cache misses retain the original database/provider fallback. Never disable authentication or App Check to reduce CPU use.
+
 ---
 
 ## 1. Architecture Flow

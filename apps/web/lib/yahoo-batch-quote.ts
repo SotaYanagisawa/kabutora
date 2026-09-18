@@ -1,5 +1,6 @@
 import type { MarketQuote } from "@kabutora/domain";
 import { MarketDataError } from "./yahoo-market";
+import { fetchCnbcBatchQuotes } from "./cnbc-quote-provider";
 
 export type YahooBatchRawQuote = {
   symbol?: string;
@@ -139,19 +140,65 @@ export async function fetchYahooBatchQuotes(
   if (!cleanSymbols.length) return new Map();
 
   const results = new Map<string, YahooBatchRawQuote>();
-  const failures: string[] = [];
+
+  // Primary batch provider: CNBC REST batch endpoint (highly reliable and unauthenticated)
+  try {
+    const cnbcRawMap = await fetchCnbcBatchQuotes(cleanSymbols, signal);
+    for (const [sym, raw] of cnbcRawMap) {
+      const parseNum = (v: unknown) => {
+        if (typeof v !== "string" && typeof v !== "number") return undefined;
+        const n = Number(String(v).replaceAll(",", "").trim());
+        return Number.isFinite(n) ? n : undefined;
+      };
+      const price = parseNum(raw.last);
+      const prevClose = parseNum(raw.previous_day_closing);
+      const timeSec = raw.last_time ? Math.floor(Date.parse(raw.last_time) / 1000) : Math.floor(Date.now() / 1000);
+      const marketState = raw.curmktstatus === "REG_MKT"
+        ? "REGULAR"
+        : raw.curmktstatus === "PRE_MKT"
+        ? "PRE"
+        : raw.curmktstatus === "POST_MKT"
+        ? "POST"
+        : "CLOSED";
+
+      results.set(sym.toUpperCase(), {
+        symbol: raw.symbol ?? sym,
+        shortName: raw.shortName,
+        longName: raw.name,
+        exchangeName: raw.exchange,
+        currency: raw.currencyCode,
+        marketState,
+        regularMarketPrice: price,
+        regularMarketPreviousClose: prevClose,
+        regularMarketOpen: parseNum(raw.open),
+        regularMarketDayHigh: parseNum(raw.high),
+        regularMarketDayLow: parseNum(raw.low),
+        regularMarketVolume: parseNum(raw.volume),
+        regularMarketTime: timeSec,
+      });
+    }
+
+    if (results.size === cleanSymbols.length) {
+      return results;
+    }
+  } catch {}
+
+  const missingSymbols = cleanSymbols.filter((s) => !results.has(s.toUpperCase()));
+  if (!missingSymbols.length) return results;
 
   for (const host of hosts) {
     try {
       const url = new URL(`https://${host}/v7/finance/quote`);
-      url.searchParams.set("symbols", cleanSymbols.join(","));
+      url.searchParams.set("symbols", missingSymbols.join(","));
       const response = await fetch(url, {
         cache: "no-store",
         headers: { Accept: "application/json", "User-Agent": USER_AGENT },
-        signal: signal ?? AbortSignal.timeout(8_000),
+        signal: signal ?? AbortSignal.timeout(4_000),
       });
 
       if (!response.ok) {
+        // If 401 Unauthorized or 403 Forbidden, Yahoo v7 quote is permanently locked; break out immediately
+        if (response.status === 401 || response.status === 403) break;
         throw new MarketDataError(`${host} returned HTTP ${response.status}`, response.status);
       }
 
@@ -165,8 +212,8 @@ export async function fetchYahooBatchQuotes(
       }
 
       return results;
-    } catch (error) {
-      failures.push(error instanceof Error ? error.message : String(error));
+    } catch {
+      break;
     }
   }
 

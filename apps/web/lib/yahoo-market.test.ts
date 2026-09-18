@@ -6,6 +6,26 @@ afterEach(() => {
 });
 
 describe("resilient Yahoo market adapter", () => {
+  it("normalizes long histories and event dates across Tokyo midnight without per-row formatters", async () => {
+    const start = Date.parse("2020-01-01T14:59:00Z") / 1000;
+    const timestamp = [start, start + 60, ...Array.from({ length: 2500 }, (_, index) => start + (index + 1) * 86400)];
+    vi.stubGlobal("caches", undefined);
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => Response.json({ chart: { result: [{
+      meta: { firstTradeDate: start }, timestamp,
+      indicators: { quote: [{ close: timestamp.map(() => 100) }] },
+      events: { dividends: { event: { date: start + 60, amount: 1 } }, splits: { event: { date: start + 60, numerator: 2, denominator: 1 } } },
+    }] } })));
+    const formatter = vi.spyOn(Intl, "DateTimeFormat");
+    try {
+      const { getYahooHistory } = await import("./yahoo-market");
+      const history = await getYahooHistory("DATE-TEST", "sec-date-test", start, start + 2600 * 86400, true);
+      expect(history.bars).toHaveLength(timestamp.length);
+      expect(history.bars.slice(0, 2).map((bar) => bar.date)).toEqual(["2020-01-01", "2020-01-02"]);
+      expect(history.corporateActions[0].effectiveDate).toBe("2020-01-02");
+      expect(history.distributions[0].exDate).toBe("2020-01-02");
+      expect(formatter).not.toHaveBeenCalled();
+    } finally { formatter.mockRestore(); }
+  });
   it("parses the normalized Yahoo Japan price board from Next flight data", () => {
     const flight = `6:{"priceBoard":{"currentKey":"detail","board":{"codeWithMarketExtension":"285A.T","label":"東証PRM","price":{"value":"50,730"},"priceChange":{"value":"2,720"},"japanUpdateTime":"15:30","delayMinutes":0},"ptsPrice":"51,200","ptsUpdateTime":"8/12 18:23","navItems":[]}}`;
     const html = `<html><script>self.__next_f.push([1,${JSON.stringify(flight)}])</script></html>`;
