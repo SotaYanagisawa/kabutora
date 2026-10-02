@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { D1DatabaseLike, D1PreparedStatementLike } from "./cloudflare-market-env";
-import { prepareMarketSnapshotResponses, readPreparedMarketSnapshot } from "./server-market-response-cache";
+import { marketSnapshotEtag, prepareMarketSnapshotResponses, readPreparedMarketSnapshot } from "./server-market-response-cache";
 import * as store from "./server-market-store";
 import type { ServerMarketSnapshot } from "./server-market-types";
 
@@ -35,12 +35,17 @@ function database() {
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("prepared public market responses", () => {
+  it("invalidates ETags for benchmark corrections with unchanged quote timestamps", () => {
+    const benchmark={id:"usd-jpy",label:"USD/JPY",symbol:"JPY=X",value:145,changeRatio:null,marketTimestamp:snapshot.generatedAt,freshness:"near_live" as const};
+    expect(marketSnapshotEtag({...snapshot,benchmarks:[benchmark]},false)).not.toBe(marketSnapshotEtag({...snapshot,benchmarks:[{...benchmark,value:146}]},false));
+  });
   it("reconciles charts once and serves full/compact responses with a current server clock", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(snapshot.generatedAt));
     const read = vi.spyOn(store, "readMarketSnapshot").mockResolvedValue(snapshot);
-    const { db } = database();
+    const { db, rows } = database();
     await prepareMarketSnapshotResponses(db);
+    expect(rows.get("full")?.payload_json.startsWith("gzip:")).toBe(true);
     vi.setSystemTime(new Date("2026-09-18T00:01:00.000Z"));
     for (const full of [true, false]) {
       const response = await readPreparedMarketSnapshot(db, new Request("https://example.test/api/market/snapshot"), full);
@@ -56,7 +61,14 @@ describe("prepared public market responses", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back when no prepared response exists or its refresh window has expired", async () => {
+  it("serves existing uncompressed rows during a rolling deployment", async () => {
+    const { db, rows } = database();
+    rows.set("compact", { payload_json: JSON.stringify({ schemaVersion: 1, quotes: [] }), etag: "legacy", generated_at: new Date().toISOString() });
+    const response = await readPreparedMarketSnapshot(db, new Request("https://example.test/api/market/snapshot"), false);
+    expect(await response?.json()).toMatchObject({ schemaVersion: 1, quotes: [], marketSessions: expect.any(Array) });
+  });
+
+  it("serves the last publication when ingestion is unavailable", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(snapshot.generatedAt));
     const { db } = database();
@@ -65,7 +77,7 @@ describe("prepared public market responses", () => {
     vi.spyOn(store, "readMarketSnapshot").mockResolvedValue(snapshot);
     await prepareMarketSnapshotResponses(db);
     vi.advanceTimersByTime(16 * 60_000);
-    expect(await readPreparedMarketSnapshot(db, request, true)).toBeNull();
+    expect((await readPreparedMarketSnapshot(db, request, true))?.headers.get("X-Market-Stale")).toBe("true");
   });
 
   it("does not load or rewrite price history when persisting dividend-only results", async () => {
@@ -83,4 +95,27 @@ describe("prepared public market responses", () => {
     expect(queries.some((sql) => sql.includes("UPDATE market_history SET inception_date"))).toBe(true);
     expect(queries.some((sql) => sql.includes("INSERT INTO market_distributions"))).toBe(true);
   });
+
+  it("skips redundant preparation when recent cache exists within minIntervalMs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(snapshot.generatedAt));
+    const read = vi.spyOn(store, "readMarketSnapshot").mockResolvedValue(snapshot);
+    const { db } = database();
+    const first = await prepareMarketSnapshotResponses(db);
+    expect(first).toBe(true);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // Call 2 minutes later with an 8-minute minIntervalMs threshold -> should skip
+    vi.advanceTimersByTime(2 * 60_000);
+    const second = await prepareMarketSnapshotResponses(db, { minIntervalMs: 8 * 60_000 });
+    expect(second).toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // Call after 8 minutes -> should execute
+    vi.advanceTimersByTime(7 * 60_000);
+    const third = await prepareMarketSnapshotResponses(db, { minIntervalMs: 8 * 60_000 });
+    expect(third).toBe(true);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
 });
+

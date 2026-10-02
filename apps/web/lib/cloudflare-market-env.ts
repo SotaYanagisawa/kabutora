@@ -23,7 +23,12 @@ export type QueueProducerLike = {
   sendBatch: (messages: Array<{ body: unknown; contentType?: "json" | "text" | "bytes" | "v8" }>) => Promise<void>;
 };
 
+export type CoordinatorNamespace = { idFromName(name: string): unknown; get(id: unknown): { fetch(input: Request | string, init?: RequestInit): Promise<Response> } };
+
 export type MarketWorkerEnv = {
+  MARKET_COORDINATOR?: CoordinatorNamespace;
+  KABUTORA_MARKET_BACKEND?: string;
+  KABUTORA_MARKET_CANARY?: string;
   MARKET_DB?: D1DatabaseLike;
   MARKET_REFRESH_QUEUE?: QueueProducerLike;
 };
@@ -33,6 +38,7 @@ export async function getMarketCloudflareContext() {
   return {
     db: (context.env as MarketWorkerEnv).MARKET_DB,
     queue: (context.env as MarketWorkerEnv).MARKET_REFRESH_QUEUE,
+    coordinator: (context.env as MarketWorkerEnv).KABUTORA_MARKET_BACKEND === "v2" ? (context.env as MarketWorkerEnv).MARKET_COORDINATOR : undefined,
     ctx: context.ctx,
   };
 }

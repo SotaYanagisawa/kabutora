@@ -33,7 +33,7 @@ try {
   await no(getDoc(doc(other, "users", uid, "vaults", "default")));
   await no(getDoc(doc(anon, "users", uid, "vaults", "default")));
   await no(setDoc(vault, legacy));
-  await ok(setDoc(key, legacyKey));
+  await no(setDoc(key, legacyKey));
   await no(setDoc(doc(other, "users", uid, "keys", "google-account"), legacyKey));
   await no(setDoc(key, { ...legacyKey, encodedKey: "short" }));
   await environment.withSecurityRulesDisabled(async (context) => {
@@ -66,7 +66,7 @@ try {
   await ok(getDoc(vault));
   if ((await getDoc(key)).exists()) throw new Error("raw_key_was_not_removed");
   checks++;
-  await ok(setDoc(key, { ...legacyKey, keyId: next.keyId }));
+  await no(setDoc(key, { ...legacyKey, keyId: next.keyId }));
   await no(setDoc(vault, { ...legacy, revision: 3 }));
   await no(setDoc(doc(db, "users", uid, "events", "old-generation"), { ownerUid: uid, keyId: legacyKey.keyId, payload: block }));
   await ok(setDoc(doc(db, "users", uid, "events", "new-generation"), { ownerUid: uid, keyId: next.keyId, payload: block }));
@@ -78,6 +78,26 @@ try {
   await ok(cleanup.commit());
   await no(setDoc(event, { ownerUid: uid, keyId: next.keyId, payload: block }));
   await no(setDoc(doc(db, "users", uid, "receipts", "plaintext"), { ownerUid: uid, generation: next.keyId, revision: 3, balance: "1000" }));
+  // Exercise real multi-event receipt access limits, rather than mocked transactions.
+  const incorporated = Array.from({ length: 201 }, (_, i) => `checkpoint-${i}`);
+  for (let offset = 0; offset < incorporated.length; offset += 8) {
+    const additions = writeBatch(db);
+    for (const id of incorporated.slice(offset, offset + 8)) additions.set(doc(db, "users", uid, "events", id), { ownerUid: uid, keyId: next.keyId, payload: block });
+    await ok(additions.commit());
+  }
+  for (let offset = 0; offset < incorporated.length; offset += 8) {
+    const batch = writeBatch(db);
+    for (const id of incorporated.slice(offset, offset + 8)) {
+      batch.set(doc(db, "users", uid, "receipts", id), { ownerUid: uid, generation: next.keyId, revision: 3 });
+      batch.delete(doc(db, "users", uid, "events", id));
+    }
+    await ok(batch.commit());
+  }
+  for (const id of incorporated) {
+    if ((await getDoc(doc(db, "users", uid, "events", id))).exists() || !(await getDoc(doc(db, "users", uid, "receipts", id))).exists()) throw new Error("checkpoint_cleanup_incomplete");
+    checks++;
+  }
+  await no(getDoc(doc(other, "users", uid, "receipts", incorporated[0])));
   await no(deleteDoc(vault));
   console.log(`Firestore security rules: ${checks} authorization, generation, lock, privacy and compaction checks passed`);
 } finally { await environment.cleanup(); }

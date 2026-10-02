@@ -11,7 +11,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  try { await authorizeMarketRequest(request); } catch { return unauthorizedResponse(); }
+  try { await authorizeMarketRequest(request); } catch (cause) { return unauthorizedResponse(cause); }
   const body = await request.json().catch(() => ({})) as { refresh?: unknown; securityIds?: unknown; from?: unknown };
   const securityIds = typeof body.securityIds === "string" ? body.securityIds.split(",").map((value) => value.trim()).filter(Boolean) : [];
   const requestedFrom = typeof body.from === "string" && /^20\d{2}-\d{2}-\d{2}$/u.test(body.from) ? body.from : null;

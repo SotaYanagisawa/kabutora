@@ -17,7 +17,7 @@ function privateHeaders(etag?: string) {
 }
 
 export async function GET(request: Request) {
-  try { await authorizeMarketRequest(request); } catch { return unauthorizedResponse(); }
+  try { await authorizeMarketRequest(request); } catch (cause) { return unauthorizedResponse(cause); }
   const url = new URL(request.url);
   const market = url.searchParams.get("market")?.toUpperCase() === "US" ? "US" : "JP";
   const requestedValues = (url.searchParams.get("securityIds") ?? "").split(",").filter(Boolean);

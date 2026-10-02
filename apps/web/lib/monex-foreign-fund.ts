@@ -1,3 +1,5 @@
+import { boundedMarketCacheSet } from "./server/market/bounded-cache";
+import { providerFetch } from "./server/market/provider-fetch";
 import type { MarketBar, MarketQuote } from "@kabutora/domain";
 
 type ChartPoint = { dt?: number; p?: number; pd?: number };
@@ -54,7 +56,7 @@ async function fetchFundPage(providerCode: string, securityId: string, force: bo
   const cached = pageCache.get(providerCode);
   if (!force && cached && cached.expiresAt > Date.now()) return { page: cached.value, cacheState: "memory" as const };
   try {
-    const response = await fetch(`https://fund.monex.co.jp/detail/${encodeURIComponent(providerCode)}`, {
+    const response = await providerFetch(`https://fund.monex.co.jp/detail/${encodeURIComponent(providerCode)}`, {
       cache: "no-store",
       headers: { Accept: "text/html", "User-Agent": USER_AGENT },
       signal: AbortSignal.timeout(20_000),
@@ -62,7 +64,7 @@ async function fetchFundPage(providerCode: string, securityId: string, force: bo
     if (!response.ok) throw new Error(`Monex returned ${response.status}`);
     const page = parseMonexForeignFundPage(await response.text(), securityId);
     if (!page) throw new Error("foreign fund NAV history unavailable");
-    pageCache.set(providerCode, { value: page, expiresAt: Date.now() + FUND_TTL_MS, staleUntil: Date.now() + STALE_TTL_MS });
+    boundedMarketCacheSet(pageCache, providerCode, { value: page, expiresAt: Date.now() + FUND_TTL_MS, staleUntil: Date.now() + STALE_TTL_MS });
     return { page, cacheState: "network" as const };
   } catch (error) {
     if (cached && cached.staleUntil > Date.now()) return { page: cached.value, cacheState: "stale" as const };

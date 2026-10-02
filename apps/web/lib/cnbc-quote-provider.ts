@@ -1,3 +1,5 @@
+import { providerFetch } from "./server/market/provider-fetch";
+import { Decimal } from "@kabutora/domain";
 import type { MarketQuote } from "@kabutora/domain";
 
 export type CnbcRawQuote = {
@@ -74,8 +76,8 @@ export function parseCnbcQuote(
   if (price == null || price <= 0) return null;
 
   const previousClose = parseNumber(raw.previous_day_closing);
-  const changeRatio = previousClose && previousClose > 0 ? Math.abs(price / previousClose - 1) : 0;
-  const validationStatus: MarketQuote["validationStatus"] = changeRatio > 0.35 ? "suspect" : "valid";
+  const changeRatio = previousClose && previousClose > 0 ? new Decimal(String(price)).div(String(previousClose)).sub(1).abs() : new Decimal(0);
+  const validationStatus: MarketQuote["validationStatus"] = changeRatio.gt("0.35") ? "suspect" : "valid";
 
   const session = parseSession(raw.curmktstatus);
   const marketTimestamp = parseIsoTimestamp(raw.last_time, fetchedAt);
@@ -131,7 +133,7 @@ export async function fetchCnbcQuote(
   const cnbcSymbol = mapYahooSymbolToCnbc(symbol);
   const url = `https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=${encodeURIComponent(cnbcSymbol)}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json`;
 
-  const response = await fetch(url, {
+  const response = await providerFetch(url, {
     cache: "no-store",
     headers: {
       Accept: "application/json",
@@ -178,7 +180,7 @@ export async function fetchCnbcBatchQuotes(
     const chunk = cnbcSymbols.slice(i, i + chunkSize);
     try {
       const url = `https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=${encodeURIComponent(chunk.join("|"))}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json`;
-      const response = await fetch(url, {
+      const response = await providerFetch(url, {
         cache: "no-store",
         headers: {
           Accept: "application/json",

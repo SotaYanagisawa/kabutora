@@ -92,7 +92,7 @@ export type MarketRefreshJob = {
   version: 1;
   claimId: string;
   runId: string;
-  kind: "quotes" | "history" | "distributions" | "benchmarks";
+  kind: "quotes" | "history" | "distributions" | "benchmarks" | "manual";
   securityIds: string[];
   scheduledAt: string;
 };

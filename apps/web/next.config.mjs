@@ -14,7 +14,8 @@ const nextConfig = {
   },
   env: {
     NEXT_PUBLIC_KABUTORA_BUILD_ID: buildId,
-    NEXT_PUBLIC_KABUTORA_RECOVERY_MIGRATION: "deferred",
+    NEXT_PUBLIC_KABUTORA_RECOVERY_MIGRATION: process.env.NEXT_PUBLIC_KABUTORA_RECOVERY_MIGRATION ?? "enabled",
+    NEXT_PUBLIC_KABUTORA_MARKET_BACKEND: process.env.NEXT_PUBLIC_KABUTORA_MARKET_BACKEND ?? "v2",
   },
   generateBuildId: async () => buildId,
   async headers() {

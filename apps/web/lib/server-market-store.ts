@@ -199,17 +199,30 @@ export async function readStoredQuotes(db: D1DatabaseLike) {
   }));
 }
 
+/** Chunk after alias expansion: D1 permits at most 100 bound parameters. */
+async function readAliasRows<T>(db: D1DatabaseLike, sql: (placeholders: string) => string, variants: string[]): Promise<T[]> {
+  const rows: T[] = [];
+  for (let offset = 0; offset < variants.length; offset += 90) {
+    const chunk = variants.slice(offset, offset + 90);
+    const result = await db.prepare(sql(chunk.map(() => "?").join(","))).bind(...chunk).all<T>();
+    if (!result.success) throw new Error("market_storage_read_failed");
+    rows.push(...result.results ?? []);
+  }
+  return rows;
+}
+
 export async function readUsIntradayBars(db: D1DatabaseLike, securityIds: string[]) {
   const canonicalIds = [...new Set(securityIds.map(canonicalDomainSecurityId))].slice(0, 20);
   if (!canonicalIds.length) {
     return { bars: [] as IntradayBar[], revision: null as string | null, sessions: [] as UsIntradaySessionCoverage[], missingCurrentSecurityIds: [] as string[] };
   }
   const variants = publicSecurityIdVariants(canonicalIds);
-  const placeholders = variants.map(() => "?").join(",");
-  const [intradayResult, securityResult] = await Promise.all([
-    db.prepare(`SELECT security_id, payload_json, updated_at FROM market_intraday WHERE security_id IN (${placeholders})`).bind(...variants).all<PayloadRow>(),
-    db.prepare(`SELECT security_id, exchange_mic, currency FROM market_securities WHERE security_id IN (${placeholders})`).bind(...variants).all<SnapshotSecurityRow>(),
+  const [intradayRows, securityRows] = await Promise.all([
+    readAliasRows<PayloadRow>(db, (p) => `SELECT security_id, payload_json, updated_at FROM market_intraday WHERE security_id IN (${p})`, variants),
+    readAliasRows<SnapshotSecurityRow>(db, (p) => `SELECT security_id, exchange_mic, currency FROM market_securities WHERE security_id IN (${p})`, variants),
   ]);
+  const intradayResult = { results: intradayRows };
+  const securityResult = { results: securityRows };
   const securityByCanonical = new Map((securityResult.results ?? []).map((security) => [canonicalDomainSecurityId(security.security_id), security]));
   const barsByCanonical = new Map<string, IntradayBar[]>();
   for (const row of intradayResult.results ?? []) {
@@ -289,7 +302,8 @@ export async function upsertQuoteBatch(db: D1DatabaseLike, result: MarketQuoteBa
           freshness = excluded.freshness,
           validation_status = excluded.validation_status,
           updated_at = excluded.updated_at
-        WHERE excluded.fetched_at >= market_quotes.fetched_at
+        WHERE excluded.market_timestamp >= market_quotes.market_timestamp
+          AND excluded.fetched_at >= market_quotes.fetched_at
           AND (
             excluded.market_timestamp != market_quotes.market_timestamp
             OR excluded.session != market_quotes.session
@@ -484,11 +498,12 @@ export async function upsertBenchmarks(db: D1DatabaseLike, benchmarks: ServerBen
       market_timestamp = excluded.market_timestamp,
       fetched_at = excluded.fetched_at,
       updated_at = excluded.updated_at
-    WHERE excluded.fetched_at >= market_benchmarks.fetched_at
+    WHERE excluded.market_timestamp >= market_benchmarks.market_timestamp
+      AND excluded.fetched_at >= market_benchmarks.fetched_at
       AND (
         excluded.market_timestamp != market_benchmarks.market_timestamp
-        OR json_extract(excluded.payload_json, '$.price') IS NOT json_extract(market_benchmarks.payload_json, '$.price')
-        OR json_extract(excluded.payload_json, '$.change') IS NOT json_extract(market_benchmarks.payload_json, '$.change')
+        OR json_extract(excluded.payload_json, '$.value') IS NOT json_extract(market_benchmarks.payload_json, '$.value')
+        OR json_extract(excluded.payload_json, '$.changeRatio') IS NOT json_extract(market_benchmarks.payload_json, '$.changeRatio')
       )
   `).bind(benchmark.id, JSON.stringify(benchmark), benchmark.marketTimestamp, benchmark.fetchedAt ?? now, now)));
 }
@@ -500,14 +515,15 @@ function safeJsonRows<T>(rows: PayloadRow[]) {
 }
 
 export async function readMarketSnapshot(db: D1DatabaseLike, includeIntraday = true): Promise<ServerMarketSnapshot> {
-  const [securitiesResult, quoteResult, benchmarkResult, intradayResult, ptsResult, runResult, usage] = await Promise.all([
-    db.prepare("SELECT security_id, exchange_mic, currency FROM market_securities WHERE enabled = 1").all<SnapshotSecurityRow>(),
+  const securitiesResult = await db.prepare("SELECT security_id, exchange_mic, currency FROM market_securities WHERE enabled = 1").all<SnapshotSecurityRow>();
+  const publicIds = new Set((securitiesResult.results ?? []).map(security => canonicalDomainSecurityId(security.security_id)));
+  const [quoteResult, benchmarkResult, intradayResult, ptsResult, runResult, usage] = await Promise.all([
     db.prepare(`SELECT q.payload_json FROM market_quotes q JOIN market_securities s ON s.security_id = q.security_id WHERE s.enabled = 1 ORDER BY q.security_id`).all<PayloadRow>(),
     db.prepare("SELECT payload_json FROM market_benchmarks ORDER BY benchmark_id").all<PayloadRow>(),
     includeIntraday
       ? db.prepare(`SELECT i.security_id, i.payload_json, i.updated_at FROM market_intraday i JOIN market_securities s ON s.security_id = i.security_id WHERE s.enabled = 1 ORDER BY i.security_id`).all<PayloadRow>()
       : Promise.resolve({ success: true, results: [] as PayloadRow[] }),
-    includeIntraday ? readLatestJapannextPtsBars(db) : Promise.resolve({ bars: [] as IntradayBar[], revision: null as string | null }),
+    includeIntraday ? readLatestJapannextPtsBars(db, publicIds) : Promise.resolve({ bars: [] as IntradayBar[], revision: null as string | null }),
     db.prepare("SELECT started_at, status FROM market_refresh_runs ORDER BY started_at DESC LIMIT 1").first<{ started_at: string; status: string }>(),
     readDailyUsage(db),
   ]);
@@ -583,11 +599,13 @@ export async function readMarketSnapshot(db: D1DatabaseLike, includeIntraday = t
     const maxAge = quote.venueCode === "FUND" ? 26 * 60 * 60 * 1000 : quote.session === "closed" ? 6 * 60 * 60 * 1000 : 20 * 60 * 1000;
     return quote.freshness === "stale" || now - Date.parse(quote.fetchedAt) > maxAge;
   };
-  const fresh = quotes.filter((quote) => !isStale(quote)).length;
-  const stale = quotes.filter(isStale).length;
-  const suspect = quotes.filter((quote) => quote.validationStatus === "suspect").length;
+  // Symbol aliases are needed in the payload, but must not inflate coverage.
+  const coveredQuotes = [...new Map(quotes.map((quote) => [canonicalDomainSecurityId(quote.securityId), quote])).values()];
+  const fresh = coveredQuotes.filter((quote) => !isStale(quote)).length;
+  const stale = coveredQuotes.filter(isStale).length;
+  const suspect = coveredQuotes.filter((quote) => quote.validationStatus === "suspect").length;
   const savedAt = quotes.map((quote) => quote.fetchedAt).sort().at(-1) ?? null;
-  const registered = securitiesResult.results?.length ?? 0;
+  const registered = securityByCanonicalId.size;
   return {
     schemaVersion: 1,
     generatedAt: isoNow(),
@@ -597,9 +615,9 @@ export async function readMarketSnapshot(db: D1DatabaseLike, includeIntraday = t
     benchmarks,
     intraday: reconciledIntraday,
     intradayRevision,
-    coverage: { registered, quoted: quotes.length, fresh, stale, suspect },
+    coverage: { registered, quoted: coveredQuotes.length, fresh, stale, suspect },
     refresh: {
-      status: !quotes.length ? "empty" : quotes.length < registered || stale || suspect ? "partial" : "ready",
+      status: !quotes.length ? "empty" : coveredQuotes.length < registered || stale || suspect ? "partial" : "ready",
       lastRunAt: runResult?.started_at ?? null,
       queueMessagesToday: usage.queueMessages,
       providerCallsToday: usage.providerCalls,
@@ -625,8 +643,8 @@ export async function readCachedHistory(db: D1DatabaseLike, securityIds: string[
       } catch { /* Ignore corrupt cache rows and let the provider path repair them. */ }
     }
     const idVariants = publicSecurityIdVariants(batch);
-    const actionPlaceholders = idVariants.map(() => "?").join(",");
-    const actionResponse = await db.prepare(`SELECT payload_json FROM market_corporate_actions WHERE security_id IN (${actionPlaceholders})`).bind(...idVariants).all<PayloadRow>();
+    const actionRows = await readAliasRows<PayloadRow>(db, (p) => `SELECT payload_json FROM market_corporate_actions WHERE security_id IN (${p})`, idVariants);
+    const actionResponse = { results: actionRows };
     actions.push(...safeJsonRows<CorporateAction>(actionResponse.results ?? []));
   }
   const uniqueActions = [...new Map(actions.map((a) => [a.id, a])).values()];
@@ -636,14 +654,13 @@ export async function readCachedHistory(db: D1DatabaseLike, securityIds: string[
 export async function readCachedDistributions(db: D1DatabaseLike, securityIds: string[]) {
   if (!securityIds.length) return { distributions: [] as DistributionEvent[], corporateActions: [] as CorporateAction[], coverage: [] as DistributionCoverage[] };
   const variants = publicSecurityIdVariants(securityIds);
-  const placeholders = variants.map(() => "?").join(",");
-  const [eventResponse, actionResponse, coverageResponse] = await Promise.all([
-    db.prepare(`SELECT payload_json FROM market_distributions WHERE security_id IN (${placeholders}) ORDER BY effective_date`).bind(...variants).all<PayloadRow>(),
-    db.prepare(`SELECT payload_json FROM market_corporate_actions WHERE security_id IN (${placeholders}) ORDER BY effective_date`).bind(...variants).all<PayloadRow>(),
-    db.prepare(`SELECT security_id, covered_from, checked_through, checked_at, event_count, status, source_provider FROM market_distribution_coverage WHERE security_id IN (${placeholders})`).bind(...variants).all<{
-      security_id: string; covered_from: string; checked_through: string; checked_at: string; event_count: number; status: DistributionCoverage["status"]; source_provider: string | null;
-    }>(),
+  const [eventRows, actionRows, coverageRows] = await Promise.all([
+    readAliasRows<PayloadRow>(db, (p) => `SELECT payload_json FROM market_distributions WHERE security_id IN (${p}) ORDER BY effective_date`, variants),
+    readAliasRows<PayloadRow>(db, (p) => `SELECT payload_json FROM market_corporate_actions WHERE security_id IN (${p}) ORDER BY effective_date`, variants),
+    readAliasRows<{ security_id: string; covered_from: string; checked_through: string; checked_at: string; event_count: number; status: DistributionCoverage["status"]; source_provider: string | null }>(db,
+      (p) => `SELECT security_id, covered_from, checked_through, checked_at, event_count, status, source_provider FROM market_distribution_coverage WHERE security_id IN (${p})`, variants),
   ]);
+  const eventResponse = { results: eventRows }, actionResponse = { results: actionRows }, coverageResponse = { results: coverageRows };
   const distributions = [...new Map(safeJsonRows<DistributionEvent>(eventResponse.results ?? []).map((event) => [event.id, event])).values()];
   const corporateActions = [...new Map(safeJsonRows<CorporateAction>(actionResponse.results ?? []).map((action) => [action.id, action])).values()];
   const coverage = (coverageResponse.results ?? []).map((row): DistributionCoverage => ({

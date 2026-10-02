@@ -11,8 +11,10 @@
     "binding": "ASSETS"
   },
   "triggers": {
-    "crons": ["*/10 * * * *", "* * * * *"]
+    "crons": ["* * * * *"]
   },
+  "durable_objects": { "bindings": [{ "name": "MARKET_COORDINATOR", "class_name": "MarketCoordinator" }] },
+  "migrations": [{ "tag": "market-coordinator-v2", "new_sqlite_classes": ["MarketCoordinator"] }],
   "d1_databases": [
     {
       "binding": "MARKET_DB",
@@ -41,6 +43,8 @@
   },
   "vars": {
     "KABUTORA_REQUIRE_AUTH": "true",
+    "KABUTORA_MARKET_BACKEND": "v2",
+    "KABUTORA_MARKET_CANARY": "false",
     "KABUTORA_REQUIRE_APP_CHECK": "true"
   },
   "secrets": {

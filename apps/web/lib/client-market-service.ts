@@ -1,9 +1,12 @@
+import { portfolioMarketSessions } from "./market-session";
+import { clearPublicMarketCache, fetchMarketResponse, usesPublicMarketBackend, loadPublicMarketResource } from "./public-market-client";
 import { getMarketAuthHeaders } from "./firebase-client";
 import { readMarketApiResponse } from "./market-api-response";
 import { readServerSnapshotCache, writeServerSnapshotCache } from "./client-market-cache";
 import type { ServerMarketSnapshot } from "./server-market-types";
 import type { IntradayBar } from "@kabutora/domain";
 import { timeoutSignal } from "./operation-deadline";
+import { canonicalDomainSecurityId } from "@kabutora/domain";
 
 const snapshotEtags = { full: "", compact: "" };
 const usIntradayEtags = new Map<string, string>();
@@ -15,6 +18,7 @@ export function clearInMemorySnapshotCache() {
   cachedSnapshots.full = null;
   cachedSnapshots.compact = null;
   usIntradayEtags.clear();
+  clearPublicMarketCache();
 }
 
 export function getCachedServerMarketSnapshot(mode: "full" | "compact" = "compact"): ServerMarketSnapshot | null {
@@ -27,6 +31,24 @@ export async function loadServerMarketSnapshot(options: {
   allowPersistentCache?: boolean;
 } = {}) {
   const mode = options.includeIntraday === true ? "full" : "compact";
+  if (usesPublicMarketBackend()) {
+    try {
+      const payload=await loadPublicMarketResource("quotes");
+      const quotes=Array.isArray(payload.quotes) ? payload.quotes as ServerMarketSnapshot["quotes"] : [];
+      const benchmarks=Array.isArray(payload.benchmarks) ? payload.benchmarks as ServerMarketSnapshot["benchmarks"] : [];
+      const points=options.includeIntraday ? await loadPublicMarketResource("intraday") : undefined;
+      const fresh=quotes.filter((quote)=>Date.now()-Date.parse(quote.fetchedAt)<20*60_000).length;
+      const snapshot:ServerMarketSnapshot={schemaVersion:1,generatedAt:String(payload.generatedAt ?? new Date().toISOString()),savedAt:quotes.map((quote)=>quote.fetchedAt).sort().at(-1) ?? null,marketSessions:portfolioMarketSessions("ALL"),quotes,benchmarks,intraday:Array.isArray(points?.bars) ? points.bars as IntradayBar[] : [],coverage:{registered:quotes.length,quoted:quotes.length,fresh,stale:quotes.length-fresh,suspect:quotes.filter((quote)=>quote.validationStatus==="suspect").length},refresh:{status:quotes.length ? "ready" : "empty",lastRunAt:null,queueMessagesToday:0,providerCallsToday:0}};
+      cachedSnapshots[mode]=snapshot;
+      if(options.allowPersistentCache!==false) void writeServerSnapshotCache(mode,snapshot,`v2-${snapshot.savedAt}`).catch(()=>undefined);
+      return snapshot;
+    } catch {
+      if(cachedSnapshots[mode]) return cachedSnapshots[mode];
+      if(options.allowPersistentCache!==false) return (await readServerSnapshotCache(mode).catch(()=>null))?.snapshot ?? null;
+      return null;
+    }
+  }
+
   const allowPersistentCache = options.allowPersistentCache !== false;
 
   if (allowPersistentCache && (!snapshotEtags[mode] || !cachedSnapshots[mode])) {
@@ -57,6 +79,8 @@ export async function loadServerMarketSnapshot(options: {
       const persisted = await readServerSnapshotCache(mode);
       if (persisted) cachedSnapshots[mode] = persisted.snapshot;
     }
+    const clock=response.headers.get("X-Market-Server-Time");
+    if (cachedSnapshots[mode] && clock) cachedSnapshots[mode]={...cachedSnapshots[mode]!,generatedAt:clock};
     return cachedSnapshots[mode];
   }
   if (response.status === 204 || response.status === 503) return cachedSnapshots[mode];
@@ -76,7 +100,7 @@ export async function loadServerPtsIntraday(securityIds: string[], cursor?: stri
   if (!unique.length) return { bars: [] as IntradayBar[], nextCursor: cursor ?? null, generatedAt: new Date().toISOString() };
   const params = new URLSearchParams({ securityIds: unique.join(",") });
   if (cursor) params.set("cursor", cursor);
-  const response = await fetch(`/api/market/intraday?${params}`, {
+  const response = await fetchMarketResponse(`/api/market/intraday?${params}`, {
     cache: "no-store",
     headers: await getMarketAuthHeaders(),
     signal: timeoutSignal(4_000),
@@ -114,7 +138,7 @@ export async function loadServerUsIntraday(securityIds: string[], options: { rec
   const headers: Record<string, string> = { ...await getMarketAuthHeaders() };
   const etag = usIntradayEtags.get(key);
   if (etag && !options.recover) headers["If-None-Match"] = etag;
-  const response = await fetch(`/api/market/intraday?${params}`, {
+  const response = await fetchMarketResponse(`/api/market/intraday?${params}`, {
     cache: "no-store",
     headers,
     signal: timeoutSignal(options.recover ? 45_000 : 6_000),
@@ -140,7 +164,7 @@ export async function requestServerMarketRefresh(securityIds: string[]) {
     method: "POST",
     cache: "no-store",
     headers: { ...await getMarketAuthHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ securityIds: unique }),
+    body: JSON.stringify(usesPublicMarketBackend() ? {} : { securityIds: unique }),
     signal: timeoutSignal(8_000),
   });
   const payload = await readMarketApiResponse<{ runId?: string; accepted?: number; queued?: number; budgetLimited?: boolean; error?: string }>(response, "市場データの更新依頼を確認できませんでした");
@@ -148,7 +172,55 @@ export async function requestServerMarketRefresh(securityIds: string[]) {
   return payload;
 }
 
+/** Provider work belongs in the queue; foreground requests only read snapshots. */
+export async function refreshQueuedMarketData(securityIds: string[], options: {
+  allowPersistentCache: boolean;
+  onSnapshot: (snapshot: ServerMarketSnapshot) => unknown;
+}) {
+  const startedAt = Date.now();
+  const requested = new Set(securityIds.map(canonicalDomainSecurityId));
+  const result = await requestServerMarketRefresh(securityIds);
+  if (!result) return "empty" as const;
+  if (usesPublicMarketBackend() && result.runId) {
+    const deadline = Date.now() + 30_000;
+    do {
+      if (typeof document !== "undefined" && document.hidden) return "pending" as const;
+      const response = await fetch(`/api/market/progress?runId=${encodeURIComponent(result.runId)}`, {cache:"no-store",headers:await getMarketAuthHeaders(),signal:timeoutSignal(5000)});
+      if (response.ok) {
+        const progress: unknown = await response.json();
+        if (progress && typeof progress === "object" && "status" in progress) {
+          if ("budgetDeferred" in progress && typeof progress.budgetDeferred === "number" && progress.budgetDeferred > 0) return "limited" as const;
+          if (progress.status === "complete" || progress.status === "partial") {
+            clearPublicMarketCache();
+            const snapshot = await loadServerMarketSnapshot({allowPersistentCache:options.allowPersistentCache});
+            if (snapshot) options.onSnapshot(snapshot);
+            return progress.status === "complete" ? "updated" as const : "partial" as const;
+          }
+          if (progress.status === "unknown" && result.budgetLimited) return "limited" as const;
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 250));
+    } while (Date.now() < deadline);
+    return "pending" as const;
+  }
+  const deadline = Date.now() + 30_000;
+  do {
+    const snapshot = await loadServerMarketSnapshot({ allowPersistentCache: options.allowPersistentCache });
+    if (snapshot) {
+      options.onSnapshot(snapshot);
+      if (!result.queued) return result.budgetLimited ? "limited" as const : "cached" as const;
+      const refreshed = new Set(snapshot.quotes.filter((quote) => Date.parse(quote.fetchedAt) >= startedAt)
+        .map((quote) => canonicalDomainSecurityId(quote.securityId)));
+      if ([...requested].every((id) => refreshed.has(id))) return "updated" as const;
+    }
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  } while (Date.now() < deadline);
+  return "pending" as const;
+}
+
 export async function syncServerMarketRegistry(securityIds: string[], mode: "merge" | "reconcile" = "merge") {
+  if (usesPublicMarketBackend()) return true;
   const unique = [...new Set(securityIds.map((value) => value.trim()).filter(Boolean))].slice(0, 250);
   if (!unique.length) return false;
   const response = await fetch("/api/market/registry", {

@@ -1,3 +1,5 @@
+import { providerFetch } from "./server/market/provider-fetch";
+import { Decimal } from "@kabutora/domain";
 import type { CorporateAction, DistributionEvent, IntradayBar, MarketBar, MarketQuote } from "@kabutora/domain";
 
 type YahooChartResult = {
@@ -251,7 +253,7 @@ async function writeEdgeChart(symbol: string, params: Record<string, string>, va
 
 async function requestHost(host: string, symbol: string, params: Record<string, string>) {
   const url = chartUrl(host, symbol, params);
-  const response = await withProviderSlot(() => fetch(url, {
+  const response = await withProviderSlot(() => providerFetch(url, {
     cache: "no-store",
     headers: { Accept: "application/json", "User-Agent": USER_AGENT },
     signal: AbortSignal.timeout(12_000),
@@ -404,7 +406,7 @@ async function getYahooJapanBoard(symbol: string, force: boolean) {
     return { board: edge.value, cacheState: "edge" as const };
   }
   try {
-    const response = await withProviderSlot(() => fetch(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(symbol)}`, {
+    const response = await withProviderSlot(() => providerFetch(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(symbol)}`, {
       cache: "no-store",
       headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0 (compatible; Kabutora/1.0)" },
       signal: AbortSignal.timeout(12_000),
@@ -689,8 +691,8 @@ export async function getYahooQuoteBundle(
     previousClose &&
     previousClose > 0 &&
     !hasRecentSplit &&
-    Math.abs(price / previousClose - 1) > 0.35 &&
-    Math.abs(metaPrice / previousClose - 1) <= 0.35
+    new Decimal(String(price)).div(String(previousClose)).sub(1).abs().gt("0.35") &&
+    new Decimal(String(metaPrice)).div(String(previousClose)).sub(1).abs().lte("0.35")
   ) {
     price = metaPrice;
     timestamp = metaTimestamp ?? timestamp;
@@ -698,8 +700,8 @@ export async function getYahooQuoteBundle(
 
   if (price == null || price <= 0 || timestamp == null) throw new MarketDataError(`${symbol}: no usable market price`);
 
-  const changeRatio = previousClose && previousClose > 0 ? Math.abs(price / previousClose - 1) : 0;
-  const validationStatus: MarketQuote["validationStatus"] = changeRatio > 0.35 && !hasRecentSplit ? "suspect" : "valid";
+  const changeRatio = previousClose && previousClose > 0 ? new Decimal(String(price)).div(String(previousClose)).sub(1).abs() : new Decimal(0);
+  const validationStatus: MarketQuote["validationStatus"] = changeRatio.gt("0.35") && !hasRecentSplit ? "suspect" : "valid";
   const ageSeconds = Math.max(0, nowSeconds - timestamp);
   const quote: MarketQuote = {
     price: String(price),

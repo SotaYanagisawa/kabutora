@@ -99,7 +99,7 @@ describe("encrypted watchlist and preferences events", () => {
 });
 
 describe("revisioned cloud saves and compaction", () => {
-  const envelope: any = { format: "kabutora-encrypted-vault", version: 2, keyId: "generation-2", ownerUid: "u1", revision: 2 };
+  const envelope: any = { format: "kabutora-encrypted-vault", version: 2, keyId: "generation-2", ownerUid: "u1", revision: 2, payload: {algorithm:"AES-256-GCM",iv:"synthetic",ciphertext:"synthetic-encrypted-payload"} };
   const store = () => createFirebasePortfolioCloudStore({} as any);
   beforeEach(() => { documents.clear(); commits.length = 0; documents.set("users/u1/vaults/default", { ...envelope, revision: 1 }); });
   it("retains the existing 40-event compaction threshold", () => expect(PORTFOLIO_EVENT_COMPACTION_THRESHOLD).toBe(40));

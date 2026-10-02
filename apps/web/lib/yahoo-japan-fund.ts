@@ -1,3 +1,5 @@
+import { boundedMarketCacheSet } from "./server/market/bounded-cache";
+import { providerFetch } from "./server/market/provider-fetch";
 import type { DistributionEvent, IntradayBar, MarketBar, MarketQuote } from "@kabutora/domain";
 import type { JapanFundSearchResult } from "./japan-fund-catalog";
 
@@ -225,7 +227,7 @@ const BLACKROCK_DISTRIBUTION_PAGES: Record<string, string> = {
 async function requestBlackRockDistributions(code: string, securityId: string) {
   const productUrl = BLACKROCK_DISTRIBUTION_PAGES[code];
   if (!productUrl) return null;
-  const pageResponse = await fetch(productUrl, {
+  const pageResponse = await providerFetch(productUrl, {
     cache: "no-store",
     headers: { Accept: "text/html", "User-Agent": USER_AGENT },
     signal: AbortSignal.timeout(12_000),
@@ -236,7 +238,7 @@ async function requestBlackRockDistributions(code: string, securityId: string) {
     ?? /data-ajaxuri="([^"]+\.ajax\?tab=distributions&fileType=json&subtab=table)"/u.exec(pageHtml)?.[1];
   if (!endpoint) throw new Error("BlackRock distribution endpoint unavailable");
   const endpointUrl = new URL(endpoint.replaceAll("&amp;", "&"), productUrl).toString();
-  const response = await fetch(endpointUrl, {
+  const response = await providerFetch(endpointUrl, {
     cache: "no-store",
     headers: { Accept: "application/json", Referer: productUrl, "User-Agent": USER_AGENT },
     signal: AbortSignal.timeout(12_000),
@@ -256,7 +258,7 @@ async function requestFundDistributions(code: string, securityId: string, force:
     let events = official;
     if (!events) {
       const sourceUrl = `https://finance.yahoo.co.jp/quote/${encodeURIComponent(code)}/dividendinfo`;
-      const response = await fetch(sourceUrl, {
+      const response = await providerFetch(sourceUrl, {
         cache: "no-store",
         headers: { Accept: "text/html", "User-Agent": USER_AGENT },
         signal: AbortSignal.timeout(12_000),
@@ -264,7 +266,7 @@ async function requestFundDistributions(code: string, securityId: string, force:
       if (!response.ok) throw new Error(`Yahoo Japan fund distributions returned ${response.status}`);
       events = parseYahooJapanFundDistributions(await response.text(), code, securityId);
     }
-    distributionCache.set(code, { value: events, expiresAt: Date.now() + FUND_TTL_MS, staleUntil: Date.now() + STALE_TTL_MS });
+    boundedMarketCacheSet(distributionCache, code, { value: events, expiresAt: Date.now() + FUND_TTL_MS, staleUntil: Date.now() + STALE_TTL_MS });
     return events;
   } catch (error) {
     if (cached && cached.staleUntil > Date.now()) return cached.value;
@@ -281,7 +283,7 @@ async function fetchFundPage(code: string, force: boolean) {
   const cached = pageCache.get(code);
   if (!force && cached && cached.expiresAt > Date.now()) return { page: cached.value, cacheState: "memory" as const };
   try {
-    const response = await fetch(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(code)}/chart`, {
+    const response = await providerFetch(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(code)}/chart`, {
       cache: "no-store",
       headers: { Accept: "text/html", "User-Agent": USER_AGENT },
       signal: AbortSignal.timeout(12_000),
@@ -291,7 +293,7 @@ async function fetchFundPage(code: string, force: boolean) {
     if (!parsedPage) throw new Error("fund price board unavailable");
     const cookie = yahooSessionCookie(response.headers);
     const page = cookie ? { ...parsedPage, cookie } : parsedPage;
-    pageCache.set(code, { value: page, expiresAt: Date.now() + FUND_TTL_MS, staleUntil: Date.now() + STALE_TTL_MS });
+    boundedMarketCacheSet(pageCache, code, { value: page, expiresAt: Date.now() + FUND_TTL_MS, staleUntil: Date.now() + STALE_TTL_MS });
     return { page, cacheState: "network" as const };
   } catch (error) {
     if (cached && cached.staleUntil > Date.now()) return { page: cached.value, cacheState: "stale" as const };
@@ -378,7 +380,7 @@ async function requestHistory(code: string, securityId: string, token: string, f
   url.searchParams.set("size", String(MAX_DAILY_HISTORY_SIZE));
   url.searchParams.set("timeFrame", "daily");
   url.searchParams.set("toDate", compactYmd(to));
-  const response = await fetch(url, {
+  const response = await providerFetch(url, {
     cache: "no-store",
     headers: {
       Accept: "application/json",
@@ -412,7 +414,7 @@ export async function getYahooJapanFundHistory(code: string, securityId: string,
       requestFundDistributions(code, securityId, force).catch(() => []),
     ]);
     const bars = [...new Map(incoming.flat().map((bar) => [`${bar.securityId}:${bar.date}`, bar])).values()].sort((a, b) => a.date.localeCompare(b.date));
-    historyCache.set(cacheKey, { value: { bars, distributions }, expiresAt: Date.now() + FUND_TTL_MS, staleUntil: Date.now() + STALE_TTL_MS });
+    boundedMarketCacheSet(historyCache, cacheKey, { value: { bars, distributions }, expiresAt: Date.now() + FUND_TTL_MS, staleUntil: Date.now() + STALE_TTL_MS });
     const requestedStart = new Date(`${from}T00:00:00Z`).getTime();
     const firstBar = new Date(`${bars[0].date}T00:00:00Z`).getTime();
     return {

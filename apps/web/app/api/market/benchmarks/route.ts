@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  try { await authorizeMarketRequest(request); } catch { return unauthorizedResponse(); }
+  try { await authorizeMarketRequest(request); } catch (cause) { return unauthorizedResponse(cause); }
   const force = new URL(request.url).searchParams.get("refresh") === "1";
   const result = await fetchMarketBenchmarks(force);
   const { db, ctx } = await getMarketCloudflareContext().catch(() => ({ db: undefined, ctx: undefined }));

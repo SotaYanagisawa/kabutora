@@ -1,3 +1,4 @@
+import { providerFetch } from "./server/market/provider-fetch";
 import type { MarketQuote } from "@kabutora/domain";
 import { MarketDataError } from "./yahoo-market";
 import { fetchCnbcBatchQuotes } from "./cnbc-quote-provider";
@@ -190,7 +191,7 @@ export async function fetchYahooBatchQuotes(
     try {
       const url = new URL(`https://${host}/v7/finance/quote`);
       url.searchParams.set("symbols", missingSymbols.join(","));
-      const response = await fetch(url, {
+      const response = await providerFetch(url, {
         cache: "no-store",
         headers: { Accept: "application/json", "User-Agent": USER_AGENT },
         signal: signal ?? AbortSignal.timeout(4_000),

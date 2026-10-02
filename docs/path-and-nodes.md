@@ -35,6 +35,9 @@ flowchart LR
 | Market API route | [`apps/web/app/api/market/`](../apps/web/app/api/market) | matching server service in `apps/web/lib` |
 | Free-tier market request path | [`apps/web/lib/server-market-router.ts`](../apps/web/lib/server-market-router.ts) | `worker-entry.ts`, `server-market-request-context.ts`; reuses authenticated routes without Next.js request overhead |
 | Prepared market snapshots | [`apps/web/lib/server-market-response-cache.ts`](../apps/web/lib/server-market-response-cache.ts) | queue jobs prepare full/compact public JSON; HTTP reads preserve ETags and a live server clock |
+| Replacement public-market pipeline | [`apps/web/lib/server/market/coordinator.ts`](../apps/web/lib/server/market/coordinator.ts) | durable jobs, ingestion, observations, budgets and immutable publications; [rollout status](backend-overhaul-implementation.md) |
+| Replacement public-market client | [`apps/web/lib/public-market-client.ts`](../apps/web/lib/public-market-client.ts) | common manifest/chunk reads, SHA-256 validation, selected history decoding; `public-chunk-cache.ts` stores public bytes separately |
+| Backend operations | [`docs/backend-operations.md`](backend-operations.md) | status diagnostics, failure recovery, membership, rollback and compatibility retirement |
 | D1 persistence | [`apps/web/lib/server-market-store.ts`](../apps/web/lib/server-market-store.ts) | `apps/web/migrations/` |
 | Scheduled refresh | [`apps/web/lib/server-market-scheduler.ts`](../apps/web/lib/server-market-scheduler.ts) | `worker-entry.ts`, `server-market-provider.ts` |
 | Provider parsing/fallback | [`apps/web/lib/server-market-provider.ts`](../apps/web/lib/server-market-provider.ts) | `yahoo-*`, `cnbc-quote-provider.ts`, `monex-foreign-fund.ts`, `japannext-pts.ts` |

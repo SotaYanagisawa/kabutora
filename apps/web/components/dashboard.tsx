@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchMarketResponse } from "@/lib/public-market-client";
 import { BrowserPreferences, useBrowserPreferences } from "./browser-preferences";
 
 import {
@@ -30,7 +31,7 @@ import { quoteRefreshTargets, quoteSessionTransitionTargets } from "@/lib/market
 import { earliestHistoryDate, inspectMarketHistory, packHistoryBars, unpackHistoryBars, type HistoryQuality, type PackedHistorySeries } from "@/lib/market-history";
 import { buildHistoryFetchPlan, daysBetween, historyCoverage, MARKET_REQUEST_BATCH_SIZE, missingHistoryRequirements, splitSecurityIds } from "@/lib/market-fetch-plan";
 import { readMarketApiResponse, stableMarketErrorMessage } from "@/lib/market-api-response";
-import { loadServerMarketSnapshot, loadServerPtsIntraday, loadServerUsIntraday, requestServerMarketRefresh, syncServerMarketRegistry } from "@/lib/client-market-service";
+import { loadServerMarketSnapshot, loadServerPtsIntraday, loadServerUsIntraday, refreshQueuedMarketData, syncServerMarketRegistry } from "@/lib/client-market-service";
 import { timeoutSignal } from "@/lib/operation-deadline";
 import { syncPageVisibilityDataset } from "@/lib/page-visibility";
 import { RetainedView } from "./retained-view";
@@ -1572,7 +1573,7 @@ function DashboardContents({
       const headers = { ...await getMarketAuthHeaders(), "Content-Type": "application/json" };
       const responses = await pooledClientMap(batches, 3, async (securityIds) => {
         try {
-          const response = await fetch("/api/market/quotes", {
+          const response = await fetchMarketResponse("/api/market/quotes", {
             method: "POST",
             cache: "no-store",
             headers,
@@ -1689,7 +1690,7 @@ function DashboardContents({
     setApiUsage((current) => ({ ...current, benchmarkRequests: current.benchmarkRequests + 1, lastBenchmarkRequest: new Date().toISOString() }));
     setBenchmarkStatus((current) => current === "ready" || current === "partial" ? current : "loading");
     try {
-      const response = await fetch(`/api/market/benchmarks${force ? "?refresh=1" : ""}`, {
+      const response = await fetchMarketResponse(`/api/market/benchmarks${force ? "?refresh=1" : ""}`, {
         cache: "no-store",
         headers: await getMarketAuthHeaders(),
         signal: timeoutSignal(45_000),
@@ -1714,15 +1715,16 @@ function DashboardContents({
       return;
     }
     historyRequestInFlight.current = true;
-    const plan = buildHistoryFetchPlan(historySecurityIds, historyCoverageRequired, force ? [] : historyBars, MARKET_REQUEST_BATCH_SIZE, historyInceptionDates, todayKey);
+    // History payloads contain years of bars, unlike the small quote batches.
+    const plan = buildHistoryFetchPlan(historySecurityIds, historyCoverageRequired, force ? [] : historyBars, 2, historyInceptionDates, todayKey);
     setApiUsage((current) => ({ ...current, historyRequests: current.historyRequests + plan.length, lastHistoryRequest: new Date().toISOString() }));
     setHistoryStatus("loading");
     setHistoryError("");
     try {
       const headers = { ...await getMarketAuthHeaders(), "Content-Type": "application/json" };
-      const responses = await Promise.all(plan.map(async (batch) => {
+      const responses = await pooledClientMap(plan, 2, async (batch) => {
         try {
-          const response = await fetch("/api/market/history", {
+          const response = await fetchMarketResponse("/api/market/history", {
             method: "POST",
             cache: "no-store",
             headers,
@@ -1743,7 +1745,7 @@ function DashboardContents({
             } satisfies HistoryResponse,
           };
         }
-      }));
+      });
       const incomingBars = responses.flatMap((item) => item.payload.bars ?? []);
       acceptTrustedServerTime(responses.map((item) => item.payload.generatedAt).filter((value): value is string => Boolean(value)).sort().at(-1));
       const latestServerSessions = latestMarketSessions(responses);
@@ -1821,7 +1823,7 @@ function DashboardContents({
       const batches = splitSecurityIds(requestedIds.join(","), MARKET_REQUEST_BATCH_SIZE);
       const responses = await pooledClientMap(batches, 2, async (securityIds) => {
         try {
-          const response = await fetch("/api/market/distributions", {
+          const response = await fetchMarketResponse("/api/market/distributions", {
             method: "POST",
             cache: "no-store",
             headers,
@@ -3223,21 +3225,28 @@ function DashboardContents({
     setMarketError("");
     setHistoryError("");
 
-    const marketTask = Promise.all([
+    const marketTask = persistenceMode === "cloud" ? refreshQueuedMarketData(
+      splitSecurityIds(quoteSecurityIds, Number.MAX_SAFE_INTEGER).flat(),
+      { allowPersistentCache: allowPersistentMarketCache, onSnapshot: applyServerMarketSnapshot },
+    ) : Promise.all([
       loadQuotes(isForced, isForced ? "full" : "incremental"),
       loadBenchmarks(isForced),
       loadDistributions(isForced),
-      ...(persistenceMode === "cloud" ? [refreshServerUsIntraday(true)] : []),
     ]);
     if (persistenceMode === "cloud") {
-      const securityIds = splitSecurityIds(quoteSecurityIds, Number.MAX_SAFE_INTEGER).flat();
-      void syncServerMarketRegistry(securityIds).catch(() => undefined);
+      // Chart/dividend recovery must not hold up or determine the price-refresh result.
+      void refreshServerUsIntraday(true).catch(() => undefined);
+      void loadDistributions(false).catch(() => undefined);
+      void loadHistory(false).catch(() => undefined);
     }
-    const refreshTask = (["overview", "watchlist", "performance", "security", "notifications"].includes(activeViewRef.current)
+    const refreshTask = (persistenceMode !== "cloud" && ["overview", "watchlist", "performance", "security", "notifications"].includes(activeViewRef.current)
       ? marketTask.then(() => loadHistory(isForced))
       : marketTask)
-      .then(() => {
-        showToast("市場データを更新しました");
+      .then((result) => {
+        showToast(result === "pending" ? "市場データを更新中です。取得できた価格から反映します"
+          : result === "partial" ? "一部の市場データを取得できませんでした。保存済み価格を表示しています"
+          : result === "limited" ? "本日の無料枠に達しました。最新の保存済み価格を表示しています"
+          : result === "cached" ? "直前の更新結果を使用中" : "市場データを更新しました");
       })
       .catch((err) => {
         showToast("更新に失敗しました");
@@ -3249,7 +3258,7 @@ function DashboardContents({
       });
     manualRefreshInFlight.current = refreshTask;
     return refreshTask;
-  }, [loadBenchmarks, loadDistributions, loadHistory, loadQuotes, persistenceMode, quoteSecurityIds, refreshServerUsIntraday, showToast]);
+  }, [allowPersistentMarketCache, applyServerMarketSnapshot, loadBenchmarks, loadDistributions, loadHistory, loadQuotes, persistenceMode, quoteSecurityIds, refreshServerUsIntraday, showToast]);
 
 
   const openSecurity = useCallback((securityOrId: string | SearchSecurity, origin?: View) => {

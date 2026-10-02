@@ -1,7 +1,7 @@
 import type { Seed } from "@/components/dashboard/types";
 import type { DeviceTrustMode } from "./firebase-config";
 import { type PortfolioCloudStore, type StoredPortfolioEvent, type GoogleAccountVaultKey, PORTFOLIO_EVENT_COMPACTION_THRESHOLD } from "./portfolio-cloud-store";
-import { createGoogleProtectedVault, createRecoveryVault, decryptVaultRecord, decryptVaultWithDataKey, encryptVaultRecord, importGoogleAccountKey, isKabutoraVaultEnvelope, readLegacyVaultKeys, unlockVaultWithPassphrase, unlockVaultWithRecoveryKey, updateEncryptedVault, type KabutoraVaultEnvelope } from "./vault-crypto";
+import { createRecoveryVault, decryptVaultRecord, decryptVaultWithDataKey, encryptVaultRecord, importGoogleAccountKey, isKabutoraVaultEnvelope, readLegacyVaultKeys, unlockVaultWithPassphrase, unlockVaultWithRecoveryKey, updateEncryptedVault, type KabutoraVaultEnvelope } from "./vault-crypto";
 import { loadTrustedDeviceKey, saveTrustedDeviceKey, loadVerifiedRecoveryDraft, saveVerifiedRecoveryDraft, clearVerifiedRecoveryDraft, type VerifiedRecoveryDraft } from "./trusted-device-key-store";
 import { configurePortfolioQueue, enqueuePendingPortfolioEvent, flushPendingPortfolioEvents, getPendingPortfolioEvents, nextMonotonicTimestamp, replacePendingPortfolioEvent, retryPortfolioQueueStorage } from "./portfolio-offline-queue";
 import { replayPortfolioEvents, validatePortfolioEvent, type DecryptedPortfolioEvent, type PortfolioEventPayload } from "./portfolio-events";
@@ -156,6 +156,9 @@ export class PortfolioSession {
     return output;
   }
   private async replay(revision: number) {
+    // Keep an explicitly restored backup in enrollment while live snapshots
+    // arrive. Its credential must not be used to decrypt the current cloud vault.
+    if (this.imported) { this.clearDeadline(); this.emit({ seed: this.imported, needsUnlock: false, startup: { stage: "enrollment" } }); return; }
     if (!this.vaultLoaded) return;
     const envelope = this.state.envelope;
     if (!envelope) { this.clearDeadline(); this.stage({ stage: "empty" }); return; }
@@ -216,74 +219,12 @@ export class PortfolioSession {
       if (this.active() && revision === this.revision) await saveVerifiedVault({ uid: this.uid, envelope: { ...cached, revision: envelope.revision }, verifiedAt: new Date().toISOString() });
     })().catch(() => this.emit({ warning: "確認済みデータを端末に保存できませんでした。接続中は利用できます。" }));
     void this.flush();
-    void this.syncGoogleAccountAccess(envelope, cloudSeed);
     if (this.events.length >= PORTFOLIO_EVENT_COMPACTION_THRESHOLD && !this.compacting && (envelope.version === 2 || this.deferLegacyRecovery)) {
       this.compacting = true;
       const eventIds = this.events.map((event) => event.id);
       void updateEncryptedVault(envelope, key, cloudSeed, this.uid).then((next) => this.store.compactVaultWithEvents(this.uid, next, eventIds))
         .catch(() => { /* Revision conflict leaves all events intact; the next server snapshot retries. */ })
         .finally(() => { this.compacting = false; });
-    }
-  }
-  private syncGoogleInProgress = false;
-  private async syncGoogleAccountAccess(envelope: KabutoraVaultEnvelope, cloudSeed: Seed) {
-    if (this.syncGoogleInProgress || !this.active()) return;
-    if (this.legacyRecord?.ownerUid === this.uid && this.legacyRecord.encodedKey) {
-      try {
-        const testKey = await importGoogleAccountKey(this.legacyRecord.encodedKey);
-        validatePortfolio(await decryptVaultWithDataKey(envelope, testKey));
-        return;
-      } catch {
-        /* legacyRecord does not decrypt this envelope; proceed to sync */
-      }
-    }
-    this.syncGoogleInProgress = true;
-    try {
-      if (this.rawKey) {
-        const keyRecord: GoogleAccountVaultKey = {
-          format: "kabutora-google-account-key",
-          version: 1,
-          ownerUid: this.uid,
-          keyId: envelope.keyId ?? crypto.randomUUID(),
-          encodedKey: this.rawKey,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        await this.store.saveAccountKey(this.uid, keyRecord);
-        this.legacyRecord = keyRecord;
-      } else {
-        const created = await createGoogleProtectedVault(cloudSeed, this.uid, {
-          version: envelope.version,
-          revision: envelope.revision + 1,
-          keyId: envelope.keyId,
-        });
-        const keyRecord: GoogleAccountVaultKey = {
-          format: "kabutora-google-account-key",
-          version: 1,
-          ownerUid: this.uid,
-          keyId: created.envelope.keyId ?? crypto.randomUUID(),
-          encodedKey: created.accountKey,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        await this.store.saveGoogleProtectedVault(this.uid, created.envelope, keyRecord);
-        if (this.events?.length) {
-          const eventIds = this.events.map((event) => event.id);
-          await this.store.cleanupIncorporatedEvents(this.uid, created.envelope, eventIds).catch(() => undefined);
-        }
-        if (this.mode === "trusted") {
-          await saveTrustedDeviceKey(this.uid, created.dataKey, created.envelope.keyId).catch(() => undefined);
-        }
-        this.key = created.dataKey;
-        this.rawKey = created.accountKey;
-        this.legacyRecord = keyRecord;
-        this.emit({ envelope: created.envelope });
-      }
-    } catch (error) {
-      console.warn("Failed to sync Google account access:", error);
-      /* Background sync failure leaves the active local session intact */
-    } finally {
-      this.syncGoogleInProgress = false;
     }
   }
   async unlock(value: string, mode: "passphrase" | "recovery", importedEnvelope?: KabutoraVaultEnvelope) {
@@ -293,12 +234,14 @@ export class PortfolioSession {
     const seed = validatePortfolio(unlocked.data);
     if (!this.active()) return;
     if (importedEnvelope) {
+      this.clearDeadline();
       this.imported = seed;
-      this.key = unlocked.dataKey;
-      this.rawKey = unlocked.accountKey;
-      this.keyGeneration = importedEnvelope.keyId ?? this.state.envelope?.keyId ?? "legacy";
+      if (!this.key) {
+        this.key = unlocked.dataKey;
+        this.rawKey = unlocked.accountKey;
+        this.keyGeneration = importedEnvelope.keyId ?? this.state.envelope?.keyId ?? "legacy";
+      }
       this.emit({ seed, needsUnlock: false, startup: { stage: "enrollment" } });
-      if (this.mode === "trusted") await saveTrustedDeviceKey(this.uid, unlocked.dataKey, importedEnvelope.keyId).catch(() => undefined);
       return;
     }
     this.key = unlocked.dataKey;
@@ -317,6 +260,7 @@ export class PortfolioSession {
     if (this.state.envelope && !raw) throw new Error("以前の復旧キーまたはパスフレーズで一度解除してください。オフライン端末の変更を復元するために必要です。");
     if (raw) legacy[this.state.envelope?.keyId ?? this.legacyRecord?.keyId ?? "legacy"] = raw;
     if (raw && this.state.envelope?.version === 1) legacy.legacy = raw;
+    this.clearDeadline();
     return createRecoveryVault(this.imported ?? this.state.seed, passphrase, this.uid, legacy);
   }
   async activateRecovery(prepared: RecoverySetup, recoveryConfirmation: string) {

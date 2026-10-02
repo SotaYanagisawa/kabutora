@@ -2,9 +2,15 @@
 
 Kabutora is deployed globally on **Cloudflare Workers** (edge compute & market proxy) and uses **Firebase** (Google Authentication, App Check, and Cloud Firestore for ciphertext storage).
 
-Market JSON requests run directly in the existing Worker, using the same authenticated route handlers as local Next.js development. Keep this path on Workers Free: quote/benchmark queue jobs prepare full and compact snapshot responses in `market_response_cache`, so HTTP requests do not repeatedly reconcile chart histories. Apply `0006_market_response_cache.sql` with the existing D1 migrations before deploying this path. Snapshot cache misses retain the original database/provider fallback. Never disable authentication or App Check to reduce CPU use.
+Market JSON requests run directly in the existing Worker, using the same authenticated route handlers as local Next.js development. Keep this path on Workers Free: quote/benchmark queue jobs prepare full and compact snapshot responses in `market_response_cache`, so HTTP requests do not repeatedly reconcile chart histories. Apply `0006_market_response_cache.sql` and `0007_market_pts_indexes.sql` with the existing D1 migrations before deploying this path. Indexes and bounded public-catalog reads reduce billed D1 rows; monitor the daily free allowance rather than assuming the workload always fits. Missing prepared snapshots return HTTP 503 with a retry delay; HTTP snapshot reads do not call providers. Never disable authentication or App Check to reduce CPU use.
+
+Prepared payloads use a `gzip:`-prefixed base64 representation in the existing cache column; readers still accept legacy JSON rows. Compression happens in queue jobs, and HTTP responses stream decompression with a current clock/session prefix. Cloud manual refresh enqueues quotes, polls compact snapshots, and reports a pending or free-allowance-limited result honestly. History and dividend recovery run separately; history requests use a two-request client pool. Imported Firebase public keys are reused until certificate rotation, while every request still verifies its token.
+
+The refresh endpoint checks the existing daily budgets and sends one public-symbol-only dispatch message. The queue consumer reconciles the registry, claims bounded quote/benchmark jobs, and counts the dispatch against the same free message allowance. This keeps registry writes and scheduling bookkeeping out of the HTTP CPU budget.
 
 ---
+
+The replacement public-market backend uses coordinated client/server `v2` flags, one shared SQLite coordinator, immutable public chunks and one minute Cron. The introductory prepared-snapshot/Queue description applies to the legacy compatibility path. See the [implementation record](backend-overhaul-implementation.md) and [operations runbook](backend-operations.md) for actual release evidence and rollback. Verified recovery enrollment is enabled; existing private data is never migrated by deployment.
 
 ## 1. Architecture Flow
 
@@ -91,5 +97,5 @@ sequenceDiagram
 - [ ] App Check tokens are actively generated and verified (`X-Firebase-AppCheck`), and reCAPTCHA assessment traffic appears in Google Cloud / Firebase Console.
 - [ ] Firestore contains only encrypted ciphertext blobs (no plaintext ticker symbols or quantities).
 - [ ] D1 contains public security IDs and market values only; its schema has no transaction, account, quantity, cost-basis, balance, or portfolio fields.
-- [ ] The Queue consumer and both the `*/10 * * * *` market refresh and `* * * * *` PTS collection Cron triggers are attached to the existing `kabutora` Worker.
+- [ ] The `* * * * *` coordinator watchdog is attached to the existing `kabutora` Worker. V2 owns acquisition; the old Queue consumer only drains compatibility messages until retirement is verified.
 - [ ] Migration `0005_japannext_pts_frames.sql` is applied before deploying the Worker code.

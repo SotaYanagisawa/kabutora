@@ -38,6 +38,10 @@ const assertLease = (control: VaultControl | undefined, lease: VaultLease) => {
   if (!control || control.lockToken !== lease.token || control.lockUntil <= Date.now()) throw new Error("vault_migration_lock_expired");
 };
 const deadline = <T>(promise: Promise<T>) => withDeadline(promise, 15_000, "cloud-sync");
+/** Reject an oversized encrypted write locally; keep its source/outbox intact. */
+export function assertEncryptedCloudSize(value: EncryptedPortfolioEvent | KabutoraVaultEnvelope) {
+  if (value.payload.ciphertext.length > 900000 || new TextEncoder().encode(JSON.stringify(value)).length > 990000) throw new Error("encrypted_cloud_payload_too_large");
+}
 
 export function createFirebasePortfolioCloudStore(db: Firestore): PortfolioCloudStore {
   const vaultRef = (uid: string) => doc(db, "users", uid, "vaults", "default");
@@ -54,27 +58,19 @@ export function createFirebasePortfolioCloudStore(db: Firestore): PortfolioCloud
       return onSnapshot(eventsQuery(uid), { includeMetadataChanges: true }, (snapshot) => value(snapshot.docs.map((item) => ({ ...item.data(), id: item.id } as StoredPortfolioEvent)), snapshot.metadata.fromCache), error);
     },
     async saveAccountKey(uid, value) {
-      if (value.ownerUid !== uid) throw new Error("key_owner_mismatch");
-      await deadline(setDoc(doc(db, "users", uid, "keys", "google-account"), value));
+      throw new Error("raw_key_upload_disabled");
     },
     async saveVault(uid, value) {
       if (value.ownerUid !== uid) throw new Error("vault_owner_mismatch");
+      assertEncryptedCloudSize(value);
       await deadline(setDoc(vaultRef(uid), value));
     },
     async saveGoogleProtectedVault(uid, envelope, key) {
-      if (envelope.ownerUid !== uid || key.ownerUid !== uid) throw new Error("owner_mismatch");
-      await deadline(runTransaction(db, async (transaction) => {
-        const existing = await transaction.get(vaultRef(uid));
-        if (existing.exists()) {
-          const current = existing.data() as KabutoraVaultEnvelope;
-          if (envelope.revision !== current.revision + 1) throw new Error("vault_revision_changed");
-        }
-        transaction.set(vaultRef(uid), envelope);
-        transaction.set(doc(db, "users", uid, "keys", "google-account"), key);
-      }));
+      throw new Error("raw_key_upload_disabled");
     },
     async saveEvent(uid, id, value) {
       if (value.ownerUid !== uid) throw new Error("event_owner_mismatch");
+      assertEncryptedCloudSize(value);
       await deadline(runTransaction(db, async (transaction) => {
         const eventRef = doc(db, "users", uid, "events", id);
         const [receipt, existing, vault, control] = await Promise.all([
@@ -120,6 +116,7 @@ export function createFirebasePortfolioCloudStore(db: Firestore): PortfolioCloud
       return { envelope, events: events.docs.map((item) => ({ ...item.data(), id: item.id } as StoredPortfolioEvent)) };
     },
     async activateGeneration(uid, lease, envelope, expectedRevision) {
+      assertEncryptedCloudSize(envelope);
       if (envelope.version !== 2 || envelope.ownerUid !== uid || !envelope.keyId || envelope.revision !== expectedRevision + 1) throw new Error("vault_generation_invalid");
       await deadline(runTransaction(db, async (transaction) => {
         const [vault, control] = await Promise.all([transaction.get(vaultRef(uid)), transaction.get(controlRef(uid))]);
@@ -131,6 +128,7 @@ export function createFirebasePortfolioCloudStore(db: Firestore): PortfolioCloud
       }));
     },
     async compactVaultWithEvents(uid, envelope, eventIds) {
+      assertEncryptedCloudSize(envelope);
       await deadline(runTransaction(db, async (transaction) => {
         const [vault, control] = await Promise.all([transaction.get(vaultRef(uid)), transaction.get(controlRef(uid))]);
         const existing = vault.data() as KabutoraVaultEnvelope | undefined;
@@ -143,8 +141,8 @@ export function createFirebasePortfolioCloudStore(db: Firestore): PortfolioCloud
     async cleanupIncorporatedEvents(uid, envelope, eventIds) {
       // Each receipt permanently acknowledges one immutable event. Interrupted
       // cleanup can safely resume because the encrypted snapshot checkpoints IDs.
-      for (let offset = 0; offset < eventIds.length; offset += 200) {
-        const chunk = eventIds.slice(offset, offset + 200);
+      for (let offset = 0; offset < eventIds.length; offset += 8) {
+        const chunk = eventIds.slice(offset, offset + 8);
         await deadline(runTransaction(db, async (transaction) => {
           const [vault, control] = await Promise.all([transaction.get(vaultRef(uid)), transaction.get(controlRef(uid))]);
           const existing = vault.data() as KabutoraVaultEnvelope | undefined;

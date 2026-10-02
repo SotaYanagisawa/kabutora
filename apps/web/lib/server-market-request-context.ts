@@ -7,6 +7,7 @@ export type MarketRequestContext = {
     FIREBASE_PROJECT_NUMBER?: string;
     FIREBASE_WEB_APP_ID?: string;
     KABUTORA_ALLOWED_UID?: string;
+    KABUTORA_ALLOWED_UIDS?: string;
     KABUTORA_REQUIRE_AUTH?: string;
     KABUTORA_REQUIRE_APP_CHECK?: string;
   };

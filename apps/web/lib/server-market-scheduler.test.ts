@@ -62,9 +62,9 @@ describe("server market scheduling", () => {
   });
 
   it("fits 100-200 symbols into free-tier-safe server jobs", () => {
-    expect(marketRefreshBatches(Array.from({ length: 100 }, (_, index) => String(index)), MARKET_QUOTE_JOB_SIZE)).toHaveLength(5);
-    expect(marketRefreshBatches(Array.from({ length: 200 }, (_, index) => String(index)), MARKET_QUOTE_JOB_SIZE)).toHaveLength(10);
-    expect(marketRefreshBatches(Array.from({ length: 200 }, (_, index) => String(index)), MARKET_QUOTE_JOB_SIZE).every((batch) => batch.length <= 20)).toBe(true);
+    expect(marketRefreshBatches(Array.from({ length: 100 }, (_, index) => String(index)), MARKET_QUOTE_JOB_SIZE)).toHaveLength(13);
+    expect(marketRefreshBatches(Array.from({ length: 200 }, (_, index) => String(index)), MARKET_QUOTE_JOB_SIZE)).toHaveLength(25);
+    expect(marketRefreshBatches(Array.from({ length: 200 }, (_, index) => String(index)), MARKET_QUOTE_JOB_SIZE).every((batch) => batch.length <= 8)).toBe(true);
     expect(MARKET_QUEUE_MESSAGE_BUDGET * 3 * 2).toBeLessThan(10_000);
   });
 
@@ -99,6 +99,8 @@ describe("server market scheduling", () => {
     };
     expect(isMarketRefreshJob(valid)).toBe(true);
     expect(isMarketRefreshJob({ ...valid, kind: "distributions" })).toBe(true);
+    expect(isMarketRefreshJob({ ...valid, kind: "manual", securityIds: Array.from({ length: 200 }, () => "sec-us-aapl-xnas") })).toBe(true);
+    expect(isMarketRefreshJob({ ...valid, kind: "manual", securityIds: Array.from({ length: 201 }, () => "sec-us-aapl-xnas") })).toBe(false);
     expect(isMarketRefreshJob({ ...valid, quantity: "100" })).toBe(false);
     expect(isMarketRefreshJob({ ...valid, securityIds: Array.from({ length: 21 }, () => "sec-us-aapl-xnas") })).toBe(false);
   });

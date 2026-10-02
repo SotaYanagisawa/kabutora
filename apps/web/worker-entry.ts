@@ -1,3 +1,4 @@
+export { MarketCoordinator } from "./lib/server/market/coordinator";
 import openNextWorker, {
   BucketCachePurge,
   DOQueueHandler,
@@ -60,6 +61,10 @@ export default {
   },
   async scheduled(controller: { scheduledTime: number; cron?: string }, env: MarketWorkerEnv, ctx: { waitUntil: (promise: Promise<unknown>) => void }) {
     if (!env.MARKET_DB) return;
+    if (env.MARKET_COORDINATOR && (env.KABUTORA_MARKET_BACKEND === "v2" || env.KABUTORA_MARKET_CANARY === "true")) {
+      ctx.waitUntil(env.MARKET_COORDINATOR.get(env.MARKET_COORDINATOR.idFromName("public-market-v2")).fetch("https://coordinator/wake"));
+      if (env.KABUTORA_MARKET_BACKEND === "v2") return;
+    }
     if (controller.cron === "* * * * *") {
       ctx.waitUntil(collectJapannextPts(env.MARKET_DB, controller.scheduledTime));
       return;
@@ -86,9 +91,20 @@ export default {
         return;
       }
       try {
-        await processMarketRefreshJob(db, message.body);
-        if (message.body.kind === "quotes" || message.body.kind === "benchmarks") {
+        if (env.MARKET_COORDINATOR && env.KABUTORA_MARKET_BACKEND === "v2") {
+          const admitted = await env.MARKET_COORDINATOR.get(env.MARKET_COORDINATOR.idFromName("public-market-v2")).fetch("https://coordinator/enqueue", { method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(message.body) });
+          if (!admitted.ok) throw new Error("coordinator_admission_failed");
+          message.ack();
+          return;
+        }
+        await processMarketRefreshJob(db, message.body, env.MARKET_REFRESH_QUEUE);
+        if (message.body.kind === "benchmarks") {
           await prepareMarketSnapshotResponses(db);
+        } else if (message.body.kind === "quotes") {
+          // Trailing quote chunks or off-hours runs refresh the prepared cache
+          // only when the existing payload is older than 8 minutes, avoiding
+          // redundant preparations on every 20-symbol chunk.
+          await prepareMarketSnapshotResponses(db, { minIntervalMs: 8 * 60_000 });
         }
         message.ack();
       } catch (error) {

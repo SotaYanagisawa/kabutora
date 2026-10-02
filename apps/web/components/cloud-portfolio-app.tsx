@@ -13,7 +13,8 @@ import { settleInitialAuthSession } from "@/lib/initial-auth-session";
 import { startupLabels, type PortfolioStartupState, type StartupStage } from "@/lib/portfolio-startup";
 import { diffTransactionChanges } from "@/lib/transaction-event-merge";
 import { isNewerAccountRevision } from "@/lib/account-event-merge";
-import { getCachedServerMarketSnapshot, loadServerMarketSnapshot } from "@/lib/client-market-service";
+import { clearInMemorySnapshotCache, getCachedServerMarketSnapshot, loadServerMarketSnapshot } from "@/lib/client-market-service";
+import { usesPublicMarketBackend } from "@/lib/public-market-client";
 import { clearCompactQuotesCache } from "@/lib/client-market-cache";
 import type { ServerMarketSnapshot } from "@/lib/server-market-types";
 import type { MarketSessionStatus } from "@/lib/market-session";
@@ -161,9 +162,17 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
   }, []);
 
   useEffect(() => {
-    if (!targetUid) return;
+    clearInMemorySnapshotCache();
+    if (!targetUid) { setMarket(null); return; }
     let active = true;
-    void loadServerMarketSnapshot({ includeIntraday: true, allowPersistentCache: deviceMode === "trusted" }).then((value) => { if (active) setMarket(value); }).catch(() => { if (active) setMarket(null); });
+    void (async () => {
+      if (usesPublicMarketBackend()) {
+        const compact = await loadServerMarketSnapshot({ allowPersistentCache: deviceMode === "trusted" });
+        if (active && compact) setMarket(compact);
+      }
+      const value = await loadServerMarketSnapshot({ includeIntraday: true, allowPersistentCache: deviceMode === "trusted" });
+      if (active && value) setMarket(value);
+    })().catch(() => { /* Retain an already loaded market cache. */ });
     return () => { active = false; };
   }, [deviceMode, targetUid, user]);
 

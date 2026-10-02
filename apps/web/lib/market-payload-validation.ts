@@ -8,7 +8,7 @@ export function validateMarketPayload(value: unknown): void {
   if (!object(value)) throw new Error("market_payload_invalid");
   const arrays: Record<string, (item: Record<string, unknown>) => boolean> = {
     quotes: (item) => text(item.securityId) && finiteDecimal(item.price, true) && (item.previousRegularClose === undefined || finiteDecimal(item.previousRegularClose, true)),
-    bars: (item) => text(item.securityId) && date(item.date) && finiteDecimal(item.close, true) && (item.adjustedClose === undefined || finiteDecimal(item.adjustedClose, true)),
+    bars: (item) => text(item.securityId) && ((date(item.date) && finiteDecimal(item.close, true) && (item.adjustedClose === undefined || finiteDecimal(item.adjustedClose, true))) || (item.date === undefined && date(item.timestamp) && finiteDecimal(item.price, true))),
     intraday: (item) => text(item.securityId) && date(item.timestamp) && finiteDecimal(item.price, true),
     corporateActions: (item) => text(item.id) && text(item.securityId) && date(item.effectiveDate) && ["SPLIT", "REVERSE_SPLIT"].includes(String(item.type)) && finiteDecimal(item.numerator, true) && finiteDecimal(item.denominator, true),
     distributions: (item) => text(item.id) && text(item.securityId) && finiteDecimal(item.amountPerUnit) && text(item.currency) && (item.distributionUnit === undefined || finiteDecimal(item.distributionUnit, true)),

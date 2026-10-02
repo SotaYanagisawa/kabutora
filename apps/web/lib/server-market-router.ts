@@ -1,3 +1,6 @@
+import { GET as data } from "../app/api/market/data/route";
+import { GET as progress } from "../app/api/market/progress/route";
+import { GET as status } from "../app/api/market/status/route";
 import { GET as benchmarks } from "../app/api/market/benchmarks/route";
 import { POST as distributions } from "../app/api/market/distributions/route";
 import { POST as history } from "../app/api/market/history/route";
@@ -8,8 +11,12 @@ import { POST as registry } from "../app/api/market/registry/route";
 import { POST as search } from "../app/api/market/search/route";
 import { GET as snapshot } from "../app/api/market/snapshot/route";
 import { withMarketRequestContext, type MarketRequestContext } from "./server-market-request-context";
+import { authorizeMarketRequest, unauthorizedResponse } from "./server-auth";
 
 const routes: Record<string, { method: string; handle: (request: Request) => Promise<Response> }> = {
+  data: { method:"GET",handle:data },
+  progress: { method:"GET",handle:progress },
+  status: { method:"GET",handle:status },
   benchmarks: { method: "GET", handle: benchmarks },
   distributions: { method: "POST", handle: distributions },
   history: { method: "POST", handle: history },
@@ -34,9 +41,15 @@ export async function routeMarketRequest(request: Request, context: MarketReques
     response = Response.json({ error: "method_not_allowed" }, { status: 405, headers: { Allow: route.method } });
   } else {
     try {
-      response = await withMarketRequestContext(context, () => route.handle(request));
+      response = await withMarketRequestContext(context, async () => {
+        if (context.env.KABUTORA_MARKET_BACKEND === "v2" && ["quotes", "benchmarks", "history", "distributions", "intraday"].includes(name)) {
+          try { await authorizeMarketRequest(request); } catch (cause) { return unauthorizedResponse(cause); }
+          return Response.json({ error: "market_client_upgrade_required" }, { status: 409 });
+        }
+        return route.handle(request);
+      });
     } catch (error) {
-      console.error("Native market route error:", error);
+      console.error("market_route_unavailable");
       response = Response.json({ error: "market_request_unavailable" }, { status: 503 });
     }
   }

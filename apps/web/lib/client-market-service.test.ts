@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearInMemorySnapshotCache, loadServerMarketSnapshot } from "./client-market-service";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearInMemorySnapshotCache, loadServerMarketSnapshot, refreshQueuedMarketData } from "./client-market-service";
 import * as clientMarketCache from "./client-market-cache";
 import type { ServerMarketSnapshot } from "./server-market-types";
 
@@ -47,9 +47,47 @@ const mockSnapshot: ServerMarketSnapshot = {
 };
 
 describe("client-market-service", () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
   beforeEach(() => {
     clearInMemorySnapshotCache();
     vi.restoreAllMocks();
+  });
+
+  it("manual refresh queues provider work and polls until each requested quote has been fetched", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-18T15:00:00Z"));
+    const fresh = { ...mockSnapshot, quotes: mockSnapshot.quotes.map((q) => ({ ...q, fetchedAt: new Date().toISOString() })) };
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ queued: 1 }))
+      .mockResolvedValueOnce(Response.json(mockSnapshot))
+      .mockResolvedValueOnce(Response.json(fresh));
+    vi.stubGlobal("fetch", fetch);
+    const onSnapshot = vi.fn();
+    const result = refreshQueuedMarketData(["sec-jp-7203"], { allowPersistentCache: false, onSnapshot });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await result).toBe("updated");
+    expect(onSnapshot).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      "/api/market/refresh", "/api/market/snapshot?intraday=0", "/api/market/snapshot?intraday=0",
+    ]);
+  });
+
+  it("reports the free allowance limit without starting direct provider requests", async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(Response.json({ queued: 0, budgetLimited: true }, { status: 429 }))
+      .mockResolvedValueOnce(Response.json(mockSnapshot));
+    vi.stubGlobal("fetch", fetch);
+    expect(await refreshQueuedMarketData(["sec-jp-7203"], { allowPersistentCache: false, onSnapshot: vi.fn() })).toBe("limited");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not report stale prices as a completed refresh when queue work is delayed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-18T15:00:00Z"));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ queued: 1 }))
+      .mockImplementation(async () => Response.json(mockSnapshot)));
+    const result = refreshQueuedMarketData(["sec-jp-7203"], { allowPersistentCache: false, onSnapshot: vi.fn() });
+    await vi.advanceTimersByTimeAsync(32_000);
+    expect(await result).toBe("pending");
   });
 
   it("defaults to compact mode (?intraday=0) on the critical path", async () => {
