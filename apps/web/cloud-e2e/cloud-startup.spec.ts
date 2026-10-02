@@ -291,6 +291,12 @@ test("two trusted devices merge independent preferences and retain encrypted edi
     await secondContext.setOffline(true);
     await currencyFilter(second).selectOption("USD");
     await expect(second.locator(".sync-status")).toContainText("端末に保存済み", { timeout: 10_000 });
+    await second.locator(".sync-status summary").click();
+    await expect(second.getByRole("button", { name: "同期を再試行" })).toBeVisible();
+    expect(await second.locator(".sync-status").evaluate((element) => getComputedStyle(element).position)).toBe("relative");
+    await second.getByRole("button", { name: "設定", exact: true }).click();
+    await expect(second.locator(".settings-page")).toBeVisible();
+    await second.getByRole("button", { name: "一覧", exact: true }).click();
     const pending = await second.evaluate(async () => new Promise<any[]>((resolve, reject) => {
       const request = indexedDB.open("kabutora-offline-queue-v1");
       request.onerror = () => reject(request.error);

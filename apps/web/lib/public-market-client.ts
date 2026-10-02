@@ -6,7 +6,7 @@ import { validateMarketPayload } from "./market-payload-validation";
 import { timeoutSignal } from "./operation-deadline";
 import { clearPublicChunkMemory, readPublicChunkCache, writePublicChunkCache } from "./public-chunk-cache";
 import { decodePublicIntraday } from "./public-intraday-codec";
-import { decodePublicHistory } from "./public-history-codec";
+import { decodePublicHistory, validatePublicHistory } from "./public-history-codec";
 import { portfolioMarketSessions } from "./market-session";
 import { sparkline24HourBars } from "./chart-presentation";
 export const usesPublicMarketBackend = () => firebaseConfigured && process.env.NEXT_PUBLIC_KABUTORA_MARKET_BACKEND === "v2";
@@ -27,6 +27,7 @@ let historyManifest: {
 } | undefined;
 let historyManifestFlight: Promise<NonNullable<typeof historyManifest>> | undefined;
 const chunkFlights = new Map<string, Promise<Record<string, unknown>>>();
+const CHUNK_CONCURRENCY = 6;
 async function boundedChunkText(response: Response): Promise<string> {
     if (!response.body)
         throw new Error("market_chunk_empty");
@@ -106,12 +107,14 @@ async function publicChunk(resource: Resource, revision: string, index: number, 
         if (chunk.historyBlocks !== undefined) {
             if (!Array.isArray(chunk.historyBlocks))
                 throw new Error("market_history_blocks_invalid");
-            for (const block of chunk.historyBlocks)
-                decodePublicHistory([block]);
+            validatePublicHistory(chunk.historyBlocks);
         }
-        if (chunk.intradayBlocks !== undefined)
-            decodePublicIntraday(chunk.intradayBlocks);
-        await writePublicChunkCache(key, text);
+        if (chunk.intradayBlocks !== undefined) {
+            chunk.bars = decodePublicIntraday(chunk.intradayBlocks);
+            delete chunk.intradayBlocks;
+        }
+        // Persistence must not delay rendering or the next download wave.
+        void writePublicChunkCache(key, text).catch(() => undefined);
         return chunk;
     })().finally(() => chunkFlights.delete(key));
     chunkFlights.set(key, task);
@@ -124,12 +127,12 @@ async function loadPackedHistory(localIds?: ReadonlySet<string>, signal?: AbortS
     const bars: ReturnType<typeof decodePublicHistory> = [];
     const corporateActions: unknown[] = [], inceptionDates: Record<string, unknown> = {};
     const deadline = Date.now() + 120000;
-    for (let offset = 0; offset < generation.record.chunk_count; offset += 2) {
+    for (let offset = 0; offset < generation.record.chunk_count; offset += CHUNK_CONCURRENCY) {
         if (Date.now() > deadline)
             throw new Error("market_history_deadline");
         if (signal?.aborted)
             throw signal.reason;
-        const chunks = await Promise.all(Array.from({ length: Math.min(2, generation.record.chunk_count - offset) }, (_, i) => publicChunk("history", generation.record.revision, offset + i, headers, generation.record.chunk_keys?.[offset + i])));
+        const chunks = await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, generation.record.chunk_count - offset) }, (_, i) => publicChunk("history", generation.record.revision, offset + i, headers, generation.record.chunk_keys?.[offset + i])));
         for (const chunk of chunks) {
             if (Array.isArray(chunk.historyBlocks))
                 for (const block of chunk.historyBlocks) {
@@ -181,17 +184,13 @@ export async function loadPublicMarketResource(resource: Resource, localIds?: Re
         if (record.resource !== resource)
             throw new Error("market_manifest_invalid");
         const payload: Record<string, unknown> = {};
-        // Two concurrent fixed chunks avoid a connection burst and bound browser memory.
-        for (let offset = 0; offset < record.chunk_count; offset += 2) {
-            const chunks = await Promise.all(Array.from({ length: Math.min(2, record.chunk_count - offset) }, async (_, i) => {
+        // A bounded pool downloads the same common chunks for every member.
+        for (let offset = 0; offset < record.chunk_count; offset += CHUNK_CONCURRENCY) {
+            const chunks = await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, record.chunk_count - offset) }, async (_, i) => {
                 const decoded = await publicChunk(resource, record.revision, offset + i, headers, record.chunk_keys?.[offset + i]);
                 if (decoded.historyBlocks !== undefined) {
                     decoded.bars = decodePublicHistory(decoded.historyBlocks);
                     delete decoded.historyBlocks;
-                }
-                if (decoded.intradayBlocks !== undefined) {
-                    decoded.bars = decodePublicIntraday(decoded.intradayBlocks);
-                    delete decoded.intradayBlocks;
                 }
                 return decoded;
             }));
@@ -242,7 +241,7 @@ export async function fetchMarketResponse(input: string, init?: RequestInit): Pr
             continue;
         payload[field] = rows.filter((row: unknown) => row && typeof row === "object" && (!canonical.size || canonical.has(canonicalDomainSecurityId(String((row as Record<string, unknown>).securityId)))));
     }
-    if (name === "quotes") {
+    if (name === "quotes" && selection.includeIntraday !== false) {
         const intraday = await loadPublicMarketResource("intraday");
         payload.intraday = (Array.isArray(intraday.bars) ? intraday.bars : []).filter((row: {
             securityId: string;

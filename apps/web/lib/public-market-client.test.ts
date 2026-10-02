@@ -1,10 +1,42 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clearPublicMarketCache, fetchMarketResponse, loadPublicMarketResource } from "./public-market-client";
+import * as publicChunkCache from "./public-chunk-cache";
 vi.mock("./firebase-config", () => ({ firebaseConfigured: true }));
 vi.mock("./firebase-client", () => ({ getMarketAuthHeaders: async () => ({ Authorization: "Bearer synthetic" }) }));
 beforeEach(() => { clearPublicMarketCache(); vi.stubEnv("NEXT_PUBLIC_KABUTORA_MARKET_BACKEND", "v2"); });
-afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 const revision = "a".repeat(64);
+it("returns prices without requesting intraday or waiting for a cache write", async () => {
+    vi.spyOn(publicChunkCache, "writePublicChunkCache").mockImplementation(() => new Promise(() => {}));
+    const request = vi.fn().mockResolvedValueOnce(Response.json({ resource: "quotes", revision, chunk_count: 1, published_at: "2026-10-01T00:00:00Z" }))
+        .mockResolvedValueOnce(Response.json({ quotes: [{ securityId: "sec-us-aapl", price: "200" }] }));
+    vi.stubGlobal("fetch", request);
+    const response = await fetchMarketResponse("/api/market/quotes", { method: "POST", body: JSON.stringify({ securityIds: "sec-us-aapl", includeIntraday: false }) });
+    expect((await response.json()).quotes[0].price).toBe("200");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.every(([url]) => !String(url).includes("intraday"))).toBe(true);
+});
+it("rejects invalid unselected history without expanding it into accounting bars", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ resource: "history", revision, chunk_count: 1, published_at: "2026-10-01T00:00:00Z" }))
+        .mockResolvedValueOnce(Response.json({ historyBlocks: [{ securityId: "sec-us-msft", provider: "fixture", rows: [["2026-01-01", "NaN"]] }] })));
+    await expect(loadPublicMarketResource("history", new Set(["sec-us-aapl"]))).rejects.toThrow("market_history_row_invalid");
+});
+it("uses a bounded six-chunk pool for common history downloads", async () => {
+    let active = 0, maximum = 0, downloaded = 0;
+    vi.stubGlobal("fetch", async (input: string) => {
+        const url = new URL(input, "https://synthetic.test");
+        if (!url.searchParams.has("chunk")) return Response.json({ resource: "history", revision, chunk_count: 13, published_at: "2026-10-01T00:00:00Z" });
+        active++;
+        maximum = Math.max(maximum, active);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        active--;
+        downloaded++;
+        return Response.json({ bars: [], corporateActions: [] });
+    });
+    await loadPublicMarketResource("history", new Set(["sec-us-aapl"]));
+    expect(maximum).toBe(6);
+    expect(downloaded).toBe(13);
+});
 it("rejects corrupt transport chunks and bounds response bytes before decoding", async () => {
     const corrupt = vi.fn().mockResolvedValueOnce(Response.json({ resource: "quotes", revision, chunk_count: 1, published_at: "2026-10-01T00:00:00Z", chunk_keys: ["f".repeat(64)] })).mockResolvedValueOnce(Response.json({ quotes: [] }));
     vi.stubGlobal("fetch", corrupt);

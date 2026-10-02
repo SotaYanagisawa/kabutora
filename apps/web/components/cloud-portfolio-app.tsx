@@ -13,8 +13,7 @@ import { settleInitialAuthSession } from "@/lib/initial-auth-session";
 import { startupLabels, type PortfolioStartupState, type StartupStage } from "@/lib/portfolio-startup";
 import { diffTransactionChanges } from "@/lib/transaction-event-merge";
 import { isNewerAccountRevision } from "@/lib/account-event-merge";
-import { clearInMemorySnapshotCache, getCachedServerMarketSnapshot, loadServerMarketSnapshot } from "@/lib/client-market-service";
-import { usesPublicMarketBackend } from "@/lib/public-market-client";
+import { clearInMemorySnapshotCache, getCachedServerMarketSnapshot, loadStartupMarketSnapshots } from "@/lib/client-market-service";
 import { clearCompactQuotesCache } from "@/lib/client-market-cache";
 import type { ServerMarketSnapshot } from "@/lib/server-market-types";
 import type { MarketSessionStatus } from "@/lib/market-session";
@@ -165,14 +164,10 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
     clearInMemorySnapshotCache();
     if (!targetUid) { setMarket(null); return; }
     let active = true;
-    void (async () => {
-      if (usesPublicMarketBackend()) {
-        const compact = await loadServerMarketSnapshot({ allowPersistentCache: deviceMode === "trusted" });
-        if (active && compact) setMarket(compact);
-      }
-      const value = await loadServerMarketSnapshot({ includeIntraday: true, allowPersistentCache: deviceMode === "trusted" });
-      if (active && value) setMarket(value);
-    })().catch(() => { /* Retain an already loaded market cache. */ });
+    void loadStartupMarketSnapshots({
+      allowPersistentCache: deviceMode === "trusted",
+      onSnapshot: (snapshot) => { if (active) setMarket(snapshot); },
+    });
     return () => { active = false; };
   }, [deviceMode, targetUid, user]);
 
@@ -308,17 +303,18 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
   );
 
   return <div className="cloud-shell" data-startup-state="ready">
-    <Dashboard key={readyUid} seed={readySeed} initialServerTimeMs={initialServerTimeMs} initialMarketSessions={initialMarketSessions} initialMarketSnapshot={market} persistenceMode="cloud" preferenceNamespace={readyUid} onTransactionsChange={save(saveTransactions)} onAccountsChange={save(saveAccounts)} onSecuritiesChange={save(saveSecurities)} onWatchlistChange={save(saveWatchlist)} onPreferencesChange={schedulePreferenceSave} onEncryptedBackup={setBackupSeed} onRestoreBackup={(file) => void importFile(file)} allowPlaintextExport={true} allowPersistentMarketCache={deviceMode === "trusted"} onLock={lock} onLogout={signOut} onStartupReady={() => performance.mark("kabutora:dashboard-interactive")}/>
-    {showSyncBanner && <div className="sync-status" role="status">
+    {showSyncBanner && <details className="sync-status">
+      <summary><span role="status">{state.warning || queue.storageUnavailable ? "同期の確認が必要です" : `クラウド同期待ち：${queue.pending}件`}</span></summary>
       <div className="sync-status-content">
         {queue.storageUnavailable && <span>端末の保存領域を確認できません。以前の未同期データは削除されていません。保存領域の回復後に再試行してください。 </span>}
         {state.warning && <span>{state.warning} </span>}
         {queue.pending > 0 && <span>{queue.memoryOnly > 0 ? `このタブに保持中：${queue.memoryOnly}件。閉じる前にクラウド同期を完了してください。` : `端末に保存済み：${queue.pending}件。クラウド同期を待っています。`}</span>}
       </div>
       <button className="text-button" onClick={() => void run(async () => { if (state.unsaved) await session.current?.retryFailedSaves(); await session.current?.flush(true); })}>同期を再試行</button>
-    </div>}
+    </details>}
     {queue.pending === 0 && !state.unsaved && !state.cached && <span className="sr-only" role="status">クラウド同期確認済み</span>}
     {error && <div className="cloud-error" role="alert">{error}<button className="text-button" onClick={() => setError("")}>閉じる</button></div>}
+    <Dashboard key={readyUid} seed={readySeed} initialServerTimeMs={initialServerTimeMs} initialMarketSessions={initialMarketSessions} initialMarketSnapshot={market} persistenceMode="cloud" preferenceNamespace={readyUid} onTransactionsChange={save(saveTransactions)} onAccountsChange={save(saveAccounts)} onSecuritiesChange={save(saveSecurities)} onWatchlistChange={save(saveWatchlist)} onPreferencesChange={schedulePreferenceSave} onEncryptedBackup={setBackupSeed} onRestoreBackup={(file) => void importFile(file)} allowPlaintextExport={true} allowPersistentMarketCache={deviceMode === "trusted"} onLock={lock} onLogout={signOut} onStartupReady={() => performance.mark("kabutora:dashboard-interactive")}/>
     {backupSeed && <EncryptedBackupDialog seed={backupSeed} ownerUid={readyUid} onClose={() => setBackupSeed(null)}/>}
   </div>;
 }

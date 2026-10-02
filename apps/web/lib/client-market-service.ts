@@ -7,6 +7,8 @@ import type { ServerMarketSnapshot } from "./server-market-types";
 import type { IntradayBar } from "@kabutora/domain";
 import { timeoutSignal } from "./operation-deadline";
 import { canonicalDomainSecurityId } from "@kabutora/domain";
+import { mergeQuoteRecords, mergeBenchmarks } from "./market-snapshot-merge";
+import { mergeIntradayBars } from "./intraday-cache";
 
 const snapshotEtags = { full: "", compact: "" };
 const usIntradayEtags = new Map<string, string>();
@@ -25,18 +27,65 @@ export function getCachedServerMarketSnapshot(mode: "full" | "compact" = "compac
   return cachedSnapshots[mode];
 }
 
+/** Paint saved charts immediately; neither storage nor charts block fresh prices. */
+export async function loadStartupMarketSnapshots(options: {
+  allowPersistentCache: boolean;
+  onSnapshot: (snapshot: ServerMarketSnapshot) => void;
+}) {
+  let saved: ServerMarketSnapshot | null = null;
+  const merge = (previous: ServerMarketSnapshot | null, snapshot: ServerMarketSnapshot): ServerMarketSnapshot => previous ? {
+    ...snapshot,
+    quotes: Object.values(mergeQuoteRecords(
+      Object.fromEntries(previous.quotes.map((quote) => [quote.securityId, quote])),
+      Object.fromEntries(snapshot.quotes.map((quote) => [quote.securityId, quote])),
+    )),
+    benchmarks: mergeBenchmarks(previous.benchmarks, snapshot.benchmarks),
+    intraday: mergeIntradayBars(previous.intraday, snapshot.intraday),
+  } : snapshot;
+  const restore = options.allowPersistentCache
+    ? readServerSnapshotCache("full").then(async (full) => full ?? await readServerSnapshotCache("compact"))
+      .then((entry) => {
+        if (entry?.snapshot) {
+          // A slower storage read can still supply charts after fresh prices arrive.
+          // Saved data carries no live clock/session authority.
+          const cached: ServerMarketSnapshot = {
+            ...entry.snapshot,
+            generatedAt: "",
+            marketSessions: [],
+            refresh: { ...entry.snapshot.refresh, status: "partial" },
+          };
+          saved = merge(cached, saved ?? cached);
+          options.onSnapshot(saved);
+        }
+      })
+    : Promise.resolve();
+  const publish = (snapshot: ServerMarketSnapshot | null) => {
+    if (!snapshot) return;
+    saved = merge(saved, snapshot);
+    options.onSnapshot(saved);
+  };
+  await Promise.allSettled([
+    restore,
+    loadServerMarketSnapshot({ allowPersistentCache: options.allowPersistentCache, restorePersistentCache: false }).then(publish),
+    loadServerMarketSnapshot({ includeIntraday: true, allowPersistentCache: options.allowPersistentCache, restorePersistentCache: false }).then(publish),
+  ]);
+}
+
 export async function loadServerMarketSnapshot(options: {
   timeoutMs?: number;
   includeIntraday?: boolean;
   allowPersistentCache?: boolean;
+  restorePersistentCache?: boolean;
 } = {}) {
   const mode = options.includeIntraday === true ? "full" : "compact";
   if (usesPublicMarketBackend()) {
     try {
-      const payload=await loadPublicMarketResource("quotes");
+      const [payload, points] = await Promise.all([
+        loadPublicMarketResource("quotes"),
+        options.includeIntraday ? loadPublicMarketResource("intraday") : Promise.resolve(undefined),
+      ]);
       const quotes=Array.isArray(payload.quotes) ? payload.quotes as ServerMarketSnapshot["quotes"] : [];
       const benchmarks=Array.isArray(payload.benchmarks) ? payload.benchmarks as ServerMarketSnapshot["benchmarks"] : [];
-      const points=options.includeIntraday ? await loadPublicMarketResource("intraday") : undefined;
       const fresh=quotes.filter((quote)=>Date.now()-Date.parse(quote.fetchedAt)<20*60_000).length;
       const snapshot:ServerMarketSnapshot={schemaVersion:1,generatedAt:String(payload.generatedAt ?? new Date().toISOString()),savedAt:quotes.map((quote)=>quote.fetchedAt).sort().at(-1) ?? null,marketSessions:portfolioMarketSessions("ALL"),quotes,benchmarks,intraday:Array.isArray(points?.bars) ? points.bars as IntradayBar[] : [],coverage:{registered:quotes.length,quoted:quotes.length,fresh,stale:quotes.length-fresh,suspect:quotes.filter((quote)=>quote.validationStatus==="suspect").length},refresh:{status:quotes.length ? "ready" : "empty",lastRunAt:null,queueMessagesToday:0,providerCallsToday:0}};
       cachedSnapshots[mode]=snapshot;
@@ -51,7 +100,7 @@ export async function loadServerMarketSnapshot(options: {
 
   const allowPersistentCache = options.allowPersistentCache !== false;
 
-  if (allowPersistentCache && (!snapshotEtags[mode] || !cachedSnapshots[mode])) {
+  if (allowPersistentCache && options.restorePersistentCache !== false && (!snapshotEtags[mode] || !cachedSnapshots[mode])) {
     try {
       const persisted = await readServerSnapshotCache(mode);
       if (persisted?.etag && persisted?.snapshot) {

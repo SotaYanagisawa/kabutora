@@ -1,6 +1,6 @@
 "use client";
 
-import { fetchMarketResponse } from "@/lib/public-market-client";
+import { fetchMarketResponse, usesPublicMarketBackend } from "@/lib/public-market-client";
 import { BrowserPreferences, useBrowserPreferences } from "./browser-preferences";
 
 import {
@@ -485,6 +485,7 @@ function DashboardContents({
   const [quoteHealth, setQuoteHealth] = useState<FetchHealth>({ requested: 0, returned: 0, failedIds: [], fallbackIds: [], updatedAt: null });
   const [historyHealth, setHistoryHealth] = useState<FetchHealth>({ requested: 0, returned: 0, failedIds: [], fallbackIds: [], updatedAt: null });
   const [hydrated, setHydrated] = useState(true);
+  const [marketCacheHydrated, setMarketCacheHydrated] = useState(false);
 
   const lastLocalPrefTimestampRef = useRef<number>(0);
   const localPrefTimestampsRef = useRef<Partial<Record<keyof UserPreferences, number>>>({});
@@ -1080,6 +1081,7 @@ function DashboardContents({
         logQuotesToHistory(Object.values(quotesRef.current));
       }
       setMarketStartupReady(true);
+      setMarketCacheHydrated(true);
       setHydrated(true);
     };
     void hydrateMarketData();
@@ -1530,7 +1532,7 @@ function DashboardContents({
   }, [detailSecurityScope, needsFxHistory, transactions, watchlist]);
   const needsHistoryBackfill = useCallback((bars: MarketBar[]) => missingHistoryRequirements(bars, historyCoverageRequired, historyInceptionDates, todayKey).length > 0, [historyCoverageRequired, historyInceptionDates, todayKey]);
 
-  const loadQuotes = useCallback(async (force = false, mode: "full" | "incremental" | "scheduled" = "incremental") => {
+  const loadQuotes = useCallback(async (force = false, mode: "full" | "incremental" | "scheduled" = "incremental", includeIntraday = true) => {
     if (!quoteSecurityIds) return;
     const allIds = splitSecurityIds(quoteSecurityIds, Number.MAX_SAFE_INTEGER).flat();
     const refreshNow = sessionClockRef.current ?? Date.now();
@@ -1580,7 +1582,7 @@ function DashboardContents({
             body: JSON.stringify({
               securityIds: securityIds.join(","),
               refreshSecurityIds: securityIds.filter((securityId) => transitionIds.has(securityId)).join(","),
-              includeIntraday: true,
+              includeIntraday,
               intradayRange: "1d",
               refresh: force,
             }),
@@ -1716,7 +1718,9 @@ function DashboardContents({
     }
     historyRequestInFlight.current = true;
     // History payloads contain years of bars, unlike the small quote batches.
-    const plan = buildHistoryFetchPlan(historySecurityIds, historyCoverageRequired, force ? [] : historyBars, 2, historyInceptionDates, todayKey);
+    // V2 downloads one common publication and filters privately in this browser.
+    // Splitting private IDs into batches would traverse that publication repeatedly.
+    const plan = buildHistoryFetchPlan(historySecurityIds, historyCoverageRequired, force ? [] : historyBars, usesPublicMarketBackend() ? Number.MAX_SAFE_INTEGER : 2, historyInceptionDates, todayKey);
     setApiUsage((current) => ({ ...current, historyRequests: current.historyRequests + plan.length, lastHistoryRequest: new Date().toISOString() }));
     setHistoryStatus("loading");
     setHistoryError("");
@@ -1903,7 +1907,7 @@ function DashboardContents({
     const mode = hasQuotes ? "incremental" : "full";
     quoteEffectKeyRef.current = `${quoteSecurityIds}|${quoteRefreshToken}`;
     void Promise.allSettled([
-      loadQuotes(false, mode),
+      loadQuotes(false, mode, !usesPublicMarketBackend()),
       loadBenchmarks(),
     ]).then(() => setMarketStartupReady(true));
   }, [hydrated, initialMarketSnapshot, loadBenchmarks, loadQuotes, persistenceMode, quoteRefreshToken, quoteSecurityIds]);
@@ -1937,7 +1941,7 @@ function DashboardContents({
   }, [hydrated, transactionRevision]);
 
   useEffect(() => {
-    if (!hydrated || !["overview", "performance", "security", "dividends", "notifications"].includes(view) || historyRequested) return;
+    if (!hydrated || !marketCacheHydrated || !["overview", "performance", "security", "dividends", "notifications"].includes(view) || historyRequested) return;
     setHistoryRequested(true);
     const cacheAge = historyCacheMeta?.savedAt ? Date.now() - new Date(historyCacheMeta.savedAt).getTime() : Number.POSITIVE_INFINITY;
     const needsRefresh = !historyBars.length;
@@ -1947,7 +1951,7 @@ function DashboardContents({
       return;
     }
     void loadHistory(needsRefresh);
-  }, [historyBars, historyCacheMeta, historyQuality, historyRequested, hydrated, loadHistory, needsHistoryBackfill, view]);
+  }, [historyBars, historyCacheMeta, historyQuality, historyRequested, hydrated, loadHistory, marketCacheHydrated, needsHistoryBackfill, view]);
 
   useEffect(() => {
     if (!hydrated || !distributionSecurityIds) return;

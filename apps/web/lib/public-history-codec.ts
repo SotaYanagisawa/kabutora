@@ -13,15 +13,16 @@ export function encodePublicHistory(bars: MarketBar[]): PublicHistoryBlock[] {
  }
  return blocks;
 }
-export function decodePublicHistory(value:unknown):MarketBar[] {
+export function validatePublicHistory(value:unknown):asserts value is PublicHistoryBlock[] {
  if(!Array.isArray(value) || value.length>10000) throw new Error("market_history_blocks_invalid");
- const bars:MarketBar[]=[];
  for(const block of value) {
   if(!isRecord(block) || Object.keys(block).some(key=>!["securityId","provider","rows"].includes(key)) || !isText(block.securityId,1,200) || !isText(block.provider,1,100) || !Array.isArray(block.rows) || block.rows.length>512) throw new Error("market_history_block_invalid");
   for(const row of block.rows) {
    if(!Array.isArray(row) || ![2,3].includes(row.length) || !isDateValue(row[0]) || !finiteDecimal(row[1],true) || (row.length===3 && !finiteDecimal(row[2],true))) throw new Error("market_history_row_invalid");
-   bars.push({securityId:block.securityId,provider:block.provider,date:row[0] as string,close:row[1] as string,...(row.length===3 ? {adjustedClose:row[2] as string} : {})});
   }
  }
- return bars;
+}
+export function decodePublicHistory(value:unknown):MarketBar[] {
+ validatePublicHistory(value);
+ return value.flatMap(block=>block.rows.map(row=>({securityId:block.securityId,provider:block.provider,date:row[0],close:row[1],...(row.length===3 ? {adjustedClose:row[2]} : {})})));
 }
