@@ -2,6 +2,7 @@
 
 import { memo, useEffect, useRef, useState } from "react";
 import { RefreshCw, Search, X } from "lucide-react";
+import { registerPublicMarketSelection } from "@/lib/public-market-client";
 import { marketDisplayName } from "@/lib/market-label";
 import type { SearchSecurity } from "./dashboard";
 import { useSecuritySearch } from "./use-security-search";
@@ -55,6 +56,7 @@ export default memo(function SecuritySearchField({
   }, [results.length]);
 
   const choose = (security: SearchSecurity) => {
+    void registerPublicMarketSelection(security.id).catch(()=>false);
     onSelect(security);
     clear();
     setSelectedIndex(0);

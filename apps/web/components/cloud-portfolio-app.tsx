@@ -13,7 +13,8 @@ import { settleInitialAuthSession } from "@/lib/initial-auth-session";
 import { startupLabels, type PortfolioStartupState, type StartupStage } from "@/lib/portfolio-startup";
 import { diffTransactionChanges } from "@/lib/transaction-event-merge";
 import { isNewerAccountRevision } from "@/lib/account-event-merge";
-import { getCachedServerMarketSnapshot, loadServerMarketSnapshot } from "@/lib/client-market-service";
+import { clearInMemorySnapshotCache, getCachedServerMarketSnapshot, loadStartupMarketSnapshots } from "@/lib/client-market-service";
+import { clearCompactQuotesCache } from "@/lib/client-market-cache";
 import type { ServerMarketSnapshot } from "@/lib/server-market-types";
 import type { MarketSessionStatus } from "@/lib/market-session";
 import type { DeviceTrustMode } from "@/lib/firebase-config";
@@ -29,6 +30,11 @@ const message = (error: unknown) => error instanceof Error ? error.message : "�
 
 export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, initialMarketSessions }: { deviceMode: DeviceTrustMode; initialServerTimeMs: number; initialMarketSessions: MarketSessionStatus[] }) {
   const [user, setUser] = useState<User | null>(null);
+  const [activeUid, setActiveUid] = useState<string | null>(() => {
+    if (typeof window === "undefined" || deviceMode !== "trusted") return null;
+    try { return localStorage.getItem("kabutora-active-uid"); } catch { return null; }
+  });
+  const targetUid = user?.uid ?? (deviceMode === "trusted" ? activeUid : null);
   const [authState, setAuthState] = useState<PortfolioStartupState>({ stage: "authentication" });
   const [attempt, setAttempt] = useState(0);
   const [sessionAttempt, setSessionAttempt] = useState(0);
@@ -71,7 +77,20 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
       setUser(next);
       setLocked(false);
       setSetup(null); setPassphrase(""); setConfirmation(""); setUnlockValue(""); setImportEnvelope(null); setBackupSeed(null);
-      setAuthState({ stage: next ? "vault" : "signed-out" });
+      if (next) {
+        if (deviceMode === "trusted") {
+          try { localStorage.setItem("kabutora-active-uid", next.uid); } catch {}
+          setActiveUid(next.uid);
+        }
+        setAuthState({ stage: "vault" });
+        session.current?.connectCloud();
+      } else {
+        if (deviceMode === "trusted") {
+          try { localStorage.removeItem("kabutora-active-uid"); } catch {}
+          setActiveUid(null);
+        }
+        setAuthState({ stage: "signed-out" });
+      }
     };
     const unsubscribe = auth.onAuthStateChanged((next) => { if (initialized) apply(next); });
     void settleInitialAuthSession({ completeRedirect: completeKabutoraSignInRedirect, authStateReady: () => auth.authStateReady(), currentUser: () => auth.currentUser }).then((result) => {
@@ -81,25 +100,38 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
       if (result.redirectFailed) setError("Googleサインインの結果を確認できませんでした。再試行してください。");
     }).catch((cause) => { if (active) setAuthState({ stage: "recoverable-error", failedStage: "authentication", message: message(cause) }); });
     return () => { active = false; unsubscribe(); };
-  }, [attempt]);
+  }, [attempt, deviceMode]);
 
   useEffect(() => {
-    if (!user || locked) { session.current?.stop(); session.current = null; setState(initialState); return; }
+    if (!targetUid || locked) { session.current?.stop(); session.current = null; setState(initialState); return; }
     setState(initialState);
-    const next = new PortfolioSession(user.uid, deviceMode, createFirebasePortfolioCloudStore(getFirebaseServices().db), setState, () => getFirebaseServices().auth.currentUser?.uid === user.uid);
+    const next = new PortfolioSession(
+      targetUid,
+      deviceMode,
+      createFirebasePortfolioCloudStore(getFirebaseServices().db),
+      setState,
+      () => {
+        const current = getFirebaseServices().auth.currentUser;
+        return !current || current.uid === targetUid;
+      },
+      () => {
+        const current = getFirebaseServices().auth.currentUser;
+        return Boolean(current && current.uid === targetUid);
+      },
+    );
     session.current = next;
     next.start();
-    const updateQueue = () => setQueue(portfolioQueueState(user.uid));
+    const updateQueue = () => setQueue(portfolioQueueState(targetUid));
     updateQueue();
     const unsubscribe = subscribePortfolioQueue(updateQueue);
     const flush = () => { void next.flush(); };
     const timer = setInterval(flush, 5_000);
     window.addEventListener("online", flush);
     return () => { unsubscribe(); clearInterval(timer); window.removeEventListener("online", flush); next.stop(); if (session.current === next) session.current = null; };
-  }, [deviceMode, locked, sessionAttempt, user]);
+  }, [deviceMode, locked, sessionAttempt, targetUid]);
 
   useEffect(() => {
-    if (!user || locked || !session.current) {
+    if (!targetUid || locked || !session.current) {
       preferenceSaveScheduler.current?.cancel();
       preferenceSaveScheduler.current = null;
       return;
@@ -122,18 +154,22 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
       void scheduler.flush();
       if (preferenceSaveScheduler.current === scheduler) preferenceSaveScheduler.current = null;
     };
-  }, [locked, sessionAttempt, user]);
+  }, [locked, sessionAttempt, targetUid]);
 
   const schedulePreferenceSave = useCallback((value: UserPreferences) => {
     preferenceSaveScheduler.current?.enqueue(value);
   }, []);
 
   useEffect(() => {
-    if (!user) return;
+    clearInMemorySnapshotCache();
+    if (!targetUid) { setMarket(null); return; }
     let active = true;
-    void loadServerMarketSnapshot({ includeIntraday: true, allowPersistentCache: deviceMode === "trusted" }).then((value) => { if (active) setMarket(value); }).catch(() => { if (active) setMarket(null); });
+    void loadStartupMarketSnapshots({
+      allowPersistentCache: deviceMode === "trusted",
+      onSnapshot: (snapshot) => { if (active) setMarket(snapshot); },
+    });
     return () => { active = false; };
-  }, [deviceMode, user]);
+  }, [deviceMode, targetUid, user]);
 
   const lock = useCallback(() => { session.current?.stop(); setLocked(true); setUnlockValue(""); setPassphrase(""); setConfirmation(""); setSetup(null); setBackupSeed(null); }, []);
   useEffect(() => {
@@ -156,8 +192,15 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
     try { await operation(); } catch (cause) { setError(message(cause)); } finally { setBusy(false); }
   };
   const signOut = () => run(async () => {
+    if (deviceMode === "trusted") {
+      try {
+        localStorage.removeItem("kabutora-active-uid");
+        clearCompactQuotesCache();
+      } catch {}
+      setActiveUid(null);
+    }
     lock();
-    if (user && deviceMode === "trusted") await deleteTrustedDeviceKey(user.uid).catch(() => undefined);
+    if (targetUid && deviceMode === "trusted") await deleteTrustedDeviceKey(targetUid).catch(() => undefined);
     await signOutOfKabutora();
   });
   const importFile = (file: File | undefined) => run(async () => {
@@ -178,18 +221,10 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
     {importEnvelope && <button type="button" className="text-button" onClick={() => setImportEnvelope(null)}>キャンセル</button>}
   </form>;
 
-  if (authState.stage === "authentication") return <AppLoadingScreen label={startupLabels.authentication}/>;
-  if (authState.stage === "recoverable-error") return <SecureGate title="サインインを確認できませんでした" icon={<LockKeyhole/>}>
-    <p role="alert">{authState.message}</p><button className="trade-button" onClick={() => { enableMemoryFirebaseFallback(); setAttempt((value) => value + 1); }}>メモリモードで再試行</button>
-  </SecureGate>;
-  if (!user) return <SecureGate title="株トラへサインイン" icon={<LockKeyhole/>}>
-    <button className="google-signin-button" aria-label="Googleでサインイン" disabled={busy} onClick={() => void run(signInToKabutora)}><img src="/sign-in-with-google.png" alt="" width="720" height="160"/></button>
-    {error && <p role="alert">{error}</p>}
-  </SecureGate>;
   if (locked) return <SecureGate title="ポートフォリオはロック中" description={deviceMode === "trusted" ? "この端末に保存した解除鍵で再度開きます。" : "パスフレーズまたは復旧キーで再度開きます。"} icon={<LockKeyhole/>}>
     <button className="trade-button" onClick={() => setLocked(false)}>ポートフォリオを開く</button><button className="text-button" onClick={() => void signOut()}>ログアウト</button>
   </SecureGate>;
-  if (importEnvelope || state.needsUnlock) return <SecureGate title={importEnvelope ? "バックアップを復元" : "この端末で保管庫を解除"} description={deviceMode === "trusted" ? "パスフレーズまたは復旧キーを一度入力します。次回からこの端末で自動解除します。" : "共有端末では解除鍵やポートフォリオを保存しません。"} icon={<KeyRound/>}>
+  if (importEnvelope || state.needsUnlock) return <SecureGate title={importEnvelope ? "バックアップを復元" : "この端末で保管庫を解除"} description={importEnvelope ? "バックアップのパスフレーズまたは復旧キーを入力してください。" : (deviceMode === "trusted" ? "iPhoneなど既に開いている端末がある場合は、その端末で株トラを開くだけでGoogleアカウント連携が自動修復され、この端末でも自動的に開きます。直接解除する場合はパスフレーズまたは復旧キーを入力してください。" : "共有端末では解除鍵やポートフォリオを保存しません。")} icon={<KeyRound/>}>
     {unlockForm}<button className="text-button" onClick={() => void signOut()}>別のアカウントを使用</button>
   </SecureGate>;
   if (state.startup.stage === "recoverable-error") return <SecureGate title={`${startupLabels[state.startup.failedStage]}：接続を回復できませんでした`} icon={<LockKeyhole/>}>
@@ -228,7 +263,22 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
     {error && <p role="alert" className="form-error">{error}</p>}
     <button className="text-button" disabled={busy} onClick={() => void signOut()}>ログアウト</button>
   </SecureGate>;
-  if (state.startup.stage !== "ready" || !state.seed) return <AppLoadingScreen label={startupLabels[state.startup.stage as StartupStage] ?? "ポートフォリオを準備中"}/>;
+
+  const ready = Boolean(targetUid && state.seed && state.startup.stage === "ready");
+  if (!ready) {
+    if (authState.stage === "authentication") return <AppLoadingScreen label={startupLabels.authentication}/>;
+    if (authState.stage === "recoverable-error") return <SecureGate title="サインインを確認できませんでした" icon={<LockKeyhole/>}>
+      <p role="alert">{authState.message}</p><button className="trade-button" onClick={() => { enableMemoryFirebaseFallback(); setAttempt((value) => value + 1); }}>メモリモードで再試行</button>
+    </SecureGate>;
+    if (!user) return <SecureGate title="株トラへサインイン" icon={<LockKeyhole/>}>
+      <button className="google-signin-button" aria-label="Googleでサインイン" disabled={busy} onClick={() => void run(signInToKabutora)}><img src="/sign-in-with-google.png" alt="" width="720" height="160"/></button>
+      {error && <p role="alert">{error}</p>}
+    </SecureGate>;
+    return <AppLoadingScreen label={startupLabels[state.startup.stage as StartupStage] ?? "ポートフォリオを準備中"}/>;
+  }
+
+  const readySeed = state.seed!;
+  const readyUid = targetUid!;
 
   const saveTransactions = async (transactions: Seed["transactions"]) => {
     const current = session.current?.state.seed; if (!current) return;
@@ -253,18 +303,19 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
   );
 
   return <div className="cloud-shell" data-startup-state="ready">
-    <Dashboard key={user.uid} seed={state.seed} initialServerTimeMs={initialServerTimeMs} initialMarketSessions={initialMarketSessions} initialMarketSnapshot={market} persistenceMode="cloud" preferenceNamespace={user.uid} onTransactionsChange={save(saveTransactions)} onAccountsChange={save(saveAccounts)} onSecuritiesChange={save(saveSecurities)} onWatchlistChange={save(saveWatchlist)} onPreferencesChange={schedulePreferenceSave} onEncryptedBackup={setBackupSeed} onRestoreBackup={(file) => void importFile(file)} allowPlaintextExport={false} allowPersistentMarketCache={deviceMode === "trusted"} onLock={lock} onLogout={signOut} onStartupReady={() => performance.mark("kabutora:dashboard-interactive")}/>
-    {showSyncBanner && <div className="sync-status" role="status">
+    {showSyncBanner && <details className="sync-status">
+      <summary><span role="status">{state.warning || queue.storageUnavailable ? "同期の確認が必要です" : `クラウド同期待ち：${queue.pending}件`}</span></summary>
       <div className="sync-status-content">
         {queue.storageUnavailable && <span>端末の保存領域を確認できません。以前の未同期データは削除されていません。保存領域の回復後に再試行してください。 </span>}
         {state.warning && <span>{state.warning} </span>}
         {queue.pending > 0 && <span>{queue.memoryOnly > 0 ? `このタブに保持中：${queue.memoryOnly}件。閉じる前にクラウド同期を完了してください。` : `端末に保存済み：${queue.pending}件。クラウド同期を待っています。`}</span>}
       </div>
       <button className="text-button" onClick={() => void run(async () => { if (state.unsaved) await session.current?.retryFailedSaves(); await session.current?.flush(true); })}>同期を再試行</button>
-    </div>}
+    </details>}
     {queue.pending === 0 && !state.unsaved && !state.cached && <span className="sr-only" role="status">クラウド同期確認済み</span>}
     {error && <div className="cloud-error" role="alert">{error}<button className="text-button" onClick={() => setError("")}>閉じる</button></div>}
-    {backupSeed && <EncryptedBackupDialog seed={backupSeed} ownerUid={user.uid} onClose={() => setBackupSeed(null)}/>}
+    <Dashboard key={readyUid} seed={readySeed} initialServerTimeMs={initialServerTimeMs} initialMarketSessions={initialMarketSessions} initialMarketSnapshot={market} persistenceMode="cloud" preferenceNamespace={readyUid} onTransactionsChange={save(saveTransactions)} onAccountsChange={save(saveAccounts)} onSecuritiesChange={save(saveSecurities)} onWatchlistChange={save(saveWatchlist)} onPreferencesChange={schedulePreferenceSave} onEncryptedBackup={setBackupSeed} onRestoreBackup={(file) => void importFile(file)} allowPlaintextExport={true} allowPersistentMarketCache={deviceMode === "trusted"} onLock={lock} onLogout={signOut} onStartupReady={() => performance.mark("kabutora:dashboard-interactive")}/>
+    {backupSeed && <EncryptedBackupDialog seed={backupSeed} ownerUid={readyUid} onClose={() => setBackupSeed(null)}/>}
   </div>;
 }
 function SecureGate({ icon, title, description, children, className }: { icon: React.ReactNode; title: string; description?: string; children?: React.ReactNode; className?: string }) {

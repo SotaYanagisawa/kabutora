@@ -43,6 +43,11 @@ describe("market snapshot merging", () => {
     expect(mergeQuoteRecords({ [nightPts.securityId]: nightPts }, { [regularClose.securityId]: regularClose })[regularClose.securityId].price).toBe("2450");
   });
 
+  it("does not replace a newer observation merely because an old observation was fetched later", () => {
+    const current=quote("101","2026-08-27T15:10:00Z");
+    const old={...quote("100","2026-08-27T15:20:00Z"),marketTimestamp:"2026-08-27T15:00:00Z"};
+    expect(mergeQuoteRecords({[current.securityId]:current},{[old.securityId]:old})[current.securityId]).toEqual(current);
+  });
   it("keeps the newest benchmark", () => {
     expect(mergeBenchmarks(
       [benchmark(145, "2026-08-27T15:10:00.000Z")],

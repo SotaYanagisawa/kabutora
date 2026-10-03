@@ -812,6 +812,20 @@ export function* reconstructPortfolioHistorySteps(
         latestPriceDates.set(canonicalDomainSecurityId(transaction.securityId), date);
       }
     }
+    for (const security of securities) {
+      if (!barsToday.has(security.id) && !barsToday.has(canonicalDomainSecurityId(security.id))) {
+        const rawPrice = security.quote?.price;
+        if (rawPrice && !Number.isNaN(Number(rawPrice)) && Number(rawPrice) > 0) {
+          const quoteDate = security.quote?.marketTimestamp ? security.quote.marketTimestamp.slice(0, 10) : "";
+          if (quoteDate === date || (date === latestDate && (!quoteDate || quoteDate <= date))) {
+            latestPrices.set(security.id, rawPrice);
+            latestPrices.set(canonicalDomainSecurityId(security.id), rawPrice);
+            latestPriceDates.set(security.id, date);
+            latestPriceDates.set(canonicalDomainSecurityId(security.id), date);
+          }
+        }
+      }
+    }
 
     let realizedGain = new Decimal(0);
     let costBasis = new Decimal(0);

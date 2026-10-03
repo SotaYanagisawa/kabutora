@@ -31,6 +31,11 @@ export function portfolioQueueState(uid: string): QueueState {
   const items = [...memory.values()].filter((item) => item.userId === uid);
   return { pending: items.length, memoryOnly: items.filter((item) => !durable.has(keyFor(uid, item.id))).length, storageUnavailable };
 }
+/** Owner-side diagnostic only; no symbols, plaintext values or cloud telemetry. */
+export function portfolioQueueDiagnostics(uid: string) {
+  const items = [...memory.values()].filter(item => item.userId === uid);
+  return { ...portfolioQueueState(uid), encryptedBytes: items.reduce((bytes, item) => bytes + new TextEncoder().encode(JSON.stringify(item.event)).length, 0), oldestPendingAt: items.map(item => item.queuedAt).sort()[0] ?? null };
+}
 export function nextMonotonicTimestamp(): number {
   lastMonotonicSeq = Math.max(Date.now(), lastMonotonicSeq + 1);
   return lastMonotonicSeq;

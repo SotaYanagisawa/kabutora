@@ -1,3 +1,5 @@
+import { getEcbUsdJpyQuote } from "./server/market/ecb-fx";
+import { providerFetch } from "./server/market/provider-fetch";
 import { normalizeRequestedSecurities } from "./market-security";
 import { getYahooJapanQuoteBundle, getYahooHistory, getYahooQuoteBundle, tokyoMarketTimestamp } from "./yahoo-market";
 import { portfolioMarketSessions } from "./market-session";
@@ -7,7 +9,7 @@ import { inspectMarketHistory } from "./market-history";
 import { stableMarketErrorMessage } from "./market-api-response";
 import { fetchCnbcBatchQuotes, fetchCnbcQuote } from "./cnbc-quote-provider";
 import { fetchYahooBatchQuotes, normalizeBatchQuote } from "./yahoo-batch-quote";
-import type { IntradayBar, MarketQuote } from "@kabutora/domain";
+import { Decimal, type IntradayBar, type MarketQuote } from "@kabutora/domain";
 import type {
   MarketHistoryBatchResult,
   MarketQuoteBatchResult,
@@ -46,7 +48,17 @@ export async function getTokyoQuoteBundle(
   const expectedPtsSession = session === "pts_day" || session === "pts_night" ? session : undefined;
   let lastError: unknown;
   try {
-    return await getYahooQuoteBundle(providerSymbol, securityId, "TSE", force, intradayRange, expectedPtsSession);
+    const bundle = await getYahooQuoteBundle(providerSymbol, securityId, "TSE", force, intradayRange, expectedPtsSession);
+    if (bundle.quote.validationStatus !== "suspect") {
+      return bundle;
+    }
+    try {
+      const japanBundle = await getYahooJapanQuoteBundle(providerSymbol, securityId, force, expectedPtsSession);
+      if (japanBundle.quote.validationStatus !== "suspect") {
+        return japanBundle;
+      }
+    } catch {}
+    return bundle;
   } catch (error) {
     lastError = error;
     try {
@@ -210,9 +222,43 @@ export async function fetchMarketQuoteBatch(
       ? await pooledMap(failedBatchSecurities, Math.max(1, Math.min(6, options.concurrency ?? 6)), async (security) => {
           try {
             const securityForce = force || options.forceSecurityIds?.has(security.id) === true;
-            const bundle = security.venueCode === "TSE"
-              ? await getTokyoQuoteBundle(security.providerSymbol, security.id, securityForce, intradayRange)
-              : await getUsQuoteBundleWithFallback(security.providerSymbol, security.id, security.venueCode, securityForce, intradayRange);
+            let bundle: QuoteBundle;
+            if (security.venueCode === "TSE") {
+              bundle = await getTokyoQuoteBundle(security.providerSymbol, security.id, securityForce, intradayRange);
+            } else if (security.id === "sec-fx-usdjpy" || security.venueCode === "FX") {
+              try {
+                bundle = await getYahooQuoteBundle(security.providerSymbol, security.id, security.venueCode, securityForce, intradayRange);
+              } catch {
+                const yj = await getUsdJpyFromYahooJapan(securityForce);
+                const price = String(yj.value);
+                const previousClose = yj.changeRatio != null && 1 + yj.changeRatio > 0 ? new Decimal(String(yj.value)).div(new Decimal(String(yj.changeRatio)).add(1)).toString() : undefined;
+                bundle = {
+                  quote: {
+                    price,
+                    ...(previousClose ? { previousRegularClose: previousClose } : {}),
+                    marketTimestamp: yj.marketTimestamp,
+                    fetchedAt: new Date().toISOString(),
+                    freshness: yj.freshness,
+                    provider: yj.provider,
+                    session: yj.session,
+                    priceType: yj.priceType,
+                    venueCode: "FX",
+                    validationStatus: "valid",
+                  },
+                  intraday: [],
+                  exchangeLabel: "FX",
+                  shortName: "USD/JPY",
+                };
+              }
+            } else {
+              bundle = await getUsQuoteBundleWithFallback(
+                security.providerSymbol,
+                security.id,
+                security.venueCode === "USD_FUND" ? "FUND" : security.venueCode,
+                securityForce,
+                intradayRange,
+              );
+            }
             return {
               ok: true as const,
               intraday: [],
@@ -278,7 +324,7 @@ export async function fetchMarketQuoteBatch(
         } catch {
           const yj = await getUsdJpyFromYahooJapan(securityForce);
           const price = String(yj.value);
-          const previousClose = yj.changeRatio != null && 1 + yj.changeRatio > 0 ? String(yj.value / (1 + yj.changeRatio)) : undefined;
+          const previousClose = yj.changeRatio != null && 1 + yj.changeRatio > 0 ? new Decimal(String(yj.value)).div(new Decimal(String(yj.changeRatio)).add(1)).toString() : undefined;
           bundle = {
             quote: {
               price,
@@ -286,9 +332,9 @@ export async function fetchMarketQuoteBatch(
               marketTimestamp: yj.marketTimestamp,
               fetchedAt: new Date().toISOString(),
               freshness: yj.freshness,
-              provider: "yahoo_japan_fx_html:fallback",
-              session: "regular",
-              priceType: "last_trade",
+              provider: yj.provider,
+              session: yj.session,
+              priceType: yj.priceType,
               venueCode: "FX",
               validationStatus: "valid",
             },
@@ -423,7 +469,7 @@ const BENCHMARKS = [
 ] as const;
 
 async function fetchTopixFromYahooJapan() {
-  const response = await fetch("https://finance.yahoo.co.jp/quote/998405.T", {
+  const response = await providerFetch("https://finance.yahoo.co.jp/quote/998405.T", {
     headers: { "User-Agent": "Mozilla/5.0 (compatible; Kabutora/1.0)" },
     cache: "no-store",
   });
@@ -434,7 +480,8 @@ async function fetchTopixFromYahooJapan() {
   const board = html.slice(marker, marker + 2_600);
   const field = (name: string) => new RegExp(`"${name}":"([^"]*)"`).exec(board)?.[1] ?? "";
   const value = Number(field("price").replaceAll(",", ""));
-  const changeRatio = Number(field("changePriceRate")) / 100;
+  const rawChange = field("changePriceRate");
+  const changeRatio = rawChange && /^[+-]?[0-9.]+$/u.test(rawChange) ? new Decimal(rawChange).div(100).toNumber() : null;
   if (!Number.isFinite(value) || value <= 0) throw new Error("TOPIX: invalid price");
   const updateTime = field("japanUpdateTime");
   const marketTimestamp = tokyoMarketTimestamp(updateTime);
@@ -456,7 +503,7 @@ async function getTopixFromYahooJapan(force: boolean) {
 }
 
 async function fetchUsdJpyFromYahooJapan() {
-  const response = await fetch("https://finance.yahoo.co.jp/quote/USDJPY=FX", {
+  const response = await providerFetch("https://finance.yahoo.co.jp/quote/USDJPY=FX", {
     headers: { "User-Agent": "Mozilla/5.0 (compatible; Kabutora/1.0)" },
     cache: "no-store",
   });
@@ -465,14 +512,13 @@ async function fetchUsdJpyFromYahooJapan() {
   const match = html.match(/\"name\":\"米ドル\/円\",\"bid\":\{\"value\":\"([0-9.]+)\"\},\"ask\":\{\"value\":\"([0-9.]+)\"\},\"change\":\{\"value\":\"([0-9.-]+)\"\}/)
     || html.match(/\\\"name\\\":\\\"米ドル\/円\\\",\\\"bid\\\":\{\\\"value\\\":\\\"([0-9.]+)\\\"\},\\\"ask\\\":\{\\\"value\\\":\\\"([0-9.]+)\\\"\},\\\"change\\\":\{\\\"value\\\":\\\"([0-9.-]+)\\\"\}/);
   if (!match) throw new Error("USD/JPY: rate unavailable on Yahoo Japan");
-  const bid = Number(match[1]);
-  const ask = Number(match[2]);
-  const change = Number(match[3]);
-  const value = Number(((bid + ask) / 2).toFixed(3));
+  const change = new Decimal(match[3]);
+  const rate = new Decimal(match[1]).add(match[2]).div(2).toDecimalPlaces(3);
+  const value = rate.toNumber();
   if (!Number.isFinite(value) || value < 50 || value > 300) throw new Error("USD/JPY: invalid rate");
-  const previous = value - change;
-  const changeRatio = previous > 0 ? (value / previous) - 1 : null;
-  return { value, changeRatio: Number.isFinite(changeRatio) ? changeRatio : null, marketTimestamp: new Date().toISOString(), freshness: "delayed" as const };
+  const previous = rate.sub(change);
+  const changeRatio = previous.gt(0) ? rate.div(previous).sub(1).toNumber() : null;
+  return { value, changeRatio: Number.isFinite(changeRatio) ? changeRatio : null, marketTimestamp: new Date().toISOString(), freshness: "delayed" as const,provider:"yahoo_japan_fx_html:fallback",priceType:"last_trade" as const,session:"regular" as const };
 }
 
 let usdJpyCache: { value: Awaited<ReturnType<typeof fetchUsdJpyFromYahooJapan>>; expiresAt: number; staleUntil: number } | null = null;
@@ -484,8 +530,14 @@ async function getUsdJpyFromYahooJapan(force: boolean) {
     usdJpyCache = { value, expiresAt: Date.now() + 15 * 60 * 1000, staleUntil: Date.now() + 7 * 24 * 60 * 60 * 1000 };
     return value;
   } catch (error) {
-    if (usdJpyCache && usdJpyCache.staleUntil > Date.now()) return { ...usdJpyCache.value, freshness: "cached" as const };
-    throw error;
+    try {
+      const reference=await getEcbUsdJpyQuote();
+      const changeRatio=reference.previousRegularClose ? new Decimal(reference.price).div(reference.previousRegularClose).sub(1).toNumber() : null;
+      return {value:new Decimal(reference.price).toNumber(),changeRatio,marketTimestamp:reference.marketTimestamp,freshness:reference.freshness,provider:reference.provider,priceType:reference.priceType,session:reference.session};
+    } catch {
+      if (usdJpyCache && usdJpyCache.staleUntil > Date.now()) return { ...usdJpyCache.value, freshness: "cached" as const };
+      throw error;
+    }
   }
 }
 
@@ -499,7 +551,7 @@ export async function fetchMarketBenchmarks(force = false) {
       if (benchmark.id === "usd-jpy") {
         try {
           const { quote } = await getYahooQuoteBundle(benchmark.symbol, `benchmark-${benchmark.id}`, benchmark.venue, force);
-          const previous = quote.previousRegularClose == null ? null : Number(quote.previousRegularClose);
+          const previous = quote.previousRegularClose == null ? null : new Decimal(quote.previousRegularClose);
           const value = Number(quote.price);
           if (value >= 50 && value <= 300) {
             const fetchedAt = new Date().toISOString();
@@ -508,7 +560,7 @@ export async function fetchMarketBenchmarks(force = false) {
               benchmark: {
                 ...benchmark,
                 value,
-                changeRatio: previous && previous > 0 ? value / previous - 1 : null,
+                changeRatio: previous?.gt(0) ? new Decimal(quote.price).div(previous).sub(1).toNumber() : null,
                 marketTimestamp: quote.marketTimestamp,
                 freshness: quote.freshness,
                 fetchedAt,
@@ -534,7 +586,7 @@ export async function fetchMarketBenchmarks(force = false) {
           throw error;
         }
       }
-      const previous = quote.previousRegularClose == null ? null : Number(quote.previousRegularClose);
+      const previous = quote.previousRegularClose == null ? null : new Decimal(quote.previousRegularClose);
       const value = Number(quote.price);
       const fetchedAt = new Date().toISOString();
       return {
@@ -542,7 +594,7 @@ export async function fetchMarketBenchmarks(force = false) {
         benchmark: {
           ...benchmark,
           value,
-          changeRatio: previous && previous > 0 ? value / previous - 1 : null,
+          changeRatio: previous?.gt(0) ? new Decimal(quote.price).div(previous).sub(1).toNumber() : null,
           marketTimestamp: quote.marketTimestamp,
           freshness: quote.freshness,
           fetchedAt,

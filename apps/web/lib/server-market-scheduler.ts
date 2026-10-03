@@ -18,6 +18,8 @@ import {
   listDueHistorySecurityIds,
   listEnabledMarketSecurities,
   markRefreshJob,
+  mergeMarketSecurities,
+  normalizePublicSecurityIds,
   readDailyUsage,
   readStoredQuotes,
   upsertBenchmarks,
@@ -32,7 +34,9 @@ const HISTORY_REFRESH_MS = 24 * 60 * 60 * 1000;
 const DISTRIBUTION_REFRESH_MS = 7 * 24 * 60 * 60 * 1000;
 const ACTIVE_REGISTRY_MS = 30 * 24 * 60 * 60 * 1000;
 const CLOSED_BENCHMARK_REFRESH_MS = 4 * 60 * 60 * 1000;
-export const MARKET_QUOTE_JOB_SIZE = 20;
+// Queue consumers have the same 50 external-subrequest ceiling as HTTP
+// requests. Chart, quote, name and fallback requests all count toward it.
+export const MARKET_QUOTE_JOB_SIZE = MARKET_REQUEST_BATCH_SIZE;
 // Full-range distribution backfills can include decades of price bars. Keep
 // queue jobs small so a single slow provider cannot exhaust a Worker invocation.
 export const MARKET_HISTORY_JOB_SIZE = 2;
@@ -82,7 +86,7 @@ export function scheduledQuoteTargets(securities: PublicSecurityDescriptor[], qu
   const targets = new Set(quoteRefreshTargets(regularIds, Object.fromEntries(quotes), { now }));
   for (const security of securities) {
     if (security.assetType !== "fund") continue;
-    const quote = quotes.get(security.securityId);
+    const quote = quotes.get(security.securityId) ?? quotes.get(canonicalDomainSecurityId(security.securityId));
     const fetchedAt = Date.parse(quote?.fetchedAt ?? "");
     if (!Number.isFinite(fetchedAt) || now - fetchedAt >= FUND_REFRESH_MS) targets.add(security.securityId);
   }
@@ -148,24 +152,26 @@ export function isMarketRefreshJob(value: unknown): value is MarketRefreshJob {
   return job.version === 1
     && typeof job.claimId === "string"
     && typeof job.runId === "string"
-    && ["quotes", "history", "distributions", "benchmarks"].includes(String(job.kind))
+    && ["quotes", "history", "distributions", "benchmarks", "manual"].includes(String(job.kind))
     && Array.isArray(job.securityIds)
     && (job.kind === "benchmarks"
       ? job.securityIds.length === 0
-      : job.securityIds.length > 0 && job.securityIds.length <= (job.kind === "quotes" ? MARKET_QUOTE_JOB_SIZE : MARKET_HISTORY_JOB_SIZE))
+      : job.securityIds.length > 0 && job.securityIds.length <= (job.kind === "manual" ? 200 : job.kind === "quotes" ? MARKET_QUOTE_JOB_SIZE : MARKET_HISTORY_JOB_SIZE))
     && job.securityIds.every((securityId) => typeof securityId === "string")
-    && typeof job.scheduledAt === "string";
+    && typeof job.scheduledAt === "string" && Number.isFinite(Date.parse(job.scheduledAt))
+    && job.claimId.length <= 2000 && job.runId.length <= 256
+    && job.securityIds.every((id) => id.length <= 96 && normalizePublicSecurityIds([id]).length === 1);
 }
 
-export async function scheduleMarketRefresh(db: D1DatabaseLike, queue: QueueProducerLike, scheduledTime = Date.now()) {
+export async function scheduleMarketRefresh(db: D1DatabaseLike, queue: QueueProducerLike, scheduledTime = Date.now(), options: { canary?: boolean } = {}) {
   const scheduledAt = new Date(scheduledTime).toISOString();
   const bucket = tenMinuteBucket(scheduledTime);
   const runId = `market:${bucket}`;
   await createRefreshRun(db, runId, scheduledAt);
 
   // Trigger automated upstream schema drift canary checks concurrently
-  const canaryPromise = runUpstreamCanary().then(async (report) => {
-    if (report.driftDetected) {
+  const canaryPromise = (options.canary === false ? Promise.resolve(null) : runUpstreamCanary()).then(async (report) => {
+    if (report?.driftDetected) {
       console.warn("[CANARY_SCHEMA_DRIFT]", JSON.stringify(report));
       await incrementDailyUsage(db, { failures: 1 }).catch(() => undefined);
     }
@@ -254,10 +260,18 @@ export async function enqueueManualMarketRefresh(
   return { runId, accepted: securityIds.length, queued: selected.length, budgetLimited };
 }
 
-export async function processMarketRefreshJob(db: D1DatabaseLike, job: MarketRefreshJob) {
+export async function processMarketRefreshJob(db: D1DatabaseLike, job: MarketRefreshJob, queue?: QueueProducerLike) {
+  if (job.kind === "manual") {
+    if (!queue) throw new Error("market_refresh_queue_unavailable");
+    await incrementDailyUsage(db, { queueMessages: 1 });
+    const securities = normalizePublicSecurityIds(job.securityIds);
+    await mergeMarketSecurities(db, securities);
+    const result = await enqueueManualMarketRefresh(db, queue, securities.map((security) => security.securityId), Date.parse(job.scheduledAt));
+    return { kind: job.kind, returned: result.accepted, failed: 0 };
+  }
   try {
     if (job.kind === "quotes") {
-      const result = await fetchMarketQuoteBatch(job.securityIds, { includeIntraday: true, intradayRange: "1d", concurrency: 2 });
+      const result = await fetchMarketQuoteBatch(job.securityIds, { force: job.runId.startsWith("market:manual:"), includeIntraday: true, intradayRange: "1d", concurrency: 2 });
       await upsertQuoteBatch(db, result);
       const status = result.failures.length ? result.quotes.length ? "partial" : "failed" : "complete";
       await markRefreshJob(db, job.claimId, status);

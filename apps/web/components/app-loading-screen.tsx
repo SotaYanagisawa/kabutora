@@ -36,12 +36,14 @@ export default function AppLoadingScreen({
   return <main className="app-loading-screen" data-exiting={exiting} role="status" aria-live="polite" aria-atomic="true">
     <div className="app-loading-content">
       <span className="app-loading-logo" aria-hidden="true" />
-      <header className="app-loading-brand" aria-label="株トラ">
-        <strong>株トラ</strong>
-      </header>
-      <div className="app-loading-copy" data-updating={copyUpdating}>
-        <p>{displayedCopy.label}</p>
-        <small>{displayedCopy.detail}</small>
+      <div className="app-loading-body">
+        <header className="app-loading-brand" aria-label="株トラ">
+          <strong>株トラ</strong>
+        </header>
+        <div className="app-loading-copy" data-updating={copyUpdating}>
+          <p>{displayedCopy.label}</p>
+          <small>{displayedCopy.detail}</small>
+        </div>
       </div>
     </div>
   </main>;

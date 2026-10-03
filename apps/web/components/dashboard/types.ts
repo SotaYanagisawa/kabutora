@@ -209,7 +209,7 @@ export type TouchGesture = {
 };
 
 export type SwipePhase = "idle" | "dragging" | "settling";
-export type DataSecurityAction = "encrypted-backup" | "export-csv" | "export-json" | "lock" | "logout";
+export type DataSecurityAction = "encrypted-backup" | "export-csv" | "export-json" | "logout";
 
 export type DashboardProps = {
   seed: Seed;

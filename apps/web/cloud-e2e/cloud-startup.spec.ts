@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "../e2e/strict-fixture";
+import type { Request as BrowserRequest } from "@playwright/test";
 import { initializeTestEnvironment } from "@firebase/rules-unit-testing";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { createEncryptedVault, createGoogleProtectedVault, createRecoveryVault, decryptVaultWithDataKey } from "../lib/vault-crypto";
@@ -8,6 +9,7 @@ import { readFile } from "node:fs/promises";
 const projectId = "demo-kabutora-security-rules";
 const password = "kabutora-emulator-only-password";
 const passphrase = "synthetic browser recovery passphrase";
+const marketActivity = new WeakMap<Page, { pending: Set<BrowserRequest>; changedAt: number }>();
 async function seedCloud(legacy = false) {
   if (!process.env.FIRESTORE_EMULATOR_HOST?.startsWith("127.0.0.1:")) throw new Error("Isolated Firebase emulators are required");
   const credentials = { email: "synthetic@kabutora.test", password, returnSecureToken: true };
@@ -31,6 +33,24 @@ async function seedCloud(legacy = false) {
 }
 
 async function marketRoutes(page: Page, snapshot?: Record<string, unknown>) {
+  if (!marketActivity.has(page)) {
+    const activity = { pending: new Set<BrowserRequest>(), changedAt: Date.now() };
+    marketActivity.set(page, activity);
+    page.on("request", request => { if (new URL(request.url()).pathname.startsWith("/api/market/")) { activity.pending.add(request); activity.changedAt = Date.now(); } });
+    const settled = (request: BrowserRequest) => { if (activity.pending.delete(request)) activity.changedAt = Date.now(); };
+    page.on("requestfinished", settled);
+    page.on("requestfailed", settled);
+  }
+  await page.route("**/api/market/data?**", route => {
+    const url = new URL(route.request().url()), resource = url.searchParams.get("resource");
+    const timestamp = new Date().toISOString(), revision = "a".repeat(64);
+    if (!url.searchParams.has("chunk")) return route.fulfill({json:{resource,revision,chunk_count:1,published_at:timestamp},headers:{"X-Market-Server-Time":timestamp}});
+    const payload = resource === "quotes" ? {quotes:snapshot?.quotes ?? [],benchmarks:snapshot?.benchmarks ?? [],coverage:snapshot?.coverage ?? {registered:0,quoted:0}}
+      : resource === "intraday" ? {bars:snapshot?.intraday ?? []}
+      : resource === "history" ? {bars:[],corporateActions:[],inceptionDates:{}}
+      : {distributions:[],corporateActions:[],coverage:[]};
+    return route.fulfill({json:payload});
+  });
   await page.route("**/api/local/bootstrap", (route) => route.fulfill({ status: 204 }));
   await page.route("**/api/market/quotes", (route) => route.fulfill({ json: { quotes: [], intraday: [], failures: [], coverage: { requested: 0, returned: 0 } } }));
   await page.route("**/api/market/history", (route) => route.fulfill({ json: { bars: [], corporateActions: [], failures: [], coverage: { requested: 0, returned: 0 } } }));
@@ -52,6 +72,13 @@ async function recover(page: Page, key: string) {
 }
 
 async function reloadCloud(page: Page, errors: string[]) {
+  // Finish pricing requests before replacing the document. WebKit can report
+  // late Playwright route fulfillment as CORS errors during navigation.
+  await expect(page.locator(".market-health")).not.toContainText("取得中", { timeout: 20_000 });
+  await expect.poll(() => {
+    const activity = marketActivity.get(page);
+    return Boolean(activity && activity.pending.size === 0 && Date.now() - activity.changedAt >= 250);
+  }).toBe(true);
   expect(errors).toEqual([]);
   await page.reload({ waitUntil: "domcontentloaded" });
   // WebKit reports cancellation of the departing document's open Firestore
@@ -103,6 +130,7 @@ test("cloud US holdings row shows the newest session immediately when its first 
     await signIn(page, "個人端末", snapshot);
     await recover(page, created.recoveryKey);
     await page.getByRole("combobox", { name: /資産区分(?:と国)?で絞り込み/u }).selectOption("US");
+    await page.getByRole("combobox", { name: "表示通貨", exact: true }).selectOption("USD");
     const row = page.locator("tr.selectable").filter({ hasText: "AAPL" });
     await expect(row).toBeVisible({ timeout: 20_000 });
     await expect(row.locator(".price-col strong")).toHaveText(/223|223\.00/);
@@ -137,6 +165,7 @@ test("cloud US holdings row shows the most recently completed trading session be
     await signIn(page, "個人端末", snapshot);
     await recover(page, created.recoveryKey);
     await page.getByRole("combobox", { name: /資産区分(?:と国)?で絞り込み/u }).selectOption("US");
+    await page.getByRole("combobox", { name: "表示通貨", exact: true }).selectOption("USD");
     const row = page.locator("tr.selectable").filter({ hasText: "AAPL" });
     await expect(row).toBeVisible({ timeout: 20_000 });
     await expect(row.locator(".price-col strong")).toHaveText(/222|222\.00/);
@@ -262,6 +291,12 @@ test("two trusted devices merge independent preferences and retain encrypted edi
     await secondContext.setOffline(true);
     await currencyFilter(second).selectOption("USD");
     await expect(second.locator(".sync-status")).toContainText("端末に保存済み", { timeout: 10_000 });
+    await second.locator(".sync-status summary").click();
+    await expect(second.getByRole("button", { name: "同期を再試行" })).toBeVisible();
+    expect(await second.locator(".sync-status").evaluate((element) => getComputedStyle(element).position)).toBe("relative");
+    await second.getByRole("button", { name: "設定", exact: true }).click();
+    await expect(second.locator(".settings-page")).toBeVisible();
+    await second.getByRole("button", { name: "一覧", exact: true }).click();
     const pending = await second.evaluate(async () => new Promise<any[]>((resolve, reject) => {
       const request = indexedDB.open("kabutora-offline-queue-v1");
       request.onerror = () => reject(request.error);
@@ -293,12 +328,6 @@ test("two trusted devices merge independent preferences and retain encrypted edi
     await expect(marketFilter(second)).toHaveValue("JP", { timeout: 20_000 });
     await expect(currencyFilter(page)).toHaveValue("USD", { timeout: 20_000 });
     await expect(currencyFilter(second)).toHaveValue("USD");
-    await second.getByRole("button", { name: "設定", exact: true }).click();
-    await second.getByRole("button", { name: "ロック", exact: true }).click();
-    await second.getByRole("alertdialog").getByRole("button", { name: "ロック", exact: true }).click();
-    await expect(second.getByText("ポートフォリオはロック中", { exact: true })).toBeVisible();
-    await second.getByRole("button", { name: "ポートフォリオを開く", exact: true }).click();
-    await expect(second.locator('[data-startup-state="ready"]')).toBeVisible({ timeout: 20_000 });
     await expect(second.locator(".chart-recovery, .client-recovery, .cloud-error")).toHaveCount(0);
     expect(failures).toEqual([]);
     if (offlineFailures.length) expect(offlineRequests.length, "Expected transport errors must accompany failed emulator requests during the intentional outage").toBeGreaterThan(0);

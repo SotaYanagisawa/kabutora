@@ -16,6 +16,7 @@ describe("dashboard helpers", () => {
         "America/New_York",
         "USD",
         "US",
+        new Date(fetchedAt),
       );
 
       // Should be formatted in native timezone (EDT or ET) and not Tokyo time (18:44)
@@ -34,6 +35,7 @@ describe("dashboard helpers", () => {
         "Asia/Tokyo",
         "JPY",
         "JP",
+        new Date(fetchedAt),
       );
 
       expect(formatted).toBe("15:00 JST");
@@ -51,6 +53,7 @@ describe("dashboard helpers", () => {
         "America/New_York",
         "USD",
         "US",
+        new Date(fetchedAt),
       );
 
       expect(formatted).toBe("9/11 16:00 EDT");
@@ -65,6 +68,7 @@ describe("dashboard helpers", () => {
         "America/New_York",
         "USD",
         "US",
+        new Date("2026-09-15T09:45:00.000Z"),
       );
 
       expect(formatted).toBe("9/11 16:00 EDT");

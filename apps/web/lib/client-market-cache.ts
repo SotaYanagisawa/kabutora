@@ -143,3 +143,30 @@ export async function writeServerSnapshotCache(
     return false;
   }
 }
+
+const COMPACT_QUOTES_KEY = "kabutora-compact-quotes-v1";
+
+export function readCompactQuotesCache(): Record<string, import("./server-market-types").ServerRemoteQuote> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(COMPACT_QUOTES_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed as Record<string, import("./server-market-types").ServerRemoteQuote>;
+  } catch {}
+  return {};
+}
+
+export function writeCompactQuotesCache(quotes: Record<string, import("./server-market-types").ServerRemoteQuote>) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(COMPACT_QUOTES_KEY, JSON.stringify(quotes));
+  } catch {}
+}
+
+export function clearCompactQuotesCache() {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(COMPACT_QUOTES_KEY);
+  } catch {}
+}

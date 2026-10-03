@@ -1,3 +1,4 @@
+import { providerFetch } from "./server/market/provider-fetch";
 import type { IntradayBar } from "@kabutora/domain";
 import type { D1DatabaseLike, D1PreparedStatementLike } from "./cloudflare-market-env";
 import { japanMarketSession } from "./market-session";
@@ -64,7 +65,7 @@ export type PtsCollectionResult = {
 export async function collectJapannextPts(
   db: D1DatabaseLike,
   scheduledTime: number,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = providerFetch,
 ): Promise<PtsCollectionResult> {
   const scheduledDate = new Date(scheduledTime);
   const window = japannextPtsWindowAt(scheduledDate);
@@ -155,17 +156,23 @@ export async function collectJapannextPts(
 }
 
 export async function readLatestJapannextPtsBars(db: D1DatabaseLike, securityIds?: ReadonlySet<string>, after?: string | null) {
-  const latest = await db.prepare("SELECT session_key FROM market_pts_frames ORDER BY observed_minute DESC LIMIT 1")
-    .first<{ session_key: string }>();
+  const symbols = securityIds ? [...securityIds].map(id => /^sec-([0-9]{4}|[0-9]{3}[a-z])$/iu.exec(id)?.[1]?.toUpperCase()).filter((symbol): symbol is string => Boolean(symbol)) : undefined;
+  if (symbols && !symbols.length) return { bars: [] as IntradayBar[], revision: null as string | null };
+  const latest = await db.prepare("SELECT session_key, symbol_count FROM market_pts_frames ORDER BY observed_minute DESC LIMIT 1")
+    .first<{ session_key: string; symbol_count?: number }>();
   if (!latest?.session_key) return { bars: [] as IntradayBar[], revision: null as string | null };
   const validAfter = after && Number.isFinite(Date.parse(after)) ? after : null;
+  // Frames are already restricted at ingestion to the shared registry. Avoid
+  // billed json_each scans when the request covers the whole stored frame.
+  const project = symbols && (typeof latest.symbol_count !== "number" || symbols.length < latest.symbol_count);
   const response = await db.prepare(`
-    SELECT session_key, venue_code, observed_minute, payload_json
-    FROM market_pts_frames
+    SELECT session_key, venue_code, observed_minute,
+      ${project ? "(SELECT json_group_object(j.key,json(j.value)) FROM json_each(f.payload_json) AS j WHERE j.key IN (SELECT value FROM json_each(?))) AS payload_json" : "payload_json"}
+    FROM market_pts_frames AS f
     WHERE session_key = ?${validAfter ? " AND observed_minute > ?" : ""}
     ORDER BY observed_minute ASC
     LIMIT 1500
-  `).bind(latest.session_key, ...(validAfter ? [validAfter] : [])).all<PtsFrameRow>();
+  `).bind(...(project ? [JSON.stringify(symbols)] : []), latest.session_key, ...(validAfter ? [validAfter] : [])).all<PtsFrameRow>();
   const bars: IntradayBar[] = [];
   let revision: string | null = null;
   for (const row of response.results ?? []) {

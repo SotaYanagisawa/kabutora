@@ -8,7 +8,11 @@ export const sourceRoot = path.resolve(fileURLToPath(new URL("..", import.meta.u
 export function sourceManifest(root = sourceRoot) {
   const releaseStage = process.env.KABUTORA_RELEASE_STAGE ?? "complete";
   if (!["repairs", "complete"].includes(releaseStage)) throw new Error("Unknown release stage");
-  const names = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: root, encoding: "utf8" }).split("\0");
+  const gitEnv = { ...process.env };
+  if (!gitEnv.DEVELOPER_DIR && fs.existsSync("/Library/Developer/CommandLineTools")) {
+    gitEnv.DEVELOPER_DIR = "/Library/Developer/CommandLineTools";
+  }
+  const names = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: root, encoding: "utf8", env: gitEnv }).split("\0");
   const files = [...new Set(names)].filter((name) => name && name !== "apps/web/next-env.d.ts" && fs.existsSync(path.join(root, name)) && fs.statSync(path.join(root, name)).isFile()).sort();
   const entries = files.map((name) => ({ path: name, sha256: createHash("sha256").update(fs.readFileSync(path.join(root, name))).digest("hex") }));
   // Build configuration is identified without exposing its values in artifacts.

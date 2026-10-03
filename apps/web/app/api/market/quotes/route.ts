@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  try { await authorizeMarketRequest(request); } catch { return unauthorizedResponse(); }
+  try { await authorizeMarketRequest(request); } catch (cause) { return unauthorizedResponse(cause); }
   const body = await request.json().catch(() => ({})) as { refresh?: unknown; refreshSecurityIds?: unknown; includeIntraday?: unknown; intradayRange?: unknown; securityIds?: unknown };
   const securityIds = typeof body.securityIds === "string" ? body.securityIds.split(",").map((value) => value.trim()).filter(Boolean) : [];
   const refreshIds = new Set(typeof body.refreshSecurityIds === "string" ? body.refreshSecurityIds.split(",").map((value) => value.trim()).filter(Boolean) : []);

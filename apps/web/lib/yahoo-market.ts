@@ -1,3 +1,5 @@
+import { providerFetch } from "./server/market/provider-fetch";
+import { Decimal } from "@kabutora/domain";
 import type { CorporateAction, DistributionEvent, IntradayBar, MarketBar, MarketQuote } from "@kabutora/domain";
 
 type YahooChartResult = {
@@ -93,12 +95,10 @@ function secondsToIso(value: number) {
 }
 
 function ymdInTokyo(value: number) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(value * 1000));
+  // Japan has no daylight-saving transitions in the provider's history range.
+  // Constructing an Intl formatter per bar exhausted Workers Free CPU while
+  // normalizing years of daily prices and dividend events.
+  return new Date((value + 9 * 60 * 60) * 1000).toISOString().slice(0, 10);
 }
 
 function queryString(params: Record<string, string>) {
@@ -253,7 +253,7 @@ async function writeEdgeChart(symbol: string, params: Record<string, string>, va
 
 async function requestHost(host: string, symbol: string, params: Record<string, string>) {
   const url = chartUrl(host, symbol, params);
-  const response = await withProviderSlot(() => fetch(url, {
+  const response = await withProviderSlot(() => providerFetch(url, {
     cache: "no-store",
     headers: { Accept: "application/json", "User-Agent": USER_AGENT },
     signal: AbortSignal.timeout(12_000),
@@ -406,7 +406,7 @@ async function getYahooJapanBoard(symbol: string, force: boolean) {
     return { board: edge.value, cacheState: "edge" as const };
   }
   try {
-    const response = await withProviderSlot(() => fetch(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(symbol)}`, {
+    const response = await withProviderSlot(() => providerFetch(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(symbol)}`, {
       cache: "no-store",
       headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0 (compatible; Kabutora/1.0)" },
       signal: AbortSignal.timeout(12_000),
@@ -646,10 +646,9 @@ export async function getYahooQuoteBundle(
   const fetchedAt = new Date().toISOString();
   const dailyFund = venueCode === "FUND";
   const shouldFetchJapanBoard = venueCode === "TSE" && (
-    tseSessionNow() !== "regular" ||
     expectedPtsSession === "pts_day" ||
     expectedPtsSession === "pts_night" ||
-    force
+    (tseSessionNow() === "closed" && force)
   );
   const japanBoardTask = shouldFetchJapanBoard
     ? getYahooJapanBoard(symbol, force).catch(() => null)
@@ -678,14 +677,31 @@ export async function getYahooQuoteBundle(
   const nowSeconds = Date.now() / 1000;
   const session = dailyFund ? "closed" : sessionAt(nowSeconds, result);
   const lastIsNewer = last != null && last.timestamp != null && (metaTimestamp == null || last.timestamp > metaTimestamp);
-  const price = (lastIsNewer || session !== "closed") ? (last?.price ?? metaPrice) : (metaPrice ?? last?.price);
-  const timestamp = (lastIsNewer || session !== "closed") ? (last?.timestamp ?? metaTimestamp) : (metaTimestamp ?? last?.timestamp);
-  if (price == null || price <= 0 || timestamp == null) throw new MarketDataError(`${symbol}: no usable market price`);
+  let price = (lastIsNewer || session !== "closed") ? (last?.price ?? metaPrice) : (metaPrice ?? last?.price);
+  let timestamp = (lastIsNewer || session !== "closed") ? (last?.timestamp ?? metaTimestamp) : (metaTimestamp ?? last?.timestamp);
 
   const previousClose = finiteNumber(result.meta?.previousClose) ?? finiteNumber(result.meta?.chartPreviousClose) ?? undefined;
-  const changeRatio = previousClose && previousClose > 0 ? Math.abs(price / previousClose - 1) : 0;
   const hasRecentSplit = Object.keys(result.events?.splits ?? {}).length > 0;
-  const validationStatus: MarketQuote["validationStatus"] = changeRatio > 0.35 && !hasRecentSplit ? "suspect" : "valid";
+
+  if (
+    price != null &&
+    metaPrice != null &&
+    metaPrice > 0 &&
+    price !== metaPrice &&
+    previousClose &&
+    previousClose > 0 &&
+    !hasRecentSplit &&
+    new Decimal(String(price)).div(String(previousClose)).sub(1).abs().gt("0.35") &&
+    new Decimal(String(metaPrice)).div(String(previousClose)).sub(1).abs().lte("0.35")
+  ) {
+    price = metaPrice;
+    timestamp = metaTimestamp ?? timestamp;
+  }
+
+  if (price == null || price <= 0 || timestamp == null) throw new MarketDataError(`${symbol}: no usable market price`);
+
+  const changeRatio = previousClose && previousClose > 0 ? new Decimal(String(price)).div(String(previousClose)).sub(1).abs() : new Decimal(0);
+  const validationStatus: MarketQuote["validationStatus"] = changeRatio.gt("0.35") && !hasRecentSplit ? "suspect" : "valid";
   const ageSeconds = Math.max(0, nowSeconds - timestamp);
   const quote: MarketQuote = {
     price: String(price),

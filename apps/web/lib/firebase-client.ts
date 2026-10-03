@@ -1,7 +1,7 @@
 "use client";
 
 import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
-import { initializeAppCheck, ReCaptchaV3Provider, getToken as getAppCheckToken, type AppCheck } from "firebase/app-check";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider, ReCaptchaV3Provider, getToken as getAppCheckToken, type AppCheck } from "firebase/app-check";
 import {
   browserLocalPersistence,
   browserPopupRedirectResolver,
@@ -73,10 +73,22 @@ export function getFirebaseServices() {
     emulatorsConnected = true;
   }
   if (!emulatorMode() && !appCheck && typeof window !== "undefined" && process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY) {
-    appCheck = initializeAppCheck(firebaseApp, {
-      provider: new ReCaptchaV3Provider(process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY),
-      isTokenAutoRefreshEnabled: true,
-    });
+    try {
+      const siteKey = process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_SITE_KEY;
+      // Existing deployments registered their key with App Check's v3
+      // exchange. Enterprise requires a separate server-side registration;
+      // an Enterprise-managed key alone does not select that exchange.
+      const isEnterprise = process.env.NEXT_PUBLIC_FIREBASE_APP_CHECK_PROVIDER === "enterprise";
+      const provider = isEnterprise
+        ? new ReCaptchaEnterpriseProvider(siteKey)
+        : new ReCaptchaV3Provider(siteKey);
+      appCheck = initializeAppCheck(firebaseApp, {
+        provider,
+        isTokenAutoRefreshEnabled: true,
+      });
+    } catch (error) {
+      console.error("Firebase App Check (reCAPTCHA) initialization failed:", error);
+    }
   }
   return { app: firebaseApp, auth: firebaseAuth, db: firestore, appCheck };
 }
@@ -111,6 +123,13 @@ export async function signOutOfKabutora() {
 export async function getMarketAuthHeaders(): Promise<Record<string, string>> {
   if (!firebaseConfigured) return {};
   const { auth, appCheck: currentAppCheck } = getFirebaseServices();
+  if (!auth.currentUser) {
+    try {
+      await withDeadline(auth.authStateReady(), 4_000, "market-auth-ready");
+    } catch {
+      /* Timeout or unconfigured auth leaves headers empty */
+    }
+  }
   if (!auth.currentUser) return {};
   if (marketAuthHeadersTask && marketAuthHeadersUid === auth.currentUser.uid && Date.now() < marketAuthHeadersExpiresAt) return marketAuthHeadersTask;
   const user = auth.currentUser;

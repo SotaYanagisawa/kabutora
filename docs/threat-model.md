@@ -1,6 +1,6 @@
 # Threat Model & Security Architecture
 
-Kabutora uses a **zero-knowledge boundary for the financial ledger**. The threat model assumes that the cloud database or network could be monitored or breached: transactions, accounts, quantities, cost basis, balances, and encryption keys must remain private. Cloudflare is intentionally allowed to know the public symbols and venue metadata needed to refresh market prices.
+Kabutora's replacement backend keeps the financial ledger on the device and syncs ciphertext. The cloud or network may be monitored or breached: transactions, accounts, quantities, cost basis, balances and usable keys must remain private. Existing legacy server key records retain their historical exposure until locally verified recovery enrollment replaces them. New raw-key writes are denied. Market reads download the same public catalog/chunks for every member; holdings and transaction dates filter locally. Explicit public search/registration remains visible to the market service.
 
 ---
 
@@ -54,9 +54,9 @@ flowchart TD
 |---|---|---|
 | **Cloud Storage** | Database breach or unauthorized inspection | Firestore stores only encrypted portfolio payloads. D1 stores public security IDs/symbols and market data, but its schema rejects portfolio-private fields such as quantities, accounts, transactions, and cost basis. |
 | **API Endpoints** | Unauthorized market scraping or API abuse | Cloudflare Workers verify Firebase ID Tokens and App Check tokens before serving quote data. |
-| **Network & Logs** | Query sniffing in transit logs | Public symbol search queries and quote targets use HTTPS POST bodies instead of URL query parameters. The market server can read those public requests. Financial events have additional client-side encryption. URL invocation logs are disabled. |
+| **Network & Logs** | Requests reveal holdings or trade dates | V2 reads use common public resource/revision/chunk URLs and filter privately on-device. Search text uses an authenticated POST and is not persisted. Financial events are encrypted. URL invocation logs are disabled. |
 | **Background Queue** | Private fields accidentally entering refresh jobs | Queue messages use a strict allowlist (`version`, job IDs/type, public `securityIds`, timestamp); messages with any extra field are acknowledged and discarded. |
-| **Manual Refresh** | Portfolio fields accidentally entering an on-demand job | The authenticated endpoint accepts only a bounded `securityIds` array, normalizes it against the public security registry, and persists no user identifier or portfolio data. |
+| **Manual Refresh** | Private selections entering shared jobs | V2 refresh accepts an empty body and schedules the shared public catalog. Durable jobs contain public resources only and never member identities, holdings or trade dates. |
 | **Search Privacy** | Search history revealing user intent | Search text exists only in the authenticated POST request and ephemeral Worker memory. It is never written to D1, Queue messages, URLs, or analytics. |
 | **Browser Execution** | Cross-Site Scripting (XSS) / Injection | Strict Content Security Policy (CSP) with dynamic nonces on all HTML documents. Prerendered inline scripts are rejected. |
 | **Local Storage** | Device theft or file extraction | macOS App uses Login Keychain for AES key storage. PWA uses non-extractable CryptoKey handles in IndexedDB on trusted devices. |

@@ -6,6 +6,9 @@ import { normalizeYahooGlobalQuote } from "@/lib/global-security";
 import type { YahooUsdSearchQuote } from "@/lib/usd-security";
 import { stableMarketErrorMessage } from "@/lib/market-api-response";
 import { searchProviderPlan } from "@/lib/market-search-plan";
+import { getMarketCloudflareContext } from "@/lib/cloudflare-market-env";
+import { providerFetch, withProviderExecution } from "@/lib/server/market/provider-fetch";
+import { currentMarketRequestContext } from "@/lib/server-market-request-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,7 +62,7 @@ async function searchYahooGlobal(query: string, signal: AbortSignal): Promise<Se
       url.searchParams.set("quotesCount", "15");
       url.searchParams.set("newsCount", "0");
       url.searchParams.set("listsCount", "0");
-      const response = await fetch(url, {
+      const response = await providerFetch(url, {
         cache: "no-store",
         headers: { Accept: "application/json", "User-Agent": "Kabutora/1.0 personal-portfolio-tracker" },
         signal: providerSignal(signal, 1_800),
@@ -79,7 +82,7 @@ async function searchYahooGlobal(query: string, signal: AbortSignal): Promise<Se
 async function searchYahooJapan(query: string, signal: AbortSignal): Promise<SearchResult[]> {
   const url = new URL("https://finance.yahoo.co.jp/search/");
   url.searchParams.set("query", query);
-  const response = await fetch(url, {
+  const response = await providerFetch(url, {
     cache: "no-store",
     headers: { Accept: "text/html", "User-Agent": "Mozilla/5.0 (compatible; Kabutora/1.0)" },
     signal: providerSignal(signal, 2_000),
@@ -110,8 +113,8 @@ async function searchYahooJapan(query: string, signal: AbortSignal): Promise<Sea
 export async function POST(request: Request) {
   try {
     await authorizeMarketRequest(request);
-  } catch {
-    return unauthorizedResponse();
+  } catch (cause) {
+    return unauthorizedResponse(cause);
   }
   const body = (await request.json().catch(() => ({}))) as { q?: unknown };
   const query = typeof body.q === "string" ? body.q.trim() : "";
@@ -128,7 +131,8 @@ export async function POST(request: Request) {
 
   let task = searchInFlight.get(key);
   if (!task) {
-    task = (async () => {
+    if (searchInFlight.size >= 32) return Response.json({ results: [], error: "search_busy" }, { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "5" } });
+    const work = async () => {
       const catalogResults = searchKnownJapanFunds(query);
       const stockResults = searchEmbeddedCatalog(query);
       const combinedLocal = [...new Map([...catalogResults, ...stockResults].map((item) => [item.id, item])).values()];
@@ -160,8 +164,22 @@ export async function POST(request: Request) {
         controller.abort();
       }
       const results = [...new Map([...combinedLocal, ...providerResults].map((item) => [item.id, item])).values()].slice(0, 15);
-      if (results.length) searchCache.set(key, { expiresAt: Date.now() + SEARCH_TTL_MS, results, warnings });
+      if (results.length) {
+        if (searchCache.size >= 200) searchCache.delete(searchCache.keys().next().value!);
+        searchCache.set(key, { expiresAt: Date.now() + SEARCH_TTL_MS, results, warnings });
+      }
       return { results, warnings };
+    };
+    task = (async () => {
+      if (currentMarketRequestContext()?.env.KABUTORA_MARKET_BACKEND !== "v2" && process.env.NEXT_PUBLIC_KABUTORA_MARKET_BACKEND !== "v2") return work();
+      const { coordinator } = await getMarketCloudflareContext();
+      if (!coordinator) throw new Error("market_coordinator_unavailable");
+      const stub = coordinator.get(coordinator.idFromName("public-market-v2"));
+      const report = async (path: string, body: object) => {
+        const response = await stub.fetch(`https://coordinator.internal/${path}`, { method: "POST", body: JSON.stringify(body), signal: AbortSignal.timeout(3000) });
+        if (!response.ok) throw new Error("provider_budget_unavailable");
+      };
+      return withProviderExecution({ signal: AbortSignal.timeout(8000), reserve: (host) => report("provider-reservation", { host }), outcome: (host, status) => report("provider-outcome", { host, status }) }, work);
     })();
     searchInFlight.set(key, task);
   }

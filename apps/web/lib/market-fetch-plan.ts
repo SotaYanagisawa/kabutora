@@ -27,7 +27,7 @@ function addDays(date: string, days: number) {
   return value.toISOString().slice(0, 10);
 }
 
-function daysBetween(from: string, to: string) {
+export function daysBetween(from: string, to: string) {
   return Math.round((new Date(`${to}T00:00:00Z`).getTime() - new Date(`${from}T00:00:00Z`).getTime()) / 86_400_000);
 }
 
@@ -68,7 +68,13 @@ export function historyCoverage(bars: MarketBar[]) {
   return result;
 }
 
-export function firstInternalHistoryGap(bars: MarketBar[], securityId: string, requiredFrom: string, maxGapDays = MAX_EXPECTED_MARKET_GAP_DAYS) {
+export function firstInternalHistoryGap(
+  bars: MarketBar[],
+  securityId: string,
+  requiredFrom: string,
+  maxGapDays = MAX_EXPECTED_MARKET_GAP_DAYS,
+  throughDate?: string,
+) {
   const dates = [...new Set(bars.filter((bar) => bar.securityId === securityId).map((bar) => bar.date))].sort();
   let previous: string | null = null;
   for (const date of dates) {
@@ -79,14 +85,25 @@ export function firstInternalHistoryGap(bars: MarketBar[], securityId: string, r
     if (previous && daysBetween(previous, date) > maxGapDays) return previous < requiredFrom ? requiredFrom : addDays(previous, 1);
     previous = date;
   }
+  if (throughDate && previous && throughDate > previous && daysBetween(previous, throughDate) > maxGapDays) {
+    return addDays(previous, 1);
+  }
   return null;
 }
 
-export function missingHistoryRequirements(bars: MarketBar[], requirements: HistoryRequirement, inceptionDates: Record<string, string> = {}) {
+export function missingHistoryRequirements(
+  bars: MarketBar[],
+  requirements: HistoryRequirement,
+  inceptionDates: Record<string, string> = {},
+  throughDate?: string,
+) {
   const coverage = historyCoverage(bars);
   return [...requirements].flatMap(([securityId, requiredFrom]) => {
     const current = coverage.get(securityId);
-    return !historyRequirementSatisfied(current?.first, requiredFrom, HISTORY_START_GRACE_DAYS, inceptionDates[securityId]) || firstInternalHistoryGap(bars, securityId, requiredFrom) ? [securityId] : [];
+    return !historyRequirementSatisfied(current?.first, requiredFrom, HISTORY_START_GRACE_DAYS, inceptionDates[securityId])
+      || firstInternalHistoryGap(bars, securityId, requiredFrom, MAX_EXPECTED_MARKET_GAP_DAYS, throughDate)
+      ? [securityId]
+      : [];
   });
 }
 
@@ -96,18 +113,20 @@ export function buildHistoryFetchPlan(
   bars: MarketBar[],
   batchSize = MARKET_REQUEST_BATCH_SIZE,
   inceptionDates: Record<string, string> = {},
+  throughDate?: string,
 ): HistoryFetchBatch[] {
   const coverage = historyCoverage(bars);
   const defaultFiveYearsAgo = subtractDays(new Date().toISOString().slice(0, 10), 365 * 5 + 30);
   const requests = splitSecurityIds(securityIds, Number.MAX_SAFE_INTEGER).flat().map((securityId) => {
       const required = requirements.get(securityId) ?? defaultFiveYearsAgo;
       const current = coverage.get(securityId);
-      const internalGap = firstInternalHistoryGap(bars, securityId, required);
+      const internalGap = firstInternalHistoryGap(bars, securityId, required, MAX_EXPECTED_MARKET_GAP_DAYS, throughDate);
       const isMissing = !historyRequirementSatisfied(current?.first, required, HISTORY_START_GRACE_DAYS, inceptionDates[securityId]);
+      const isTailStale = Boolean(current?.last && throughDate && throughDate > current.last && daysBetween(current.last, throughDate) > 4);
       return {
         securityId,
         from: isMissing ? required : internalGap ?? subtractDays(current!.last, 7),
-        forceRefresh: Boolean(internalGap),
+        forceRefresh: Boolean(internalGap || isTailStale),
       };
     }).sort((a, b) => Number(b.forceRefresh) - Number(a.forceRefresh) || a.from.localeCompare(b.from) || a.securityId.localeCompare(b.securityId));
 

@@ -22,6 +22,204 @@ export function trailingHours<T extends DatedPoint>(points: T[], hours: number) 
   });
 }
 
+export function sanitizeDatedPoints<T extends DatedPoint & { value?: number; price?: number; dividendAdjustedValue?: number }>(
+  points: T[],
+  valueKey: "value" | "price" = "value",
+): T[] {
+  if (points.length < 3) return points;
+  const result = points.map((p) => ({ ...p }));
+  const n = result.length;
+
+  const isSinglePointAnomaly = (pPrev: number, pCurr: number, pNext: number) => {
+    const neighborRatio = pNext / pPrev;
+    const ratioPrev = pCurr / pPrev;
+    const ratioNext = pCurr / pNext;
+
+    if (valueKey === "value") {
+      // Portfolio Aggregate Level: highly sensitive to 1-point needle artifacts
+      if (neighborRatio >= 0.995 && neighborRatio <= 1.005) {
+        if (ratioPrev <= 0.990 && ratioNext <= 0.990) return true;
+        if (ratioPrev >= 1.010 && ratioNext >= 1.010) return true;
+      }
+      if (neighborRatio >= 0.985 && neighborRatio <= 1.015) {
+        if (ratioPrev <= 0.980 && ratioNext <= 0.980) return true;
+        if (ratioPrev >= 1.020 && ratioNext >= 1.020) return true;
+      }
+      if (neighborRatio >= 0.96 && neighborRatio <= 1.04) {
+        if (ratioPrev <= 0.96 && ratioNext <= 0.96) return true;
+        if (ratioPrev >= 1.04 && ratioNext >= 1.04) return true;
+      }
+      if (neighborRatio >= 0.90 && neighborRatio <= 1.10) {
+        if (ratioPrev <= 0.92 && ratioNext <= 0.92) return true;
+        if (ratioPrev >= 1.08 && ratioNext >= 1.08) return true;
+      }
+      if (neighborRatio >= 0.75 && neighborRatio <= 1.33) {
+        if (ratioPrev <= 0.80 && ratioNext <= 0.80) return true;
+        if (ratioPrev >= 1.25 && ratioNext >= 1.25) return true;
+      }
+      return false;
+    }
+
+    // Security Price Level
+    if (neighborRatio >= 0.94 && neighborRatio <= 1.06) {
+      if (ratioPrev <= 0.965 && ratioNext <= 0.965) return true;
+      if (ratioPrev >= 1.035 && ratioNext >= 1.035) return true;
+    }
+    if (neighborRatio >= 0.85 && neighborRatio <= 1.18) {
+      if (ratioPrev <= 0.90 && ratioNext <= 0.90) return true;
+      if (ratioPrev >= 1.10 && ratioNext >= 1.10) return true;
+    }
+    if (neighborRatio >= 0.50 && neighborRatio <= 2.00) {
+      if (ratioPrev <= 0.75 && ratioNext <= 0.75) return true;
+      if (ratioPrev >= 1.35 && ratioNext >= 1.35) return true;
+    }
+    return false;
+  };
+
+  const areTwoPointAnomalies = (pPrev: number, pCurr1: number, pCurr2: number, pNext: number) => {
+    const neighborRatio = pNext / pPrev;
+    const r1Prev = pCurr1 / pPrev;
+    const r1Next = pCurr1 / pNext;
+    const r2Prev = pCurr2 / pPrev;
+    const r2Next = pCurr2 / pNext;
+
+    if (valueKey === "value") {
+      if (neighborRatio >= 0.995 && neighborRatio <= 1.005) {
+        const bothDips = r1Prev <= 0.990 && r1Next <= 0.990 && r2Prev <= 0.990 && r2Next <= 0.990;
+        const bothSpikes = r1Prev >= 1.010 && r1Next >= 1.010 && r2Prev >= 1.010 && r2Next >= 1.010;
+        if (bothDips || bothSpikes) return true;
+      }
+      if (neighborRatio >= 0.985 && neighborRatio <= 1.015) {
+        const bothDips = r1Prev <= 0.980 && r1Next <= 0.980 && r2Prev <= 0.980 && r2Next <= 0.980;
+        const bothSpikes = r1Prev >= 1.020 && r1Next >= 1.020 && r2Prev >= 1.020 && r2Next >= 1.020;
+        if (bothDips || bothSpikes) return true;
+      }
+      if (neighborRatio >= 0.96 && neighborRatio <= 1.04) {
+        const bothDips = r1Prev <= 0.96 && r1Next <= 0.96 && r2Prev <= 0.96 && r2Next <= 0.96;
+        const bothSpikes = r1Prev >= 1.04 && r1Next >= 1.04 && r2Prev >= 1.04 && r2Next >= 1.04;
+        if (bothDips || bothSpikes) return true;
+      }
+      if (neighborRatio >= 0.90 && neighborRatio <= 1.10) {
+        const bothDips = r1Prev <= 0.92 && r1Next <= 0.92 && r2Prev <= 0.92 && r2Next <= 0.92;
+        const bothSpikes = r1Prev >= 1.08 && r1Next >= 1.08 && r2Prev >= 1.08 && r2Next >= 1.08;
+        if (bothDips || bothSpikes) return true;
+      }
+      if (neighborRatio >= 0.75 && neighborRatio <= 1.33) {
+        const bothDips = r1Prev <= 0.80 && r1Next <= 0.80 && r2Prev <= 0.80 && r2Next <= 0.80;
+        const bothSpikes = r1Prev >= 1.25 && r1Next >= 1.25 && r2Prev >= 1.25 && r2Next >= 1.25;
+        if (bothDips || bothSpikes) return true;
+      }
+      return false;
+    }
+
+    if (neighborRatio >= 0.94 && neighborRatio <= 1.06) {
+      const bothDips = r1Prev <= 0.965 && r1Next <= 0.965 && r2Prev <= 0.965 && r2Next <= 0.965;
+      const bothSpikes = r1Prev >= 1.035 && r1Next >= 1.035 && r2Prev >= 1.035 && r2Next >= 1.035;
+      if (bothDips || bothSpikes) return true;
+    }
+    if (neighborRatio >= 0.85 && neighborRatio <= 1.18) {
+      const bothDips = r1Prev <= 0.90 && r1Next <= 0.90 && r2Prev <= 0.90 && r2Next <= 0.90;
+      const bothSpikes = r1Prev >= 1.10 && r1Next >= 1.10 && r2Prev >= 1.10 && r2Next >= 1.10;
+      if (bothDips || bothSpikes) return true;
+    }
+    if (neighborRatio >= 0.50 && neighborRatio <= 2.00) {
+      const bothDips = r1Prev <= 0.75 && r1Next <= 0.75 && r2Prev <= 0.75 && r2Next <= 0.75;
+      const bothSpikes = r1Prev >= 1.35 && r1Next >= 1.35 && r2Prev >= 1.35 && r2Next >= 1.35;
+      if (bothDips || bothSpikes) return true;
+    }
+    return false;
+  };
+
+  // Pass 1: Single-point isolated anomalies
+  for (let i = 1; i < n - 1; i += 1) {
+    const prevVal = Number(result[i - 1][valueKey]);
+    const currVal = Number(result[i][valueKey]);
+    const nextVal = Number(result[i + 1][valueKey]);
+    if (!Number.isFinite(prevVal) || !Number.isFinite(currVal) || !Number.isFinite(nextVal) || prevVal <= 0 || nextVal <= 0) continue;
+
+    if (isSinglePointAnomaly(prevVal, currVal, nextVal)) {
+      const tPrev = Date.parse(result[i - 1].date);
+      const tCurr = Date.parse(result[i].date);
+      const tNext = Date.parse(result[i + 1].date);
+      const alpha = tNext > tPrev ? Math.max(0, Math.min(1, (tCurr - tPrev) / (tNext - tPrev))) : 0.5;
+      const repaired = prevVal + alpha * (nextVal - prevVal);
+      result[i][valueKey] = (Math.round(repaired * 10000) / 10000) as unknown as T[typeof valueKey];
+
+      if (result[i].dividendAdjustedValue != null && result[i - 1].dividendAdjustedValue != null && result[i + 1].dividendAdjustedValue != null) {
+        const dPrev = Number(result[i - 1].dividendAdjustedValue);
+        const dNext = Number(result[i + 1].dividendAdjustedValue);
+        const dRepaired = dPrev + alpha * (dNext - dPrev);
+        result[i].dividendAdjustedValue = (Math.round(dRepaired * 10000) / 10000) as unknown as T["dividendAdjustedValue"];
+      }
+    }
+  }
+
+  // Pass 2: Two-point consecutive isolated anomalies
+  for (let i = 1; i < n - 2; i += 1) {
+    const prevVal = Number(result[i - 1][valueKey]);
+    const currVal1 = Number(result[i][valueKey]);
+    const currVal2 = Number(result[i + 1][valueKey]);
+    const nextVal = Number(result[i + 2][valueKey]);
+    if (!Number.isFinite(prevVal) || !Number.isFinite(currVal1) || !Number.isFinite(currVal2) || !Number.isFinite(nextVal) || prevVal <= 0 || nextVal <= 0) continue;
+
+    if (areTwoPointAnomalies(prevVal, currVal1, currVal2, nextVal)) {
+      const tPrev = Date.parse(result[i - 1].date);
+      const tNext = Date.parse(result[i + 2].date);
+      const span = tNext - tPrev;
+      if (span > 0) {
+        const alpha1 = Math.max(0, Math.min(1, (Date.parse(result[i].date) - tPrev) / span));
+        const alpha2 = Math.max(0, Math.min(1, (Date.parse(result[i + 1].date) - tPrev) / span));
+        result[i][valueKey] = (Math.round((prevVal + alpha1 * (nextVal - prevVal)) * 10000) / 10000) as unknown as T[typeof valueKey];
+        result[i + 1][valueKey] = (Math.round((prevVal + alpha2 * (nextVal - prevVal)) * 10000) / 10000) as unknown as T[typeof valueKey];
+
+        if (result[i].dividendAdjustedValue != null && result[i + 1].dividendAdjustedValue != null && result[i - 1].dividendAdjustedValue != null && result[i + 2].dividendAdjustedValue != null) {
+          const dPrev = Number(result[i - 1].dividendAdjustedValue);
+          const dNext = Number(result[i + 2].dividendAdjustedValue);
+          const d1 = dPrev + alpha1 * (dNext - dPrev);
+          const d2 = dPrev + alpha2 * (dNext - dPrev);
+          result[i].dividendAdjustedValue = (Math.round(d1 * 10000) / 10000) as unknown as T["dividendAdjustedValue"];
+          result[i + 1].dividendAdjustedValue = (Math.round(d2 * 10000) / 10000) as unknown as T["dividendAdjustedValue"];
+        }
+      }
+    }
+  }
+
+  // Pass 3: Edge checks (trailing and leading edges)
+  if (n >= 2) {
+    const lastVal = Number(result[n - 1][valueKey]);
+    const secondLastVal = Number(result[n - 2][valueKey]);
+    if (Number.isFinite(lastVal) && Number.isFinite(secondLastVal) && secondLastVal > 0) {
+      const tailRatio = lastVal / secondLastVal;
+      const isTailAnomaly = valueKey === "value"
+        ? (tailRatio <= 0.85 || tailRatio >= 1.20)
+        : (tailRatio <= 0.70 || tailRatio >= 1.45);
+      if (isTailAnomaly) {
+        result[n - 1][valueKey] = secondLastVal as unknown as T[typeof valueKey];
+        if (result[n - 1].dividendAdjustedValue != null && result[n - 2].dividendAdjustedValue != null) {
+          result[n - 1].dividendAdjustedValue = result[n - 2].dividendAdjustedValue;
+        }
+      }
+    }
+
+    const firstVal = Number(result[0][valueKey]);
+    const secondVal = Number(result[1][valueKey]);
+    if (Number.isFinite(firstVal) && Number.isFinite(secondVal) && secondVal > 0) {
+      const leadRatio = firstVal / secondVal;
+      const isLeadAnomaly = valueKey === "value"
+        ? (leadRatio <= 0.85 || leadRatio >= 1.20)
+        : (leadRatio <= 0.70 || leadRatio >= 1.45);
+      if (isLeadAnomaly) {
+        result[0][valueKey] = secondVal as unknown as T[typeof valueKey];
+        if (result[0].dividendAdjustedValue != null && result[1].dividendAdjustedValue != null) {
+          result[0].dividendAdjustedValue = result[1].dividendAdjustedValue;
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
 export function sparseIntradayTimeTicks<T extends { timestamp: string }>(points: T[]): string[] {
   if (!points.length) return [];
   const lastIndex = points.length - 1;

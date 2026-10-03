@@ -192,7 +192,11 @@ export async function createEncryptedVault<T>(data: T, passphrase: string, owner
  * stored in the UID-restricted key document, so no password KDF is needed on
  * every new phone. User-exported backups still use createEncryptedVault.
  */
-export async function createGoogleProtectedVault<T>(data: T, ownerUid: string): Promise<CreatedVault<T>> {
+export async function createGoogleProtectedVault<T>(
+  data: T,
+  ownerUid: string,
+  options?: { version?: 1 | 2; revision?: number; keyId?: string },
+): Promise<CreatedVault<T>> {
   const now = new Date().toISOString();
   const salt = randomBytes(16);
   const rawDataKey = randomBytes(32);
@@ -219,13 +223,14 @@ export async function createGoogleProtectedVault<T>(data: T, ownerUid: string): 
     return {
       envelope: {
         format: "kabutora-encrypted-vault",
-        version: 1,
+        version: options?.version ?? 1,
+        ...(options?.version === 2 || options?.keyId ? { keyId: options?.keyId ?? cryptoApi().randomUUID() } : {}),
         ownerUid,
         kdf,
         wrappedKey,
         recoveryWrappedKey,
         payload,
-        revision: 1,
+        revision: options?.revision ?? 1,
         createdAt: now,
         updatedAt: now,
       },

@@ -41,9 +41,17 @@ export class PortfolioSession {
   private draft: VerifiedRecoveryDraft | null = null;
   private draftLoaded = false;
   private failedSaves: PortfolioEventPayload[] = [];
-  private deferLegacyRecovery = process.env.NEXT_PUBLIC_KABUTORA_RECOVERY_MIGRATION === "deferred";
+  private deferLegacyRecovery = process.env.NEXT_PUBLIC_KABUTORA_RECOVERY_MIGRATION !== "enabled";
+  private cloudConnected = false;
 
-  constructor(readonly uid: string, private mode: DeviceTrustMode, private store: PortfolioCloudStore, private publish: (state: SessionState) => void, private isCurrentUser: () => boolean) {}
+  constructor(
+    readonly uid: string,
+    private mode: DeviceTrustMode,
+    private store: PortfolioCloudStore,
+    private publish: (state: SessionState) => void,
+    private isCurrentUser: () => boolean,
+    private isAuthenticated: () => boolean = () => true,
+  ) {}
   private active() { return !this.stopped && this.isCurrentUser(); }
   private emit(patch: Partial<SessionState>) { if (this.active()) { this.state = { ...this.state, ...patch }; this.publish(this.state); } }
   private stage(stage: PortfolioStartupState) { this.emit({ startup: stage }); }
@@ -63,12 +71,26 @@ export class PortfolioSession {
   start() {
     configurePortfolioQueue(this.mode);
     this.deadline();
-    if (this.mode === "trusted") void readVerifiedVault(this.uid).then((cached) => {
+    if (this.mode === "trusted") void readVerifiedVault(this.uid).then(async (cached) => {
       if (cached?.uid === this.uid && isKabutoraVaultEnvelope(cached.envelope) && cached.envelope.ownerUid === this.uid) {
         this.cachedVault = cached;
         this.emit({ cachedAvailable: true });
+        if (!this.state.seed && !this.key) {
+          try {
+            await this.openCached(false);
+          } catch {
+            /* Keep stored ciphertext and allow recovery unlock or cloud replay. */
+          }
+        }
       }
     }).catch(() => this.emit({ warning: "端末の保存領域を利用できません。復旧キーで解除でき、変更はこのタブのメモリに保持されます。" }));
+    if (this.isAuthenticated()) {
+      this.connectCloud();
+    }
+  }
+  connectCloud() {
+    if (this.cloudConnected || this.stopped || !this.active()) return;
+    this.cloudConnected = true;
     this.unsubscribe.push(this.store.subscribeVault(this.uid, (value, fromCache) => {
       if (!this.active() || fromCache) return;
       if (value && (!isKabutoraVaultEnvelope(value) || value.ownerUid !== this.uid)) return this.fail(new Error("暗号化保管庫の形式を確認できませんでした。"), "vault");
@@ -134,6 +156,9 @@ export class PortfolioSession {
     return output;
   }
   private async replay(revision: number) {
+    // Keep an explicitly restored backup in enrollment while live snapshots
+    // arrive. Its credential must not be used to decrypt the current cloud vault.
+    if (this.imported) { this.clearDeadline(); this.emit({ seed: this.imported, needsUnlock: false, startup: { stage: "enrollment" } }); return; }
     if (!this.vaultLoaded) return;
     const envelope = this.state.envelope;
     if (!envelope) { this.clearDeadline(); this.stage({ stage: "empty" }); return; }
@@ -146,11 +171,13 @@ export class PortfolioSession {
       if (local) {
         try { validatePortfolio(await decryptVaultWithDataKey(envelope, local)); this.key = local; } catch { /* Keep stored ciphertext and allow recovery unlock. */ }
       }
-      if (!this.key && envelope.version === 1 && this.legacyRecord) {
+      if (!this.key && this.legacyRecord) {
         this.rawKey = this.legacyRecord.encodedKey;
-        const legacy = await importGoogleAccountKey(this.rawKey);
-        validatePortfolio(await decryptVaultWithDataKey(envelope, legacy));
-        this.key = legacy;
+        try {
+          const legacy = await importGoogleAccountKey(this.rawKey);
+          validatePortfolio(await decryptVaultWithDataKey(envelope, legacy));
+          this.key = legacy;
+        } catch { /* Stored key does not decrypt this envelope */ }
       }
       if (!this.key) { this.clearDeadline(); this.emit({ needsUnlock: true }); return; }
     }
@@ -185,8 +212,9 @@ export class PortfolioSession {
     const seed = replayPortfolioEvents(cloudSeed, [...this.localEvents.values()]);
     this.clearDeadline();
     const recoveryPending = Boolean(this.draft && this.draft.previousGeneration === generation);
-    this.emit({ seed, needsUnlock: false, cached: false, recoveryPending, startup: { stage: (envelope.version === 1 && !this.deferLegacyRecovery) || this.imported || recoveryPending ? "enrollment" : "ready" } });
+    this.emit({ seed, needsUnlock: false, cached: false, warning: "", recoveryPending, startup: { stage: (envelope.version === 1 && !this.deferLegacyRecovery) || this.imported || recoveryPending ? "enrollment" : "ready" } });
     if (this.mode === "trusted") void (async () => {
+      await saveTrustedDeviceKey(this.uid, key, envelope.keyId).catch(() => undefined);
       const cached = await updateEncryptedVault(envelope, key, cloudSeed);
       if (this.active() && revision === this.revision) await saveVerifiedVault({ uid: this.uid, envelope: { ...cached, revision: envelope.revision }, verifiedAt: new Date().toISOString() });
     })().catch(() => this.emit({ warning: "確認済みデータを端末に保存できませんでした。接続中は利用できます。" }));
@@ -206,9 +234,13 @@ export class PortfolioSession {
     const seed = validatePortfolio(unlocked.data);
     if (!this.active()) return;
     if (importedEnvelope) {
-      if (this.state.envelope && !this.key) throw new Error("現在の保管庫を解除してからバックアップを復元してください。未同期の変更も保持します。");
+      this.clearDeadline();
       this.imported = seed;
-      if (!this.state.envelope) { this.key = unlocked.dataKey; this.rawKey = unlocked.accountKey; this.keyGeneration = "legacy"; }
+      if (!this.key) {
+        this.key = unlocked.dataKey;
+        this.rawKey = unlocked.accountKey;
+        this.keyGeneration = importedEnvelope.keyId ?? this.state.envelope?.keyId ?? "legacy";
+      }
       this.emit({ seed, needsUnlock: false, startup: { stage: "enrollment" } });
       return;
     }
@@ -228,6 +260,7 @@ export class PortfolioSession {
     if (this.state.envelope && !raw) throw new Error("以前の復旧キーまたはパスフレーズで一度解除してください。オフライン端末の変更を復元するために必要です。");
     if (raw) legacy[this.state.envelope?.keyId ?? this.legacyRecord?.keyId ?? "legacy"] = raw;
     if (raw && this.state.envelope?.version === 1) legacy.legacy = raw;
+    this.clearDeadline();
     return createRecoveryVault(this.imported ?? this.state.seed, passphrase, this.uid, legacy);
   }
   async activateRecovery(prepared: RecoverySetup, recoveryConfirmation: string) {
@@ -329,7 +362,8 @@ export class PortfolioSession {
       await this.store.saveEvent(uid, id, event);
     }, force).catch(() => undefined);
   }
-  async openCached() {
+  async openCached(emitWarning = true) {
+    if (this.state.seed && !this.state.cached) return;
     if (!this.cachedVault || this.mode !== "trusted") throw new Error("verified_cache_unavailable");
     const key = await loadTrustedDeviceKey(this.uid, this.cachedVault.envelope.keyId);
     if (!key) throw new Error("端末の解除鍵を確認できません。パスフレーズまたは復旧キーで解除してください。");
@@ -341,10 +375,11 @@ export class PortfolioSession {
     const pending = await getPendingPortfolioEvents(this.uid);
     const decoded = await this.decryptEvents(pending.map((item) => ({ id: item.id, ...item.event })), envelope, base);
     this.clearDeadline();
-    this.emit({ envelope, seed: replayPortfolioEvents(base, decoded), cached: true, needsUnlock: false, startup: { stage: "ready" }, warning: `確認済みキャッシュ（${this.cachedVault.verifiedAt}）。最新のクラウド変更は未確認です。` });
+    this.emit({ envelope, seed: replayPortfolioEvents(base, decoded), cached: true, needsUnlock: false, startup: { stage: "ready" }, warning: emitWarning ? `確認済みキャッシュ（${this.cachedVault.verifiedAt}）。最新のクラウド変更は未確認です。` : "" });
   }
   stop() {
     this.stopped = true;
+    this.cloudConnected = false;
     this.clearDeadline();
     for (const unsubscribe of this.unsubscribe) unsubscribe();
     this.unsubscribe = [];

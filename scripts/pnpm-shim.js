@@ -29,19 +29,28 @@ if (args[0] === "exec") {
   }
 }
 
-// Handle --filter @kabutora/web <script>
-if (args[0] === "--filter" && args[1] === "@kabutora/web") {
+// Handle --filter <package> <script>
+if (args[0] === "--filter" && args[1]) {
+  const filterPkg = args[1];
   const scriptName = args[2];
-  const pkgPath = path.resolve(process.cwd(), "apps/web/package.json");
-  if (fs.existsSync(pkgPath)) {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-    if (pkg.scripts && pkg.scripts[scriptName]) {
-      process.chdir(path.dirname(pkgPath));
-      try {
-        execSync(pkg.scripts[scriptName], { stdio: "inherit", env: getEnv() });
-        process.exit(0);
-      } catch (err) {
-        process.exit(err.status || 1);
+  const rootDir = path.resolve(__dirname, "..");
+  const candidateDirs = [
+    path.join(rootDir, "apps/web"),
+    path.join(rootDir, "packages/domain"),
+    path.join(rootDir, "packages/market-data"),
+  ];
+  for (const dir of candidateDirs) {
+    const pkgPath = path.join(dir, "package.json");
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+      if (pkg.name === filterPkg && pkg.scripts && pkg.scripts[scriptName]) {
+        process.chdir(dir);
+        try {
+          execSync(pkg.scripts[scriptName], { stdio: "inherit", env: getEnv() });
+          process.exit(0);
+        } catch (err) {
+          process.exit(err.status || 1);
+        }
       }
     }
   }

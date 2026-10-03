@@ -48,6 +48,15 @@ service cloud.firestore {
         && validBlock(data.payload) && unlocked(uid)
         && (generation(uid) == 'legacy' || data.keyId == generation(uid));
     }
+    function validGoogleAccountKey(uid) {
+      let data = request.resource.data;
+      return ownsIncoming(uid)
+        && data.keys().hasOnly(['format', 'version', 'ownerUid', 'keyId', 'encodedKey', 'createdAt', 'updatedAt'])
+        && data.format == 'kabutora-google-account-key' && data.version == 1
+        && data.keyId is string && data.keyId.size() >= 32 && data.keyId.size() <= 64
+        && data.encodedKey is string && data.encodedKey.size() >= 42 && data.encodedKey.size() <= 44
+        && data.createdAt is string && data.updatedAt is string;
+    }
     match /users/{uid}/vaults/{vaultId} {
       allow get, list: if allowedUser(uid);
       allow create: if vaultId == 'default' && validVault(uid) && request.resource.data.version == 2
@@ -93,7 +102,8 @@ service cloud.firestore {
     }
     match /users/{uid}/keys/{keyId} {
       allow get: if allowedUser(uid) && keyId == 'google-account';
-      allow list, create, update: if false;
+      allow list: if false;
+      allow create, update: if false;
       allow delete: if allowedUser(uid) && keyId == 'google-account' && activated(uid) && getAfter(vaultPath(uid)).data.version == 2;
     }
     match /market/{document=**} {

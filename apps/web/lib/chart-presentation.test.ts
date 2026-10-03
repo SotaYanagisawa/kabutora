@@ -14,6 +14,7 @@ import {
   sparkline24HourBars,
   sparseIntradayTimeTicks,
   trailingHours,
+  sanitizeDatedPoints,
 } from "./chart-presentation";
 
 describe("chart presentation", () => {
@@ -669,6 +670,70 @@ describe("chart presentation", () => {
 
       const jpTimestamp = "2026-09-15T06:00:00.000Z";
       expect(marketTimeWithZoneLabel(jpTimestamp, "XTKS", undefined, "JPY")).toBe("15:00 JST");
+    });
+  });
+
+  describe("sanitizeDatedPoints", () => {
+    it("detects and repairs isolated dip in performance value points", () => {
+      const points = [
+        { date: "2026-09-15T10:00:00.000Z", value: 1000000, dividendAdjustedValue: 1000000 },
+        { date: "2026-09-15T10:05:00.000Z", value: 100000, dividendAdjustedValue: 100000 }, // 90% plunge
+        { date: "2026-09-15T10:10:00.000Z", value: 1020000, dividendAdjustedValue: 1020000 },
+      ];
+      const sanitized = sanitizeDatedPoints(points, "value");
+      expect(sanitized[1].value).toBe(1010000);
+      expect(sanitized[1].dividendAdjustedValue).toBe(1010000);
+    });
+
+    it("detects and repairs isolated dip in stock price points", () => {
+      const points = [
+        { date: "2026-09-15", price: 3000 },
+        { date: "2026-09-16", price: 300 }, // 90% plunge
+        { date: "2026-09-17", price: 3020 },
+      ];
+      const sanitized = sanitizeDatedPoints(points, "price");
+      expect(sanitized[1].price).toBe(3010);
+    });
+
+    it("detects and repairs isolated needle dip in portfolio value (e.g. 1.5% drop)", () => {
+      const points = [
+        { date: "2026-09-16T20:55:00.000Z", value: 1522.30, dividendAdjustedValue: 1522.30 },
+        { date: "2026-09-16T21:00:00.000Z", value: 1503.38, dividendAdjustedValue: 1503.38 }, // 1.25% needle plunge caused by single bad tick
+        { date: "2026-09-16T21:05:00.000Z", value: 1522.42, dividendAdjustedValue: 1522.42 },
+      ];
+      const sanitized = sanitizeDatedPoints(points, "value");
+      expect(sanitized[1].value).toBe(1522.36);
+      expect(sanitized[1].dividendAdjustedValue).toBe(1522.36);
+    });
+
+    it("preserves smooth portfolio moves", () => {
+      const points = [
+        { date: "2026-09-16T10:00:00.000Z", value: 1000.00 },
+        { date: "2026-09-16T10:05:00.000Z", value: 996.00 }, // 0.4% normal move
+        { date: "2026-09-16T10:10:00.000Z", value: 998.00 },
+      ];
+      const sanitized = sanitizeDatedPoints(points, "value");
+      expect(sanitized[1].value).toBe(996.00);
+    });
+
+    it("detects and repairs after-hours 5.4% isolated dip in stock price points", () => {
+      const points = [
+        { date: "2026-09-16T20:55:00.000Z", price: 343.15 },
+        { date: "2026-09-16T21:00:00.000Z", price: 324.65 }, // 5.4% GOOGL bad tick
+        { date: "2026-09-16T21:05:00.000Z", price: 343.33 },
+      ];
+      const sanitized = sanitizeDatedPoints(points, "price");
+      expect(sanitized[1].price).toBe(343.24);
+    });
+
+    it("guards against trailing edge drop", () => {
+      const points = [
+        { date: "2026-09-15", price: 3000 },
+        { date: "2026-09-16", price: 3010 },
+        { date: "2026-09-17", price: 300 }, // 90% plunge at tail
+      ];
+      const sanitized = sanitizeDatedPoints(points, "price");
+      expect(sanitized[2].price).toBe(3010);
     });
   });
 });

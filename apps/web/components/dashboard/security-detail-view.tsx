@@ -2,13 +2,14 @@ import { useMemo, useRef, useState } from "react";
 import {
   Decimal,
   deriveSplitAdjustedTransactions,
+  matchSecurityId,
   reconstructSecurityHistory,
   type CorporateAction,
   type MarketBar,
 } from "@kabutora/domain";
 import type { PortfolioNotification } from "@/lib/portfolio-notifications";
 import { localDateInputValue } from "@/lib/calendar-time";
-import { marketDateKey, marketDateTimeLabel, marketSessionDateKey } from "@/lib/chart-presentation";
+import { marketDateKey, marketDateTimeLabel, marketSessionDateKey, sanitizeDatedPoints } from "@/lib/chart-presentation";
 import { marketDisplayName } from "@/lib/market-label";
 import { isUsSecurity } from "@/lib/portfolio-filter";
 import { ArrowLeft, ChevronRight, Pencil, Trash2 } from "lucide-react";
@@ -114,17 +115,28 @@ export function SecurityDetailView({
   const allPerformance = useMemo(() => {
     const points = reconstructSecurityHistory(holding.securityId, historyBars, transactions, corporateActions, sec?.priceUnit);
     if (holding.marketValue != null && Number(holding.marketValue) > 0) {
-      const current = {
-        date: currentMarketDate,
-        price: Number(holding.currentPrice),
-        value: Number(holding.marketValue),
-        capital: Number(holding.totalCost),
-        quantity: Number(holding.quantity),
-      };
-      if (points.at(-1)?.date === current.date) points[points.length - 1] = current;
-      else points.push(current);
+      const livePrice = Number(holding.currentPrice);
+      const lastPoint = points.at(-1);
+      const lastPrice = lastPoint ? lastPoint.price : null;
+      const hasRecentSplit = corporateActions.some((a) => matchSecurityId(a.securityId, holding.securityId) && Math.abs(new Date(`${a.effectiveDate}T00:00:00Z`).getTime() - Date.now()) <= 4 * 86_400_000);
+      const isSuspect = quote?.validationStatus === "suspect" || (
+        lastPrice != null && lastPrice > 0 && Number.isFinite(livePrice) && livePrice > 0 &&
+        !hasRecentSplit &&
+        (livePrice / lastPrice <= 0.65 || livePrice / lastPrice >= 1.45)
+      );
+      if (!isSuspect && Number.isFinite(livePrice) && livePrice > 0) {
+        const current = {
+          date: currentMarketDate,
+          price: livePrice,
+          value: Number(holding.marketValue),
+          capital: Number(holding.totalCost),
+          quantity: Number(holding.quantity),
+        };
+        if (points.at(-1)?.date === current.date) points[points.length - 1] = current;
+        else points.push(current);
+      }
     }
-    return points;
+    return sanitizeDatedPoints(points, "value");
   }, [
     corporateActions,
     currentMarketDate,
@@ -135,21 +147,33 @@ export function SecurityDetailView({
     holding.security.priceUnit,
     holding.securityId,
     holding.totalCost,
+    quote?.validationStatus,
     transactions,
   ]);
 
   const allPrices = useMemo(() => {
     const points = (historyBars as MarketBar[])
-      .filter((bar) => bar.securityId === holding.securityId)
+      .filter((bar) => matchSecurityId(bar.securityId, holding.securityId))
       .sort((a: MarketBar, b: MarketBar) => a.date.localeCompare(b.date))
       .map((bar: MarketBar) => ({ date: bar.date, price: Number(bar.adjustedClose ?? bar.close) }));
     if (points.length > 0 && holding.currentPrice != null) {
-      const current = { date: currentMarketDate, price: Number(holding.currentPrice) };
-      if (points.at(-1)?.date === current.date) points[points.length - 1] = current;
-      else points.push(current);
+      const livePrice = Number(holding.currentPrice);
+      const lastPoint = points.at(-1);
+      const lastPrice = lastPoint ? lastPoint.price : null;
+      const hasRecentSplit = corporateActions.some((a) => matchSecurityId(a.securityId, holding.securityId) && Math.abs(new Date(`${a.effectiveDate}T00:00:00Z`).getTime() - Date.now()) <= 4 * 86_400_000);
+      const isSuspect = quote?.validationStatus === "suspect" || (
+        lastPrice != null && lastPrice > 0 && Number.isFinite(livePrice) && livePrice > 0 &&
+        !hasRecentSplit &&
+        (livePrice / lastPrice <= 0.65 || livePrice / lastPrice >= 1.45)
+      );
+      if (!isSuspect && Number.isFinite(livePrice) && livePrice > 0) {
+        const current = { date: currentMarketDate, price: livePrice };
+        if (points.at(-1)?.date === current.date) points[points.length - 1] = current;
+        else points.push(current);
+      }
     }
-    return points;
-  }, [currentMarketDate, historyBars, holding.currentPrice, holding.securityId]);
+    return sanitizeDatedPoints(points, "price");
+  }, [corporateActions, currentMarketDate, historyBars, holding.currentPrice, holding.securityId, quote?.validationStatus]);
 
   const activeHistory = hasPosition && detailChartMode === "position" ? allPerformance : allPrices;
   const performanceHistory = useMemo(() => filterDatedHistory(allPerformance, detailRange, detailCustomRange), [allPerformance, detailCustomRange, detailRange]);

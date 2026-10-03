@@ -41,7 +41,7 @@ function directCoverage(
 }
 
 export async function POST(request: Request) {
-  try { await authorizeMarketRequest(request); } catch { return unauthorizedResponse(); }
+  try { await authorizeMarketRequest(request); } catch (cause) { return unauthorizedResponse(cause); }
   const body = await request.json().catch(() => ({})) as { refresh?: unknown; securityIds?: unknown };
   const requestedIds = typeof body.securityIds === "string"
     ? body.securityIds.split(",").map((value) => value.trim()).filter(Boolean)
