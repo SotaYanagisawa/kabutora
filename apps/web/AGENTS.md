@@ -7,7 +7,6 @@ This guide applies to `apps/web`. The root invariants remain in force.
 - `app/`: Next.js layouts, pages, and route handlers.
 - `components/`: client UI. Keep orchestration at feature roots and move focused rendering into feature directories.
 - `lib/`: framework-light services and utilities. Keep server-only modules out of client dependency graphs.
-- `migrations/`: D1 tables for public market data only.
 - `e2e/` and `cloud-e2e/`: local UI coverage and encrypted multi-device coverage.
 
 Prefer `@/` imports across web areas and relative imports within one feature directory. Import leaf modules directly; broad barrels can hide an edge dependency in a client bundle.

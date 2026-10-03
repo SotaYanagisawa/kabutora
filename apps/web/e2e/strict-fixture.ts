@@ -1,4 +1,5 @@
 import { test as base, expect } from "@playwright/test";
+import { mockMarket } from "./market-fixture";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,11 +19,8 @@ export const test = base.extend<{ applicationErrors: string[] }>({
       const reason = request.failure()?.errorText ?? "failed";
       if (!/abort|cancel/iu.test(reason) && /\/api\/|\/_next\//u.test(request.url())) errors.push(`request failed: ${new URL(request.url()).pathname}: ${reason}`);
     });
-    await page.route("**/api/market/distributions", (route) => route.fulfill({ json: { distributions: [], coverage: [], failures: [] } }));
-    await page.route("**/api/market/registry", (route) => route.fulfill({ json: { accepted: true } }));
-    await page.route("**/api/market/refresh", (route) => route.fulfill({ json: { accepted: 0, queued: 0 } }));
-    await page.route("**/api/market/snapshot**", (route) => route.fulfill({ status: 204 }));
-    await page.route("**/api/market/intraday**", (route) => route.fulfill({ json: { bars: [], sessions: [], coverage: { requested: 0, ready: 0, currentReady: 0 }, revision: null, generatedAt: new Date().toISOString() } }));
+    // Default: an empty market. Specs register richer fixtures after this (later routes win).
+    await mockMarket(page, {});
     await use(errors);
     const backend = JSON.parse(readFileSync(join(tmpdir(), `kabutora-test-backend-${new URL(baseURL!).port}.json`), "utf8"));
     expect(backend.failed, backend.message || "Backend process failed").toBe(false);

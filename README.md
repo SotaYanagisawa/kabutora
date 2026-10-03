@@ -106,11 +106,9 @@ Kabutora is organized as a clean TypeScript monorepo using `pnpm`:
 │   └── web/                   # Next.js 15 App Router & Cloudflare edge integration
 │       ├── app/               # Application shell & authenticated market API routes
 │       ├── components/        # UI coordinators and feature component directories
-│       ├── lib/               # Client services, crypto, sync, market and edge modules
-│       └── migrations/        # Public-market D1 schema
+│       └── lib/               # Client services, crypto, sync, market and edge modules
 ├── packages/
-│   ├── domain/                # Pure TypeScript accounting engine (FIFO, cost basis, splits)
-│   └── market-data/           # Market quote models, provider adapters & PTS types
+│   └── domain/                # Pure TypeScript accounting engine (FIFO, cost basis, splits)
 ├── firebase/                  # Security rules and database index definitions
 ├── docs/                      # Architecture map, specifications, and security model
 └── scripts/                   # Native app builders (macOS / iOS Preview) & privacy verifiers
@@ -147,11 +145,20 @@ Open [http://localhost:3000](http://localhost:3000) to see your portfolio in loc
 Kabutora includes full unit test coverage across accounting, crypto, and market logic:
 
 ```bash
-# Check TypeScript and run all unit tests
+# Check TypeScript and run all unit tests (including market performance contracts)
 pnpm check
+
+# Run the real Worker + Durable Object market backend with latency budgets
+pnpm test:worker
 
 # Verify that no private data is present in builds
 pnpm verify:privacy
+
+# Check the live market providers still parse (needs network)
+pnpm check:live
+
+# Verify the deployed site, auth and market freshness
+pnpm verify:prod
 
 # Production Next.js build
 pnpm build
@@ -181,7 +188,7 @@ For complete cloud configuration details, including Firebase authentication and 
 - 📐 [Architecture & Data Flow](docs/architecture.md) — System design and data flow
 - 🧮 [Calculation Rules](docs/calculation-rules.md) — Exact formulas for FIFO, cost basis, and splits
 - ☁️ [Cloud Deployment Guide](docs/cloud-deployment.md) — Firebase and Cloudflare step-by-step setup
-- 📡 [Market Data & Edge Caching](docs/market-data-scaling.md) — How market quotes are fetched and cached
+- 📡 [Market Backend](docs/market-backend.md) — How prices are fetched, cached, kept private and tested
 - 🔒 [Threat Model & Security](docs/threat-model.md) — Security boundaries and encryption specifications
 
 ---

@@ -35,6 +35,8 @@ export const MOBILE_VIEW_INDEX: Record<string, number> = {
 
 export const PORTFOLIO_RANGES: RangeKey[] = ["1D", "1W", "1M", "3M", "YTD", "ALL"];
 export const UPDATE_FREQUENCIES: UpdateFrequency[] = [10, 15, 30, 60];
+/** Returning to a visible app refreshes prices when the last load is older than this. */
+export const RESUME_REFRESH_MS = 30 * 1000;
 export const HISTORY_NETWORK_REVALIDATE_MS = 6 * 60 * 60 * 1000;
 export const HISTORY_INTEGRITY_CHECK_MS = 15 * 60 * 1000;
 export const PULL_REFRESH_THRESHOLD = 64;

@@ -22,7 +22,7 @@ flowchart TD
     subgraph Untrusted["🔴 UNTRUSTED ZONE (Cloud & Network)"]
         Firestore[("Cloud Firestore\n(Encrypted Blobs Only)")]
         CFWorker["Cloudflare Worker\n(Auth + Market API)"]
-        D1[("Cloudflare D1\nPublic Symbols + Market Data")]
+        Market[("Market Durable Object\nPublic Symbols + Market Data")]
         Logs["Access Logs / CDN"]
     end
 
@@ -30,7 +30,7 @@ flowchart TD
     Keys <--> KDF
     CryptoEngine <--> AES
     AES -- "Encrypted Bytes Only" --> Firestore
-    CFWorker --> D1
+    CFWorker --> Market
     AES -. "NO KEYS EVER TRANSMITTED" .- Untrusted
 ```
 
@@ -52,12 +52,11 @@ flowchart TD
 
 | Layer | Threat Vector | Mitigation Strategy |
 |---|---|---|
-| **Cloud Storage** | Database breach or unauthorized inspection | Firestore stores only encrypted portfolio payloads. D1 stores public security IDs/symbols and market data, but its schema rejects portfolio-private fields such as quantities, accounts, transactions, and cost basis. |
+| **Cloud Storage** | Database breach or unauthorized inspection | Firestore stores only encrypted portfolio payloads. The market Durable Object stores a catalog of at most 200 public security IDs plus public prices; it has no quantity, account, transaction, cost-basis or user field. |
 | **API Endpoints** | Unauthorized market scraping or API abuse | Cloudflare Workers verify Firebase ID Tokens and App Check tokens before serving quote data. |
 | **Network & Logs** | Requests reveal holdings or trade dates | V2 reads use common public resource/revision/chunk URLs and filter privately on-device. Search text uses an authenticated POST and is not persisted. Financial events are encrypted. URL invocation logs are disabled. |
-| **Background Queue** | Private fields accidentally entering refresh jobs | Queue messages use a strict allowlist (`version`, job IDs/type, public `securityIds`, timestamp); messages with any extra field are acknowledged and discarded. |
-| **Manual Refresh** | Private selections entering shared jobs | V2 refresh accepts an empty body and schedules the shared public catalog. Durable jobs contain public resources only and never member identities, holdings or trade dates. |
-| **Search Privacy** | Search history revealing user intent | Search text exists only in the authenticated POST request and ephemeral Worker memory. It is never written to D1, Queue messages, URLs, or analytics. |
+| **Market Reads** | Holdings revealed by which prices a member asks for | Snapshot, history and dividend reads carry no symbol list: every member receives the shared catalog and filters locally. History requests reveal only the earliest needed year. Cloud clients register one explicitly searched symbol at a time (enforced server-side); the catalog never records who added it. |
+| **Search Privacy** | Search history revealing user intent | Search text exists only in the authenticated POST request and ephemeral Worker memory. It is never stored, put in URLs, or sent to analytics. |
 | **Browser Execution** | Cross-Site Scripting (XSS) / Injection | Strict Content Security Policy (CSP) with dynamic nonces on all HTML documents. Prerendered inline scripts are rejected. |
 | **Local Storage** | Device theft or file extraction | macOS App uses Login Keychain for AES key storage. PWA uses non-extractable CryptoKey handles in IndexedDB on trusted devices. |
 

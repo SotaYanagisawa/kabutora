@@ -1,0 +1,133 @@
+{
+ "spark": {
+  "result": [
+   {
+    "symbol": "7203.T",
+    "response": [
+     {
+      "meta": {
+       "currency": "JPY",
+       "symbol": "7203.T",
+       "exchangeName": "JPX",
+       "regularMarketPrice": 2856.5,
+       "regularMarketTime": 1790922600,
+       "previousClose": 2925.0,
+       "chartPreviousClose": 2925.0,
+       "regularMarketDayHigh": 2890.0,
+       "regularMarketDayLow": 2853.0,
+       "regularMarketVolume": 30938400,
+       "longName": "Toyota Motor Corporation",
+       "shortName": "TOYOTA MOTOR CORP",
+       "currentTradingPeriod": {
+        "pre": {
+         "timezone": "JST",
+         "end": 1790899200,
+         "start": 1790899200,
+         "gmtoffset": 32400
+        },
+        "regular": {
+         "timezone": "JST",
+         "end": 1790922600,
+         "start": 1790899200,
+         "gmtoffset": 32400
+        },
+        "post": {
+         "timezone": "JST",
+         "end": 1790922600,
+         "start": 1790922600,
+         "gmtoffset": 32400
+        }
+       }
+      },
+      "timestamp": [
+       1790920800,
+       1790921100,
+       1790921400,
+       1790921700,
+       1790922000,
+       1790922300
+      ],
+      "indicators": {
+       "quote": [
+        {
+         "close": [
+          2866.0,
+          2869.5,
+          2869.5,
+          2864.0,
+          2867.0,
+          null
+         ]
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "symbol": "AAPL",
+    "response": [
+     {
+      "meta": {
+       "currency": "USD",
+       "symbol": "AAPL",
+       "exchangeName": "NMS",
+       "regularMarketPrice": 333.69,
+       "regularMarketTime": 1790971201,
+       "previousClose": 330.32,
+       "chartPreviousClose": 330.32,
+       "regularMarketDayHigh": 334.54,
+       "regularMarketDayLow": 330.61,
+       "regularMarketVolume": 31878433,
+       "longName": "Apple Inc.",
+       "shortName": "Apple Inc.",
+       "currentTradingPeriod": {
+        "pre": {
+         "timezone": "EDT",
+         "end": 1790947800,
+         "start": 1790928000,
+         "gmtoffset": -14400
+        },
+        "regular": {
+         "timezone": "EDT",
+         "end": 1790971200,
+         "start": 1790947800,
+         "gmtoffset": -14400
+        },
+        "post": {
+         "timezone": "EDT",
+         "end": 1790985600,
+         "start": 1790971200,
+         "gmtoffset": -14400
+        }
+       }
+      },
+      "timestamp": [
+       1790984100,
+       1790984400,
+       1790984700,
+       1790985000,
+       1790985300,
+       1790985593
+      ],
+      "indicators": {
+       "quote": [
+        {
+         "close": [
+          333.3507,
+          333.3899,
+          333.39,
+          333.31,
+          333.54,
+          null
+         ]
+        }
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "error": null
+ }
+}

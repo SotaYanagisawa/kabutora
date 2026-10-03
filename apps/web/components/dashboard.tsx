@@ -1,6 +1,5 @@
 "use client";
 
-import { fetchMarketResponse, usesPublicMarketBackend } from "@/lib/public-market-client";
 import { BrowserPreferences, useBrowserPreferences } from "./browser-preferences";
 
 import {
@@ -9,102 +8,59 @@ import {
   canonicalDomainSecurityId,
   domainSecurityIdVariants,
   matchSecurityId,
-  deriveSplitAdjustedTransactions,
-  deriveTransactionPositionSnapshots,
-  reconstructSecurityHistory,
   summarizeDividendReceipts,
   type CorporateAction,
-  type DividendReceipt,
   type DistributionEvent,
   type IntradayBar,
-  type LedgerTransaction,
   type MarketBar,
   type MarketQuote,
-  type PortfolioHistoryPoint,
-  type SecurityQuote,
 } from "@kabutora/domain";
 import AppLoadingScreen from "@/components/app-loading-screen";
-import { getMarketAuthHeaders } from "@/lib/firebase-client";
 import { readMarketCache, writeMarketCache, readCompactQuotesCache, writeCompactQuotesCache } from "@/lib/client-market-cache";
 import { mergeIntradayBars, sanitizeIntradayBars } from "@/lib/intraday-cache";
-import { quoteRefreshTargets, quoteSessionTransitionTargets } from "@/lib/market-refresh-plan";
-import { earliestHistoryDate, inspectMarketHistory, packHistoryBars, unpackHistoryBars, type HistoryQuality, type PackedHistorySeries } from "@/lib/market-history";
-import { buildHistoryFetchPlan, daysBetween, historyCoverage, MARKET_REQUEST_BATCH_SIZE, missingHistoryRequirements, splitSecurityIds } from "@/lib/market-fetch-plan";
-import { readMarketApiResponse, stableMarketErrorMessage } from "@/lib/market-api-response";
-import { loadServerMarketSnapshot, loadServerPtsIntraday, loadServerUsIntraday, refreshQueuedMarketData, syncServerMarketRegistry } from "@/lib/client-market-service";
-import { timeoutSignal } from "@/lib/operation-deadline";
+import { earliestHistoryDate, inspectMarketHistory, packHistoryBars, unpackHistoryBars, type HistoryQuality } from "@/lib/market-history";
+import { daysBetween, historyCoverage, missingHistoryRequirements, splitSecurityIds } from "@/lib/market-fetch-plan";
+import { stableMarketErrorMessage } from "@/lib/market-api-response";
+import { fetchMarketDistributions, fetchMarketHistory, fetchMarketSnapshot, onMarketCatalogChange, registerMarketSecurities } from "@/lib/market-client";
 import { syncPageVisibilityDataset } from "@/lib/page-visibility";
 import { RetainedView } from "./retained-view";
 import { PortfolioHistoryCalculator } from "@/lib/domain-worker-client";
 import { emptyPortfolioCalculation, type HistoryDataset, type PortfolioCalculationResult } from "@/lib/portfolio-history-calculation";
-import type { DistributionCoverage, MarketDistributionBatchResult, ServerBenchmark, ServerMarketSnapshot, ServerRemoteQuote } from "@/lib/server-market-types";
+import type { DistributionCoverage, ServerMarketSnapshot } from "@/lib/server-market-types";
 import { mergeBenchmarks, mergeQuoteRecords } from "@/lib/market-snapshot-merge";
-import { projectStockPortfolio, reconcilePortfolioParts } from "@/lib/portfolio-consistency";
+import { projectStockPortfolio } from "@/lib/portfolio-consistency";
 import { historicalFxRateAtDate, historicalFxRateAtTimestamp } from "@/lib/historical-fx";
-import { dynamicChartDomain } from "@/lib/chart-domain";
-import { derivePortfolioNotifications, mergePortfolioNotifications, DEFAULT_PRICE_ALERT_PERCENT, PRICE_ALERT_THRESHOLDS, type ExternalMarketNotice, type PortfolioNotification } from "@/lib/portfolio-notifications";
+import { derivePortfolioNotifications, mergePortfolioNotifications, DEFAULT_PRICE_ALERT_PERCENT, PRICE_ALERT_THRESHOLDS, type PortfolioNotification } from "@/lib/portfolio-notifications";
 import { portfolioMarketSessions, selectReliableMarketSessions, type MarketSessionStatus } from "@/lib/market-session";
 import { resolveMarketClock, trustedMarketClockAnchor, type TrustedMarketClockAnchor } from "@/lib/market-clock";
-import { latestIntradaySessionBars, marketDateKey, marketDateTimeLabel, marketSessionDateKey, marketTimeLabel, recentIntradaySessionBars, sanitizeDatedPoints, sparkline24HourBars, sparseIntradayTimeTicks, trailingHours } from "@/lib/chart-presentation";
-import { calendarDateLabelJa, localDateInputValue, shiftCalendarMonths } from "@/lib/calendar-time";
-import { compactNumber } from "@/lib/compact-number";
+import { marketDateKey, sanitizeDatedPoints, sparkline24HourBars, trailingHours } from "@/lib/chart-presentation";
+import { localDateInputValue } from "@/lib/calendar-time";
 import { companyDisplayName, companyLegalName } from "@/lib/company-name";
 import { normalizeRequestedSecurity } from "@/lib/market-security";
 import { getEmbeddedCatalogSecurities } from "@/lib/stock-catalog";
-import { isUsSecurity, portfolioFilterLabel, securityMatchesPortfolioFilter, shouldShowDailyFundTrend, type PortfolioFilter } from "@/lib/portfolio-filter";
+import { isUsSecurity, securityMatchesPortfolioFilter, type PortfolioFilter } from "@/lib/portfolio-filter";
 
-import { adjacentTouchView, isInteractiveInputTarget, isSwipeBlockedTarget, resolveTouchAxis, shouldCommitNativeSwipe, shouldCommitSwipe } from "@/lib/touch-navigation";
+import { adjacentTouchView, isInteractiveInputTarget, isSwipeBlockedTarget, resolveTouchAxis, shouldCommitSwipe } from "@/lib/touch-navigation";
 import { Decimal } from "@kabutora/domain";
 import { parseDecimalInput } from "@/lib/decimal-input";
 import WatchlistView from "@/components/watchlist-view";
 import {
-  Activity,
   ArrowLeft,
-  AlertTriangle,
-  BarChart3,
-  Bell,
-  Bookmark,
-  CalendarDays,
-  Check,
-  Coins,
-  ChevronRight,
-  Database,
-  Download,
   Eye,
   EyeOff,
-  FileClock,
-  List,
-  LayoutDashboard,
-  LockKeyhole,
-  LogOut,
-  Maximize2,
-  Minimize2,
   Moon,
-  Pencil,
-  PieChart as PieChartIcon,
   Plus,
   RefreshCw,
-  Search,
-  RotateCcw,
-  Settings,
-  ShieldCheck,
-  SlidersHorizontal,
   Sun,
-  Trash2,
-  X,
 } from "lucide-react";
-import { memo, startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 // Types
 export type {
   Seed,
   RemoteQuote,
   MarketStatus,
-  QuoteResponse,
-  HistoryResponse,
   Benchmark,
-  BenchmarkResponse,
   SearchSecurity,
   View,
   RangeKey,
@@ -118,7 +74,6 @@ export type {
   PackedIntradaySeries,
   MarketCachePayload,
   HistoryCachePayload,
-  DistributionResponse,
   DistributionCachePayload,
   TouchGesture,
   SwipePhase,
@@ -126,14 +81,11 @@ export type {
   DashboardProps,
 } from "./dashboard/types";
 import type {
+  MarketLoadResult,
   Seed,
   RemoteQuote,
   MarketStatus,
-  QuoteResponse,
   Benchmark,
-  BenchmarkResponse,
-  HistoryResponse,
-  DistributionResponse,
   SearchSecurity,
   View,
   RangeKey,
@@ -161,16 +113,13 @@ import {
   MOBILE_TOUCH_NAVIGATION_ORDER,
   MOBILE_VIEW_INDEX,
   PORTFOLIO_RANGES,
-  UPDATE_FREQUENCIES,
   HISTORY_NETWORK_REVALIDATE_MS,
+  RESUME_REFRESH_MS,
   HISTORY_INTEGRITY_CHECK_MS,
   PULL_REFRESH_THRESHOLD,
   PULL_REFRESH_MAX,
-  PULL_REFRESH_HOLD_HEIGHT,
   TOUCH_NAVIGATION_LOCK_PX,
-  SWIPE_SETTLE_MS,
   MOBILE_LAYOUT_QUERY,
-  motionDuration,
   PERFORMANCE_DERIVATION_VERSION,
   FX_SECURITY_ID,
   MARKET_CACHE_KEY,
@@ -190,41 +139,17 @@ import {
   DIVIDEND_PERIOD_KEY,
   DIVIDEND_TAX_MODE_KEY,
   DIVIDEND_TAB_KEY,
-  HIDDEN_AMOUNT,
   LEGACY_MARKET_CACHE_KEYS,
   LEGACY_HISTORY_CACHE_KEYS,
-  rangeLabel,
-  freshnessLabel,
   seededActions,
   seededMarketNotices,
-  notificationTypes,
-  ALLOCATION_COLORS,
-  ACCENT_THEMES,
 } from "./dashboard/constants";
 
 // Helpers
 import {
-  filterDatedHistory,
   number,
-  benchmarkNumber,
-  fxNumber,
-  money,
-  signedMoney,
-  maybeMoney,
-  maybeSignedMoney,
-  signedPercent,
-  timeJa,
-  dateJa,
-  shortDateTimeJa,
   costBasisGroupForAccount,
-  isFundSecurity,
-  isIndexSecurity,
   securityPriceUnit,
-  securityQuantityUnit,
-  securityPriceBasis,
-  shortMoney,
-  compactMoney,
-  formatDayGainMoney,
   validUsdJpy,
   convertAmount,
   csvEscape,
@@ -235,11 +160,6 @@ import {
   readStoredNotifications,
   mergeActions,
   mergeDistributionEvents,
-  latestMarketSessions,
-  quoteTradeSourceLabel,
-  quoteTimestampLabel,
-  tickerQuoteTimestampLabel,
-  pooledClientMap,
 } from "./dashboard/helpers";
 
 // Subcomponents
@@ -597,14 +517,8 @@ function DashboardContents({
   const viewScrollPositionsRef = useRef<Partial<Record<View, number>>>({});
   const viewportSyncFrameRef = useRef<number | null>(null);
   const manualRefreshInFlight = useRef<Promise<void> | null>(null);
-  const quoteRequestInFlight = useRef(false);
-  const benchmarkRequestInFlight = useRef(false);
-  const quoteReloadPending = useRef(false);
-  const quoteReloadTimerRef = useRef<number | null>(null);
-  const lastQuoteRequestAtRef = useRef(0);
-  const prevRangeViewRef = useRef<string>("");
-  const [quoteRefreshToken, setQuoteRefreshToken] = useState(0);
   const quotesRef = useRef(quotes);
+  const quoteSecurityIdsRef = useRef("");
   const benchmarksRef = useRef(benchmarks);
   const intradayBarsRef = useRef(intradayBars);
   const historyBarsRef = useRef(historyBars);
@@ -621,9 +535,7 @@ function DashboardContents({
   const distributionReloadPending = useRef(false);
   const distributionAttemptKey = useRef("");
   const historyRequirementKey = useRef("");
-  const lastManualRefreshAt = useRef(0);
   const marketStartupRunRef = useRef(false);
-  const quoteEffectKeyRef = useRef("");
   const sessionClockRef = useRef(sessionClock);
   const trustedClockRef = useRef<TrustedMarketClockAnchor | null>(trustedMarketClockAnchor(
     initialServerTimeMs ?? Number.NaN,
@@ -807,8 +719,8 @@ function DashboardContents({
     }
   }, [allowPersistentMarketCache]);
 
-  const applyServerMarketSnapshot = useCallback((snapshot: ServerMarketSnapshot) => {
-    if (!snapshot.quotes.length) return false;
+  const applyServerMarketSnapshot = useCallback((snapshot: ServerMarketSnapshot): MarketLoadResult => {
+    // An empty response still settles the status; previously loaded prices stay visible.
     const incomingQuotes: Record<string, RemoteQuote> = {};
     for (const quote of snapshot.quotes) {
       incomingQuotes[quote.securityId] = quote;
@@ -818,15 +730,8 @@ function DashboardContents({
         }
       }
     }
-    const incomingIntraday: IntradayBar[] = [];
-    for (const bar of snapshot.intraday) {
-      incomingIntraday.push(bar);
-      for (const variant of domainSecurityIdVariants(bar.securityId)) {
-        if (variant !== bar.securityId) {
-          incomingIntraday.push({ ...bar, securityId: variant });
-        }
-      }
-    }
+    // Intraday bars stay keyed by canonical id; chart and notification lookups canonicalize.
+    const incomingIntraday = snapshot.intraday;
     const mergedQuotes = mergeQuoteRecords(quotesRef.current, incomingQuotes);
     const mergedBenchmarks = mergeBenchmarks(benchmarksRef.current, snapshot.benchmarks);
     const mergedIntraday = mergeIntradayBars(intradayBarsRef.current, incomingIntraday);
@@ -837,19 +742,21 @@ function DashboardContents({
     setBenchmarks(mergedBenchmarks);
     setIntradayBars(mergedIntraday);
     logQuotesToHistory(snapshot.quotes);
-    setQuoteStatus(snapshot.refresh.status === "ready" ? "ready" : "partial");
+    // The snapshot covers the shared catalog; report health for this portfolio's symbols only.
+    const requestedIds = splitSecurityIds(quoteSecurityIdsRef.current, Number.MAX_SAFE_INTEGER).flat();
+    const failedIds = requestedIds.filter((securityId) => !mergedQuotes[securityId]);
+    const fallbackIds = requestedIds.filter((securityId) => mergedQuotes[securityId] && !incomingQuotes[securityId]);
+    const requested = new Set(requestedIds.map(canonicalDomainSecurityId));
+    const suspect = snapshot.quotes.filter((quote) => quote.validationStatus === "suspect" && requested.has(canonicalDomainSecurityId(quote.securityId))).length;
+    const partial = failedIds.length > 0 || fallbackIds.length > 0 || suspect > 0 || snapshot.refresh.status !== "ready";
+    setQuoteHealth({ requested: requestedIds.length, returned: requestedIds.length - failedIds.length - fallbackIds.length, failedIds, fallbackIds, updatedAt: snapshot.savedAt });
+    setQuoteStatus(partial ? "partial" : "ready");
     setBenchmarkStatus(mergedBenchmarks.length ? "ready" : "partial");
-    setQuoteHealth({
-      requested: snapshot.coverage.registered,
-      returned: snapshot.coverage.quoted,
-      failedIds: [],
-      fallbackIds: [],
-      updatedAt: snapshot.savedAt,
-    });
+    setMarketError(failedIds.length ? `${failedIds.length}銘柄の現在値を取得できませんでした` : suspect ? `${suspect}銘柄で大きな変動を検出` : "");
     if (snapshot.marketSessions.length) setServerMarketSessions(snapshot.marketSessions);
     acceptTrustedServerTime(snapshot.generatedAt);
     setMarketStartupReady(true);
-    return true;
+    return !snapshot.quotes.length ? "failed" : partial ? "partial" : "updated";
   }, [acceptTrustedServerTime, logQuotesToHistory]);
 
   useEffect(() => {
@@ -1338,22 +1245,17 @@ function DashboardContents({
   }, [customSecurities, seed.securities, transactions, watchlist]);
 
 
-  const lastSyncedRegistryKeyRef = useRef<string>("");
-  useEffect(() => {
-    if (!hydrated || persistenceMode !== "cloud" || !allSecurities.length) return;
-    const currentKey = [...new Set(allSecurities.map((security) => security.id))].sort().join(",");
-    if (currentKey === lastSyncedRegistryKeyRef.current) return;
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      if (cancelled) return;
-      lastSyncedRegistryKeyRef.current = currentKey;
-      void syncServerMarketRegistry(allSecurities.map((security) => security.id), "merge").catch(() => false);
-    }, 1000);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [allSecurities, hydrated, persistenceMode]);
+  const registeredMarketKeyRef = useRef("");
+  /** The local Mac app's own server may know every held symbol; the cloud catalog only grows from search selections. */
+  const ensureLocalMarketCatalog = useCallback(async () => {
+    if (persistenceMode !== "local") return false;
+    const ids = [...new Set(allSecurities.map((security) => security.id))].sort();
+    const key = ids.join(",");
+    if (!ids.length || key === registeredMarketKeyRef.current) return false;
+    const registered = await registerMarketSecurities(ids.slice(0, 200), { notify: false }).catch(() => false);
+    if (registered) registeredMarketKeyRef.current = key;
+    return registered;
+  }, [allSecurities, persistenceMode]);
   const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const activeAccounts = useMemo(() => accounts.filter((account) => !account.archivedAt), [accounts]);
   const selectableAccounts = useMemo(() => {
@@ -1400,90 +1302,7 @@ function DashboardContents({
     ...(detailSecurityScope ? [detailSecurityScope] : []),
     FX_SECURITY_ID,
   ])].sort().join(","), [detailSecurityScope, positionSeed.holdings, watchlist]);
-  const usIntradayRequestsRef = useRef(new Map<string, Promise<Awaited<ReturnType<typeof loadServerUsIntraday>>>>());
-  const refreshServerUsIntraday = useCallback(async (recover = false) => {
-    if (!hydrated || document.visibilityState !== "visible") return;
-    const usIds = splitSecurityIds(quoteSecurityIds, Number.MAX_SAFE_INTEGER)
-      .flat()
-      .map(canonicalDomainSecurityId)
-      .filter((securityId) => /^sec-us-/u.test(securityId));
-    const batches = splitSecurityIds([...new Set(usIds)].join(","), 20);
-    if (!batches.length) return;
-    const responses = await Promise.allSettled(batches.map((batch) => {
-      const key = `${recover ? "recover" : "read"}:${batch.join(",")}`;
-      const existing = usIntradayRequestsRef.current.get(key);
-      if (existing) return existing;
-      const request = loadServerUsIntraday(batch, { recover }).finally(() => {
-        usIntradayRequestsRef.current.delete(key);
-      });
-      usIntradayRequestsRef.current.set(key, request);
-      return request;
-    }));
-    const incoming: IntradayBar[] = [];
-    for (const response of responses) {
-      if (response.status !== "fulfilled" || !response.value) continue;
-      acceptTrustedServerTime(response.value.generatedAt);
-      for (const bar of response.value.bars) {
-        incoming.push(bar);
-        for (const variant of domainSecurityIdVariants(bar.securityId)) {
-          if (variant !== bar.securityId) incoming.push({ ...bar, securityId: variant });
-        }
-      }
-    }
-    if (incoming.length) {
-      const merged = mergeIntradayBars(intradayBarsRef.current, incoming);
-      intradayBarsRef.current = merged;
-      setIntradayBars(merged);
-    }
-  }, [acceptTrustedServerTime, hydrated, quoteSecurityIds]);
-
-  useEffect(() => {
-    void refreshServerUsIntraday(true);
-  }, [refreshServerUsIntraday]);
-
-  const ptsCursorRef = useRef(new Map<string, string>());
-  useEffect(() => {
-    if (!hydrated || persistenceMode !== "cloud") return;
-    const japaneseIds = splitSecurityIds(quoteSecurityIds, Number.MAX_SAFE_INTEGER)
-      .flat()
-      .map(canonicalDomainSecurityId)
-      .filter((securityId) => /^sec-(?:\d{4}|\d{3}[a-z])$/iu.test(securityId));
-    const batches = splitSecurityIds([...new Set(japaneseIds)].join(","), 20);
-    if (!batches.length) return;
-    let cancelled = false;
-    let timer: number | null = null;
-    const refreshPts = async () => {
-      if (document.visibilityState !== "visible") return;
-      const responses = await Promise.allSettled(batches.map(async (batch) => {
-        const key = batch.join(",");
-        const result = await loadServerPtsIntraday(batch, ptsCursorRef.current.get(key));
-        if (result.nextCursor) ptsCursorRef.current.set(key, result.nextCursor);
-        return result;
-      }));
-      if (cancelled) return;
-      const incoming: IntradayBar[] = [];
-      for (const response of responses) {
-        if (response.status !== "fulfilled") continue;
-        for (const bar of response.value.bars) {
-          incoming.push(bar);
-          for (const variant of domainSecurityIdVariants(bar.securityId)) {
-            if (variant !== bar.securityId) incoming.push({ ...bar, securityId: variant });
-          }
-        }
-      }
-      if (incoming.length) {
-        const merged = mergeIntradayBars(intradayBarsRef.current, incoming);
-        intradayBarsRef.current = merged;
-        setIntradayBars(merged);
-      }
-    };
-    void refreshPts();
-    timer = window.setInterval(() => { void refreshPts(); }, 60_000);
-    return () => {
-      cancelled = true;
-      if (timer != null) window.clearInterval(timer);
-    };
-  }, [hydrated, persistenceMode, quoteSecurityIds]);
+  quoteSecurityIdsRef.current = quoteSecurityIds;
   const hasForeignTransactions = useMemo(() => transactions.some((transaction) => transaction.tradeCurrency !== "JPY"), [transactions]);
   const needsFxHistory = useMemo(() => displayCurrency === "USD" ? transactions.some((t) => t.tradeCurrency !== "USD") : (hasForeignTransactions || hasForeignSecurities), [displayCurrency, hasForeignSecurities, hasForeignTransactions, transactions]);
   const historySecurityIds = useMemo(() => [...new Set([
@@ -1532,239 +1351,74 @@ function DashboardContents({
   }, [detailSecurityScope, needsFxHistory, transactions, watchlist]);
   const needsHistoryBackfill = useCallback((bars: MarketBar[]) => missingHistoryRequirements(bars, historyCoverageRequired, historyInceptionDates, todayKey).length > 0, [historyCoverageRequired, historyInceptionDates, todayKey]);
 
-  const loadQuotes = useCallback(async (force = false, mode: "full" | "incremental" | "scheduled" = "incremental", includeIntraday = true) => {
-    if (!quoteSecurityIds) return;
-    const allIds = splitSecurityIds(quoteSecurityIds, Number.MAX_SAFE_INTEGER).flat();
-    const refreshNow = sessionClockRef.current ?? Date.now();
-    const transitionIds = new Set(quoteSessionTransitionTargets(allIds, quotesRef.current, refreshNow));
-    const hasIntraday = (id: string) => {
-      const requested = normalizeRequestedSecurity(id);
-      const variants = new Set(domainSecurityIdVariants(id));
-      const expectedSession = marketSessionDateKey(
-        new Date(refreshNow).toISOString(),
-        requested?.exchangeMic,
-        undefined,
-        requested?.currency,
-        requested?.currency === "USD" ? "US" : "JP",
-      );
-      return new Set(intradayBarsRef.current
-        .filter((bar) => (bar.securityId === id || variants.has(bar.securityId)) && marketSessionDateKey(
-          bar.timestamp,
-          requested?.exchangeMic,
-          undefined,
-          requested?.currency,
-          requested?.currency === "USD" ? "US" : "JP",
-        ) === expectedSession)
-        .map((bar) => bar.timestamp)).size >= 2;
-    };
-    const targetIds = quoteRefreshTargets(allIds, quotesRef.current, { force, full: mode === "full", now: refreshNow, hasIntraday });
-    if (!targetIds.length) return;
-    if (!force && mode !== "full" && Date.now() - lastQuoteRequestAtRef.current < 3_000) {
-      return;
-    }
-    if (quoteRequestInFlight.current) {
-      quoteReloadPending.current = true;
-      return;
-    }
-    quoteRequestInFlight.current = true;
-    lastQuoteRequestAtRef.current = Date.now();
-    const batches = splitSecurityIds(targetIds.join(","));
-    setApiUsage((current) => ({ ...current, quoteRequests: current.quoteRequests + batches.length, lastQuoteRequest: new Date().toISOString() }));
+  const marketRequestRef = useRef<Promise<MarketLoadResult> | null>(null);
+  /** One request returns every quote, benchmark and intraday chart; concurrent callers share it. */
+  const loadMarket = useCallback((force = false): Promise<MarketLoadResult> => {
+    if (marketRequestRef.current && !force) return marketRequestRef.current;
+    const requestedAt = new Date().toISOString();
+    setApiUsage((current) => ({ ...current, quoteRequests: current.quoteRequests + 1, benchmarkRequests: current.benchmarkRequests + 1, lastQuoteRequest: requestedAt, lastBenchmarkRequest: requestedAt }));
     setQuoteStatus((current) => current === "ready" || current === "partial" ? current : "loading");
-    try {
-      const headers = { ...await getMarketAuthHeaders(), "Content-Type": "application/json" };
-      const responses = await pooledClientMap(batches, 3, async (securityIds) => {
-        try {
-          const response = await fetchMarketResponse("/api/market/quotes", {
-            method: "POST",
-            cache: "no-store",
-            headers,
-            body: JSON.stringify({
-              securityIds: securityIds.join(","),
-              refreshSecurityIds: securityIds.filter((securityId) => transitionIds.has(securityId)).join(","),
-              includeIntraday,
-              intradayRange: "1d",
-              refresh: force,
-            }),
-            signal: timeoutSignal(45_000),
-          });
-          const payload = await readMarketApiResponse<QuoteResponse>(response, "価格データの応答を確認できませんでした");
-          return { ok: response.ok, payload };
-        } catch (error) {
-          const message = stableMarketErrorMessage(error, "価格バッチを取得できませんでした");
-          return {
-            ok: false,
-            payload: {
-              quotes: [],
-              intraday: [],
-              failures: securityIds.map((securityId) => ({ securityId, symbol: securityId, message })),
-              coverage: { requested: securityIds.length, returned: 0, fresh: 0, stale: 0, suspect: 0 },
-            } satisfies QuoteResponse,
-          };
-        }
-      });
-      const payload = {
-        quotes: responses.flatMap((item) => item.payload.quotes ?? []),
-        intraday: responses.flatMap((item) => item.payload.intraday ?? []),
-        failures: responses.flatMap((item) => item.payload.failures ?? []),
-      };
-      acceptTrustedServerTime(responses.map((item) => item.payload.generatedAt).filter((value): value is string => Boolean(value)).sort().at(-1));
-      const latestServerSessions = latestMarketSessions(responses);
-      if (latestServerSessions) setServerMarketSessions(latestServerSessions);
-      if (!payload.quotes.length && responses.some((item) => !item.ok)) throw new Error(payload.failures[0]?.message ?? "価格を取得できませんでした");
-      const incomingQuotes: Record<string, RemoteQuote> = {};
-      for (const quote of payload.quotes) {
-        incomingQuotes[quote.securityId] = quote;
-        for (const variant of domainSecurityIdVariants(quote.securityId)) {
-          if (!incomingQuotes[variant]) {
-            incomingQuotes[variant] = { ...quote, securityId: variant };
-          }
-        }
+    const task = (async (): Promise<MarketLoadResult> => {
+      try {
+        // Newly registered local symbols need a fresh snapshot, not the reused one.
+        const registered = await ensureLocalMarketCatalog();
+        const snapshot = await fetchMarketSnapshot({ force: force || registered });
+        return snapshot ? applyServerMarketSnapshot(snapshot) : "failed";
+      } catch (error) {
+        setQuoteStatus((current) => current === "ready" || current === "partial" ? "partial" : "error");
+        setBenchmarkStatus((current) => current === "ready" || current === "partial" ? "partial" : "error");
+        setMarketError(stableMarketErrorMessage(error, "市場価格を取得できませんでした"));
+        return "failed";
       }
-      const nextQuotes = mergeQuoteRecords(quotesRef.current, incomingQuotes);
-      quotesRef.current = nextQuotes;
-      setQuotes(nextQuotes);
-      const returnedIds = new Set(payload.quotes.map((quote) => quote.securityId));
-      const incomingBars: IntradayBar[] = [];
-      for (const bar of payload.intraday ?? []) {
-        incomingBars.push(bar);
-        for (const variant of domainSecurityIdVariants(bar.securityId)) {
-          if (variant !== bar.securityId) {
-            incomingBars.push({ ...bar, securityId: variant });
-          }
-        }
-      }
-      const nextBars = mergeIntradayBars(intradayBarsRef.current, incomingBars);
-      intradayBarsRef.current = nextBars;
-      setIntradayBars(nextBars);
-      logQuotesToHistory(payload.quotes);
-      const suspect = payload.quotes.filter((quote) => quote.validationStatus === "suspect").length;
-      const requestedIds = batches.flat();
-      const cachedFallbackIds = requestedIds.filter((securityId) => !returnedIds.has(securityId) && Boolean(quotesRef.current[securityId]));
-      const missingIds = requestedIds.filter((securityId) => !returnedIds.has(securityId) && !quotesRef.current[securityId]);
-      const cachedFallbackSet = new Set(cachedFallbackIds);
-      const failedIds = [...new Set([...payload.failures.map((failure) => failure.securityId).filter((securityId) => !cachedFallbackSet.has(securityId)), ...missingIds])];
-      setQuoteHealth({ requested: requestedIds.length, returned: returnedIds.size, failedIds, fallbackIds: cachedFallbackIds, updatedAt: new Date().toISOString() });
-      setQuoteStatus(failedIds.length || cachedFallbackIds.length || suspect ? "partial" : "ready");
-      setMarketError(failedIds.length ? `${failedIds.length}銘柄の現在値を取得できませんでした` : suspect ? `${suspect}銘柄で大きな変動を検出` : "");
-    } catch (error) {
-      const requestedIds = batches.flat();
-      const fallbackIds = requestedIds.filter((securityId) => Boolean(quotesRef.current[securityId]));
-      setQuoteHealth({ requested: requestedIds.length, returned: 0, failedIds: requestedIds.filter((securityId) => !fallbackIds.includes(securityId)), fallbackIds, updatedAt: new Date().toISOString() });
-      setQuoteStatus((current) => current === "ready" || current === "partial" ? "partial" : "error");
-      setMarketError(stableMarketErrorMessage(error, "市場価格を取得できませんでした"));
-    } finally {
-      quoteRequestInFlight.current = false;
-      if (quoteReloadPending.current) {
-        quoteReloadPending.current = false;
-        const allIds = splitSecurityIds(quoteSecurityIds, Number.MAX_SAFE_INTEGER).flat();
-        const refreshNow = sessionClockRef.current ?? Date.now();
-        const remainingTargets = quoteRefreshTargets(allIds, quotesRef.current, {
-          now: refreshNow,
-          hasIntraday,
-        });
-        if (remainingTargets.length > 0) {
-          if (quoteReloadTimerRef.current !== null) {
-            window.clearTimeout(quoteReloadTimerRef.current);
-          }
-          quoteReloadTimerRef.current = window.setTimeout(() => {
-            quoteReloadTimerRef.current = null;
-            void loadQuotes(false, "incremental");
-          }, 3_000);
-        }
-      }
-    }
-  }, [acceptTrustedServerTime, logQuotesToHistory, quoteSecurityIds]);
+    })().finally(() => { if (marketRequestRef.current === task) marketRequestRef.current = null; });
+    marketRequestRef.current = task;
+    return task;
+  }, [applyServerMarketSnapshot, ensureLocalMarketCatalog]);
 
-  const loadBenchmarks = useCallback(async (force = false) => {
-    const cached = benchmarksRef.current;
-    const cacheFresh = cached.length > 0 && cached.every((benchmark) => {
-      const fetchedAt = new Date(benchmark.fetchedAt ?? "").getTime();
-      const maxAge = cached.length >= 5 ? 9 * 60 * 1000 : 3 * 60 * 1000;
-      return Number.isFinite(fetchedAt) && Date.now() - fetchedAt < maxAge;
-    });
-    if (!force && cacheFresh) {
-      setBenchmarkStatus("ready");
-      return;
-    }
-    if (benchmarkRequestInFlight.current) return;
-    benchmarkRequestInFlight.current = true;
-    setApiUsage((current) => ({ ...current, benchmarkRequests: current.benchmarkRequests + 1, lastBenchmarkRequest: new Date().toISOString() }));
-    setBenchmarkStatus((current) => current === "ready" || current === "partial" ? current : "loading");
-    try {
-      const response = await fetchMarketResponse(`/api/market/benchmarks${force ? "?refresh=1" : ""}`, {
-        cache: "no-store",
-        headers: await getMarketAuthHeaders(),
-        signal: timeoutSignal(45_000),
-      });
-      const payload = await readMarketApiResponse<BenchmarkResponse>(response, "指標データの応答を確認できませんでした");
-      acceptTrustedServerTime(payload.generatedAt);
-      if (payload.marketSessions?.length) setServerMarketSessions(payload.marketSessions);
-      if (!response.ok && !payload.benchmarks?.length) throw new Error("指標を取得できませんでした");
-      setBenchmarks((current) => [...new Map([...current, ...(payload.benchmarks ?? [])].map((benchmark) => [benchmark.id, benchmark])).values()]);
-      setBenchmarkStatus(payload.failures.length ? "partial" : "ready");
-    } catch {
-      setBenchmarkStatus((current) => current === "ready" || current === "partial" ? "partial" : "error");
-    } finally {
-      benchmarkRequestInFlight.current = false;
-    }
-  }, [acceptTrustedServerTime]);
+  const marketRetryRef = useRef({ history: 0, distributions: 0 });
+  const scheduleMarketRetry = useCallback((kind: "history" | "distributions", retry: () => void) => {
+    // The server fills a newly added symbol's history within a few calls; retry briefly.
+    if (marketRetryRef.current[kind] >= 6) return;
+    marketRetryRef.current[kind] += 1;
+    window.setTimeout(retry, 15_000);
+  }, []);
 
-  const loadHistory = useCallback(async (force = false) => {
+  const loadHistory = useCallback(async () => {
     if (!historySecurityIds) return;
     if (historyRequestInFlight.current) {
       historyReloadPending.current = true;
       return;
     }
     historyRequestInFlight.current = true;
-    // History payloads contain years of bars, unlike the small quote batches.
-    // V2 downloads one common publication and filters privately in this browser.
-    // Splitting private IDs into batches would traverse that publication repeatedly.
-    const plan = buildHistoryFetchPlan(historySecurityIds, historyCoverageRequired, force ? [] : historyBars, usesPublicMarketBackend() ? Number.MAX_SAFE_INTEGER : 2, historyInceptionDates, todayKey);
-    setApiUsage((current) => ({ ...current, historyRequests: current.historyRequests + plan.length, lastHistoryRequest: new Date().toISOString() }));
+    const requestedIds = splitSecurityIds(historySecurityIds, Number.MAX_SAFE_INTEGER).flat();
+    // Only the earliest year leaves the device; the response covers the whole public catalog.
+    const earliest = [...historyCoverageRequired.values()].sort()[0] ?? todayKey;
+    setApiUsage((current) => ({ ...current, historyRequests: current.historyRequests + 1, lastHistoryRequest: new Date().toISOString() }));
     setHistoryStatus("loading");
     setHistoryError("");
     try {
-      const headers = { ...await getMarketAuthHeaders(), "Content-Type": "application/json" };
-      const responses = await pooledClientMap(plan, 2, async (batch) => {
-        try {
-          const response = await fetchMarketResponse("/api/market/history", {
-            method: "POST",
-            cache: "no-store",
-            headers,
-            body: JSON.stringify({ securityIds: batch.securityIds.join(","), from: batch.from, refresh: force || batch.forceRefresh === true }),
-            signal: timeoutSignal(60_000),
-          });
-          const payload = await readMarketApiResponse<HistoryResponse>(response, "履歴データの応答を確認できませんでした");
-          return { ok: response.ok, payload };
-        } catch (error) {
-          const message = stableMarketErrorMessage(error, "履歴バッチを取得できませんでした");
-          return {
-            ok: false,
-            payload: {
-              bars: [],
-              corporateActions: [],
-              failures: batch.securityIds.map((securityId) => ({ securityId, symbol: securityId, message })),
-              coverage: { requested: batch.securityIds.length, returned: 0 },
-            } satisfies HistoryResponse,
-          };
-        }
-      });
-      const incomingBars = responses.flatMap((item) => item.payload.bars ?? []);
-      acceptTrustedServerTime(responses.map((item) => item.payload.generatedAt).filter((value): value is string => Boolean(value)).sort().at(-1));
-      const latestServerSessions = latestMarketSessions(responses);
-      if (latestServerSessions) setServerMarketSessions(latestServerSessions);
-      const incomingActions = responses.flatMap((item) => item.payload.corporateActions ?? []);
-      const incomingInceptionDates = Object.assign({}, ...responses.map((item) => item.payload.inceptionDates ?? {})) as Record<string, string>;
+      const payload = await fetchMarketHistory(earliest);
+      acceptTrustedServerTime(payload.generatedAt);
+      // Catalog rows use canonical ids; key them to this portfolio's own ids.
+      const idsByCanonical = new Map<string, string[]>();
+      for (const securityId of requestedIds) {
+        const canonical = canonicalDomainSecurityId(securityId);
+        idsByCanonical.set(canonical, [...idsByCanonical.get(canonical) ?? [], securityId]);
+      }
+      const forPortfolio = <T extends { securityId: string }>(items: T[]) => items.flatMap((item) => (idsByCanonical.get(canonicalDomainSecurityId(item.securityId)) ?? [])
+        .map((securityId) => securityId === item.securityId ? item : { ...item, securityId }));
+      const incomingBars = forPortfolio(payload.bars);
+      const incomingActions = forPortfolio(payload.corporateActions);
+      const incomingInceptionDates = Object.fromEntries(Object.entries(payload.inceptionDates)
+        .flatMap(([securityId, date]) => (idsByCanonical.get(canonicalDomainSecurityId(securityId)) ?? []).map((target) => [target, date] as const)));
       const nextInceptionDates = { ...historyInceptionDates, ...incomingInceptionDates };
-      const responseFailures = responses.flatMap((item) => item.payload.failures ?? []);
-      if (!incomingBars.length && !historyBars.length && responses.some((item) => !item.ok)) throw new Error(responseFailures[0]?.message ?? "履歴を取得できませんでした");
+      const pendingIds = requestedIds.filter((securityId) => payload.pending.includes(canonicalDomainSecurityId(securityId)));
+      if (!incomingBars.length && !historyBars.length) throw new Error(pendingIds.length ? "履歴を準備しています" : "履歴を取得できませんでした");
       const inspected = inspectMarketHistory(historyBars, incomingBars, mergeActions(seededActions, corporateActions, incomingActions));
-      const requestedIds = plan.flatMap((batch) => batch.securityIds);
-      const failedResponseIds = new Set(responseFailures.map((failure) => failure.securityId));
+      const returnedIds = new Set(incomingBars.map((bar) => bar.securityId));
       const missingRequiredIds = missingHistoryRequirements(inspected.bars, historyCoverageRequired, nextInceptionDates);
-      const cachedFallbackIds = requestedIds.filter((securityId) => failedResponseIds.has(securityId) && historyCoverage(inspected.bars).has(securityId));
-      const failedIds = [...new Set([...missingRequiredIds, ...[...failedResponseIds].filter((securityId) => !cachedFallbackIds.includes(securityId))])];
+      const cachedFallbackIds = requestedIds.filter((securityId) => !returnedIds.has(securityId) && historyCoverage(inspected.bars).has(securityId));
+      const failedIds = [...new Set([...missingRequiredIds, ...requestedIds.filter((securityId) => !returnedIds.has(securityId) && !cachedFallbackIds.includes(securityId))])];
       const savedAt = new Date().toISOString();
       historyBarsRef.current = inspected.bars;
       setHistoryBars(inspected.bars);
@@ -1776,7 +1430,7 @@ function DashboardContents({
       const nextMeta: HistoryCacheMeta = { savedAt, checksum: inspected.quality.checksum };
       historyCacheMetaRef.current = nextMeta;
       setHistoryCacheMeta(nextMeta);
-      setHistoryHealth({ requested: requestedIds.length, returned: requestedIds.length - failedResponseIds.size, failedIds, fallbackIds: cachedFallbackIds, updatedAt: savedAt });
+      setHistoryHealth({ requested: requestedIds.length, returned: returnedIds.size, failedIds, fallbackIds: cachedFallbackIds, updatedAt: savedAt });
       setApiUsage((current) => ({ ...current, integrityChecks: current.integrityChecks + 1 }));
       if (allowPersistentMarketCache) {
         void writeMarketCache<HistoryCachePayload>(HISTORY_CACHE_KEY, {
@@ -1793,8 +1447,9 @@ function DashboardContents({
       setHistoryStatus(partial ? "partial" : "ready");
       const failedLabels = failedIds.map((securityId) => securityId === FX_SECURITY_ID ? "USD/JPY" : allSecurities.find((security) => security.id === securityId)?.displaySymbol ?? securityId).slice(0, 4);
       setHistoryError(failedIds.length ? `履歴不足: ${failedLabels.join("、")}${failedIds.length > failedLabels.length ? `ほか${failedIds.length - failedLabels.length}銘柄` : ""}` : inspected.quality.status === "warning" ? "履歴データの整合性警告を検出しました" : "");
+      if (pendingIds.length) scheduleMarketRetry("history", () => setHistoryRequested(false));
+      else marketRetryRef.current.history = 0;
     } catch (error) {
-      const requestedIds = plan.flatMap((batch) => batch.securityIds);
       const cachedIds = new Set(historyCoverage(historyBars).keys());
       const fallbackIds = requestedIds.filter((securityId) => cachedIds.has(securityId));
       setHistoryHealth({ requested: requestedIds.length, returned: 0, failedIds: requestedIds.filter((securityId) => !fallbackIds.includes(securityId)), fallbackIds, updatedAt: new Date().toISOString() });
@@ -1807,9 +1462,9 @@ function DashboardContents({
         setHistoryRequested(false);
       }
     }
-  }, [acceptTrustedServerTime, allowPersistentMarketCache, allSecurities, corporateActions, historyBars, historyCoverageRequired, historyInceptionDates, historySecurityIds, todayKey]);
+  }, [acceptTrustedServerTime, allowPersistentMarketCache, allSecurities, corporateActions, historyBars, historyCoverageRequired, historyInceptionDates, historySecurityIds, scheduleMarketRetry, todayKey]);
 
-  const loadDistributions = useCallback(async (force = false) => {
+  const loadDistributions = useCallback(async () => {
     const requestedIds = splitSecurityIds(distributionSecurityIds, Number.MAX_SAFE_INTEGER).flat();
     if (!requestedIds.length) {
       setDistributionStatus("ready");
@@ -1823,49 +1478,22 @@ function DashboardContents({
     setDistributionStatus("loading");
     setDistributionError("");
     try {
-      const headers = { ...await getMarketAuthHeaders(), "Content-Type": "application/json" };
-      const batches = splitSecurityIds(requestedIds.join(","), MARKET_REQUEST_BATCH_SIZE);
-      const responses = await pooledClientMap(batches, 2, async (securityIds) => {
-        try {
-          const response = await fetchMarketResponse("/api/market/distributions", {
-            method: "POST",
-            cache: "no-store",
-            headers,
-            body: JSON.stringify({ securityIds: securityIds.join(","), refresh: force }),
-            signal: timeoutSignal(60_000),
-          });
-          const payload = await readMarketApiResponse<DistributionResponse>(response, "配当データの応答を確認できませんでした");
-          return { ok: response.ok, payload };
-        } catch (error) {
-          const message = stableMarketErrorMessage(error, "配当バッチを取得できませんでした");
-          return {
-            ok: false,
-            payload: {
-              generatedAt: new Date().toISOString(),
-              distributions: [],
-              corporateActions: [],
-              coverage: [],
-              failures: securityIds.map((securityId) => ({ securityId, symbol: securityId, message })),
-            } satisfies DistributionResponse,
-          };
-        }
-      });
-      const incomingEvents = responses.flatMap((item) => item.payload.distributions ?? []);
-      const incomingCoverage = responses.flatMap((item) => item.payload.coverage ?? []);
-      const incomingActions = responses.flatMap((item) => item.payload.corporateActions ?? []);
-      const failures = responses.flatMap((item) => item.payload.failures ?? []);
-      const nextEvents = mergeDistributionEvents(distributions, incomingEvents);
-      const nextCoverage = [...new Map([...distributionCoverage, ...incomingCoverage].map((item) => [canonicalDomainSecurityId(item.securityId), { ...item, securityId: canonicalDomainSecurityId(item.securityId) }])).values()];
+      const payload = await fetchMarketDistributions();
+      const wanted = new Set(requestedIds.map(canonicalDomainSecurityId));
+      const relevant = <T extends { securityId: string }>(items: T[]) => items.filter((item) => wanted.has(canonicalDomainSecurityId(item.securityId)));
+      const nextEvents = mergeDistributionEvents(distributions, relevant(payload.distributions));
+      const nextCoverage = [...new Map([...distributionCoverage, ...relevant(payload.coverage)].map((item) => [canonicalDomainSecurityId(item.securityId), { ...item, securityId: canonicalDomainSecurityId(item.securityId) }])).values()];
       const coveredIds = new Set(nextCoverage.filter((item) => item.status === "ready" || item.status === "no_events").map((item) => item.securityId));
       const missingIds = requestedIds.filter((securityId) => !coveredIds.has(canonicalDomainSecurityId(securityId)));
       const savedAt = new Date().toISOString();
       setDistributions(nextEvents);
       setDistributionCoverage(nextCoverage);
-      setCorporateActions((current) => mergeActions(seededActions, current, incomingActions));
+      setCorporateActions((current) => mergeActions(seededActions, current, relevant(payload.corporateActions)));
       setDistributionCacheSavedAt(savedAt);
-      const partial = failures.length > 0 || missingIds.length > 0 || nextCoverage.some((item) => item.status === "partial" || item.status === "error");
-      setDistributionStatus(partial ? "partial" : "ready");
-      setDistributionError(failures.length ? `配当取得失敗: ${failures.slice(0, 3).map((failure) => failure.symbol || failure.securityId).join("、")}` : missingIds.length ? `${missingIds.length}銘柄の配当カバレッジを確認中` : "");
+      setDistributionStatus(missingIds.length || nextCoverage.some((item) => item.status === "partial" || item.status === "error") ? "partial" : "ready");
+      setDistributionError(missingIds.length ? `${missingIds.length}銘柄の配当カバレッジを確認中` : "");
+      if (missingIds.length) scheduleMarketRetry("distributions", () => { distributionAttemptKey.current = ""; setDistributionCacheSavedAt(""); });
+      else marketRetryRef.current.distributions = 0;
       if (allowPersistentMarketCache) void writeMarketCache<DistributionCachePayload>(DISTRIBUTION_CACHE_KEY, {
         schemaVersion: 1,
         savedAt,
@@ -1882,7 +1510,7 @@ function DashboardContents({
         setDistributionCacheSavedAt("");
       }
     }
-  }, [allowPersistentMarketCache, distributionCoverage, distributionSecurityIds, distributions]);
+  }, [allowPersistentMarketCache, distributionCoverage, distributionSecurityIds, distributions, scheduleMarketRetry]);
 
   useEffect(() => { quotesRef.current = quotes; }, [quotes]);
   useEffect(() => { benchmarksRef.current = benchmarks; }, [benchmarks]);
@@ -1891,52 +1519,24 @@ function DashboardContents({
   useEffect(() => { historyInceptionDatesRef.current = historyInceptionDates; }, [historyInceptionDates]);
   useEffect(() => { corporateActionsRef.current = corporateActions; }, [corporateActions]);
   useEffect(() => { historyCacheMetaRef.current = historyCacheMeta; }, [historyCacheMeta]);
-  useEffect(() => () => {
-    if (quoteReloadTimerRef.current !== null) window.clearTimeout(quoteReloadTimerRef.current);
-  }, []);
   useEffect(() => {
     if (!hydrated || marketStartupRunRef.current) return;
     marketStartupRunRef.current = true;
-    const hasQuotes = Object.keys(quotesRef.current).length > 0;
-    const snapshotAge = initialMarketSnapshot?.savedAt ? Date.now() - Date.parse(initialMarketSnapshot.savedAt) : Number.POSITIVE_INFINITY;
-    const snapshotFresh = Number.isFinite(snapshotAge) && snapshotAge < 3 * 60 * 1000;
-    if (snapshotFresh && hasQuotes) {
-      setMarketStartupReady(true);
-      return;
-    }
-    const mode = hasQuotes ? "incremental" : "full";
-    quoteEffectKeyRef.current = `${quoteSecurityIds}|${quoteRefreshToken}`;
-    void Promise.allSettled([
-      loadQuotes(false, mode, !usesPublicMarketBackend()),
-      loadBenchmarks(),
-    ]).then(() => setMarketStartupReady(true));
-  }, [hydrated, initialMarketSnapshot, loadBenchmarks, loadQuotes, persistenceMode, quoteRefreshToken, quoteSecurityIds]);
+    void loadMarket(false).finally(() => setMarketStartupReady(true));
+  }, [hydrated, loadMarket]);
+
+  // Local app: newly held symbols are registered with the local server and priced at once.
+  useEffect(() => {
+    if (!hydrated || !marketStartupRunRef.current || persistenceMode !== "local") return;
+    void loadMarket(false);
+  }, [hydrated, loadMarket, persistenceMode, quoteSecurityIds]);
+
+  // A search selection added a symbol to the shared catalog.
+  useEffect(() => onMarketCatalogChange(() => { void loadMarket(true); }), [loadMarket]);
 
   useEffect(() => {
     if (!hydrated) return;
-    const currentRange = range;
-    const previousRange = prevRangeViewRef.current;
-    prevRangeViewRef.current = currentRange;
-    if (!previousRange) return;
-    if (previousRange !== currentRange && (currentRange === "1D" || currentRange === "1W")) {
-      void loadQuotes(false, "incremental");
-    }
-  }, [hydrated, loadQuotes, range]);
-
-  useEffect(() => {
-    if (!hydrated || !marketStartupRunRef.current) return;
-    const key = `${quoteSecurityIds}|${quoteRefreshToken}`;
-    if (quoteEffectKeyRef.current === key) return;
-    quoteEffectKeyRef.current = key;
-    void loadQuotes(false, "incremental");
-  }, [hydrated, loadQuotes, quoteRefreshToken, quoteSecurityIds]);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    if (transactionRevisionRef.current && transactionRevisionRef.current !== transactionRevision) {
-      setHistoryRequested(false);
-      setQuoteRefreshToken((current) => current + 1);
-    }
+    if (transactionRevisionRef.current && transactionRevisionRef.current !== transactionRevision) setHistoryRequested(false);
     transactionRevisionRef.current = transactionRevision;
   }, [hydrated, transactionRevision]);
 
@@ -1950,7 +1550,7 @@ function DashboardContents({
       setApiUsage((current) => ({ ...current, historyCacheHits: current.historyCacheHits + 1 }));
       return;
     }
-    void loadHistory(needsRefresh);
+    void loadHistory();
   }, [historyBars, historyCacheMeta, historyQuality, historyRequested, hydrated, loadHistory, marketCacheHydrated, needsHistoryBackfill, view]);
 
   useEffect(() => {
@@ -1969,7 +1569,7 @@ function DashboardContents({
     }
     if (distributionAttemptKey.current === distributionSecurityIds) return;
     distributionAttemptKey.current = distributionSecurityIds;
-    void loadDistributions(false);
+    void loadDistributions();
   }, [distributionCacheSavedAt, distributionCoverage, distributionSecurityIds, hydrated, loadDistributions, view]);
 
   const requirementSignature = useMemo(() => `${[...historyCoverageRequired].map(([securityId, date]) => `${securityId}:${date}`).sort().join("|")}|${todayKey}`, [historyCoverageRequired, todayKey]);
@@ -2031,70 +1631,46 @@ function DashboardContents({
   }, [corporateActions, historyBars, historyCacheMeta, hydrated]);
 
   const hasActiveSession = Object.values(quotes).some((quote) => quote.session !== "closed");
-  const effectiveUpdateMinutes = hasActiveSession ? Math.max(updateFrequency, 10) : Math.max(updateFrequency, 60);
-  const scheduledMarketRefresh = useCallback(async () => {
-    if (persistenceMode === "cloud") {
-      let appliedSnapshot = false;
-      try {
-        const [snapshot] = await Promise.all([
-          loadServerMarketSnapshot({
-            includeIntraday: false,
-            allowPersistentCache: allowPersistentMarketCache,
-          }),
-          refreshServerUsIntraday(true),
-        ]);
-        if (snapshot) appliedSnapshot = applyServerMarketSnapshot(snapshot);
-      } catch { /* Fall through to the live client refresh path. */ }
-      if (appliedSnapshot) return;
-    }
-    await loadQuotes(false, "scheduled");
-  }, [allowPersistentMarketCache, applyServerMarketSnapshot, loadQuotes, persistenceMode, refreshServerUsIntraday]);
-
+  const effectiveUpdateMinutes = hasActiveSession ? updateFrequency : Math.max(updateFrequency, 60);
   const lastAutoRefreshRef = useRef<number>(Date.now());
   useEffect(() => {
     if (!autoRefresh) return;
     let timer: number | null = null;
     const intervalMs = effectiveUpdateMinutes * 60_000;
-
+    const refresh = () => {
+      lastAutoRefreshRef.current = Date.now();
+      void loadMarket(false);
+    };
     const scheduleNext = (delayMs: number) => {
       if (timer != null) window.clearTimeout(timer);
-      timer = window.setTimeout(async () => {
-        if (document.visibilityState === "visible") {
-          lastAutoRefreshRef.current = Date.now();
-          await scheduledMarketRefresh();
-          scheduleNext(effectiveUpdateMinutes * 60_000);
-        }
+      timer = window.setTimeout(() => {
+        if (document.visibilityState !== "visible") return;
+        refresh();
+        scheduleNext(intervalMs);
       }, delayMs);
     };
-
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        void refreshServerUsIntraday(true);
-        const elapsed = Date.now() - lastAutoRefreshRef.current;
-        if (elapsed >= intervalMs) {
-          lastAutoRefreshRef.current = Date.now();
-          void scheduledMarketRefresh();
-          scheduleNext(intervalMs);
-        } else {
-          scheduleNext(intervalMs - elapsed);
-        }
+      if (document.visibilityState !== "visible") {
+        if (timer != null) window.clearTimeout(timer);
+        timer = null;
+        return;
+      }
+      // Coming back to the app shows current prices right away; the request is cheap.
+      const elapsed = Date.now() - lastAutoRefreshRef.current;
+      if (elapsed >= RESUME_REFRESH_MS) {
+        refresh();
+        scheduleNext(intervalMs);
       } else {
-        if (timer != null) {
-          window.clearTimeout(timer);
-          timer = null;
-        }
+        scheduleNext(Math.max(intervalMs - elapsed, 0));
       }
     };
-
-    if (document.visibilityState === "visible") {
-      scheduleNext(intervalMs);
-    }
+    if (document.visibilityState === "visible") scheduleNext(intervalMs);
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       if (timer != null) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [autoRefresh, effectiveUpdateMinutes, scheduledMarketRefresh]);
+  }, [autoRefresh, effectiveUpdateMinutes, loadMarket]);
 
   const usdJpyBenchmark = benchmarks.find((benchmark) => benchmark.id === "usd-jpy");
   const fxHistory = useMemo(() => historyBars.filter((bar) => bar.securityId === FX_SECURITY_ID).sort((a, b) => a.date.localeCompare(b.date)), [historyBars]);
@@ -3216,45 +2792,19 @@ function DashboardContents({
     showToast(`${target.name}を取引口座一覧から削除しました`);
   };
 
-  const refreshMarket = useCallback((force: boolean | unknown = false) => {
+  const refreshMarket = useCallback(() => {
     if (manualRefreshInFlight.current) return manualRefreshInFlight.current;
-    const now = Date.now();
-    const isForced = force === true || (typeof force === "object" && force !== null);
-    if (!isForced && now - lastManualRefreshAt.current < 30_000) {
-      showToast("直前の更新結果を使用中");
-      return Promise.resolve();
-    }
-    lastManualRefreshAt.current = now;
     setIsManualRefreshing(true);
     setMarketError("");
     setHistoryError("");
-
-    const marketTask = persistenceMode === "cloud" ? refreshQueuedMarketData(
-      splitSecurityIds(quoteSecurityIds, Number.MAX_SAFE_INTEGER).flat(),
-      { allowPersistentCache: allowPersistentMarketCache, onSnapshot: applyServerMarketSnapshot },
-    ) : Promise.all([
-      loadQuotes(isForced, isForced ? "full" : "incremental"),
-      loadBenchmarks(isForced),
-      loadDistributions(isForced),
-    ]);
-    if (persistenceMode === "cloud") {
-      // Chart/dividend recovery must not hold up or determine the price-refresh result.
-      void refreshServerUsIntraday(true).catch(() => undefined);
-      void loadDistributions(false).catch(() => undefined);
-      void loadHistory(false).catch(() => undefined);
-    }
-    const refreshTask = (persistenceMode !== "cloud" && ["overview", "watchlist", "performance", "security", "notifications"].includes(activeViewRef.current)
-      ? marketTask.then(() => loadHistory(isForced))
-      : marketTask)
+    // Chart and dividend reloads never hold up the price result.
+    if (["overview", "watchlist", "performance", "security", "notifications"].includes(activeViewRef.current)) void loadHistory().catch(() => undefined);
+    void loadDistributions().catch(() => undefined);
+    const refreshTask = loadMarket(true)
       .then((result) => {
-        showToast(result === "pending" ? "市場データを更新中です。取得できた価格から反映します"
+        showToast(result === "updated" ? "市場データを更新しました"
           : result === "partial" ? "一部の市場データを取得できませんでした。保存済み価格を表示しています"
-          : result === "limited" ? "本日の無料枠に達しました。最新の保存済み価格を表示しています"
-          : result === "cached" ? "直前の更新結果を使用中" : "市場データを更新しました");
-      })
-      .catch((err) => {
-        showToast("更新に失敗しました");
-        console.error(err);
+          : "更新に失敗しました");
       })
       .finally(() => {
         manualRefreshInFlight.current = null;
@@ -3262,7 +2812,7 @@ function DashboardContents({
       });
     manualRefreshInFlight.current = refreshTask;
     return refreshTask;
-  }, [allowPersistentMarketCache, applyServerMarketSnapshot, loadBenchmarks, loadDistributions, loadHistory, loadQuotes, persistenceMode, quoteSecurityIds, refreshServerUsIntraday, showToast]);
+  }, [loadDistributions, loadHistory, loadMarket, showToast]);
 
 
   const openSecurity = useCallback((securityOrId: string | SearchSecurity, origin?: View) => {
@@ -3316,7 +2866,6 @@ function DashboardContents({
       setCustomSecurities(next);
       void onSecuritiesChange?.([...seed.securities, ...next]);
     }
-    setQuoteRefreshToken((current) => current + 1);
   }, [allSecurities, customSecurities, onSecuritiesChange, onWatchlistChange, seed.securities]);
 
   const handleRemoveWatchlist = useCallback((securityId: string) => {
@@ -3479,7 +3028,7 @@ function DashboardContents({
     if (!cancelled && shouldRefresh) {
       updatePullVisuals(0, true, true);
       setIsPullRefreshing(true);
-      void refreshMarket(true).finally(() => {
+      void refreshMarket().finally(() => {
         setIsPullRefreshing(false);
         updatePullVisuals(0, false, true);
       });
@@ -3511,7 +3060,7 @@ function DashboardContents({
             pullDistanceRef.current = 0;
             updatePullVisuals(0, true, true);
             setIsPullRefreshing(true);
-            void refreshMarket(true).finally(() => {
+            void refreshMarket().finally(() => {
               setIsPullRefreshing(false);
               updatePullVisuals(0, false, true);
             });
@@ -3716,7 +3265,7 @@ function DashboardContents({
           </div>
           <div className="header-tools">
             <button className="icon-button" onClick={() => handleSummaryAmountsVisibleChange((v) => !v)} aria-label={summaryAmountsVisible ? "金額を非表示" : "金額を表示"} title={summaryAmountsVisible ? "金額を非表示" : "金額を表示"}>{summaryAmountsVisible ? <Eye size={17} /> : <EyeOff size={17} />}</button>
-            <button className="icon-button" onClick={() => refreshMarket(true)} aria-label="市場データを更新"><RefreshCw size={17} /></button>
+            <button className="icon-button" onClick={() => refreshMarket()} aria-label="市場データを更新"><RefreshCw size={17} /></button>
             <button className="icon-button" onClick={() => handleDarkChange((value) => !value)} aria-label="テーマを切り替え">{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
             <button className="trade-button" aria-label="取引を記録" onClick={openNewTrade}><Plus size={16} /><span>取引</span></button>
           </div>

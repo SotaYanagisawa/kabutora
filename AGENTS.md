@@ -17,7 +17,8 @@
 - Preserve existing features, UI controls, settings, data formats, and public exports unless the user explicitly asks to change them.
 - Plaintext portfolio data—symbols tied to a user, shares, prices, amounts, balances, accounts, and transactions—must never reach Cloudflare or unencrypted Firestore. Only encrypted vault or event payloads may cross the sync boundary.
 - Use `Decimal` from `@kabutora/domain` for financial calculations. Native number conversion is allowed only at display and chart boundaries.
-- React client code must never import edge modules (`apps/web/lib/server-*`, `apps/web/lib/server/`, or `cloudflare-market-env.ts`).
+- React client code must never import edge modules (`apps/web/lib/server-*` or `apps/web/lib/server/`).
+- Market requests from cloud clients carry no user symbol lists. Everyone reads the shared catalog snapshot and filters locally; see [`docs/market-backend.md`](docs/market-backend.md).
 - Keep the build ID deterministic across all Next.js build processes. Use the shared build-ID source; never add independent runtime timestamps to `next.config.mjs`.
 
 ## Repository map
@@ -25,11 +26,9 @@
 | Area | Purpose |
 |---|---|
 | `packages/domain` | Pure accounting and portfolio-history engine |
-| `packages/market-data` | Shared normalized market types and provider contracts |
 | `apps/web/app` | Next.js routes and application shell |
 | `apps/web/components` | Client UI and orchestration |
 | `apps/web/lib` | Client services, sync, crypto, market adapters, and edge services |
-| `apps/web/migrations` | Public-market D1 schema only |
 | `firebase` | Encrypted portfolio access rules |
 | `scripts` | Builds, packaging, and boundary verification |
 
@@ -39,13 +38,16 @@ The `apps/web/lib/{charts,domain,market,server,sync,ui,vault}/index.ts` files ar
 
 - Focused unit test: `pnpm test <test-file>`
 - Fast unit suite: `pnpm test:fast`
-- Full type and unit gate: `pnpm check`
+- Full type and unit gate (includes market performance contracts): `pnpm check`
+- Real Worker + Durable Object market backend with latency and request budgets: `pnpm test:worker`
 - Privacy and client/edge boundary: `pnpm verify:privacy`
 - Chromium + WebKit, desktop + mobile: `pnpm exec playwright test`
+- Live upstream providers (network): `pnpm check:live`
 - Cloudflare build: `pnpm --filter @kabutora/web build:cloudflare`
+- Deployed site, auth and market freshness: `pnpm verify:prod`
 - Complete local gate: `pnpm check:full`
 
-For code changes, run `pnpm check:full` once after the final edit. It includes `pnpm check`, `pnpm verify:privacy`, and the complete Playwright matrix. `pnpm check` already includes type checking; do not rerun `pnpm tc` unless diagnosing a type-only failure. Documentation-only changes require link/path validation rather than the runtime gate.
+For code changes, run `pnpm check:full` once after the final edit. It includes `pnpm check`, `pnpm test:worker`, `pnpm verify:privacy`, the complete Playwright matrix and Firestore rules. `pnpm check` already includes type checking; do not rerun `pnpm tc` unless diagnosing a type-only failure. When market providers change, also run `pnpm check:live`. After a deploy, run `pnpm verify:prod`. Documentation-only changes require link/path validation rather than the runtime gate.
 
 ## Delivery
 

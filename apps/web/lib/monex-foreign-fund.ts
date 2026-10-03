@@ -1,5 +1,4 @@
-import { boundedMarketCacheSet } from "./server/market/bounded-cache";
-import { providerFetch } from "./server/market/provider-fetch";
+import { boundedMarketCacheSet } from "./bounded-cache";
 import type { MarketBar, MarketQuote } from "@kabutora/domain";
 
 type ChartPoint = { dt?: number; p?: number; pd?: number };
@@ -56,7 +55,7 @@ async function fetchFundPage(providerCode: string, securityId: string, force: bo
   const cached = pageCache.get(providerCode);
   if (!force && cached && cached.expiresAt > Date.now()) return { page: cached.value, cacheState: "memory" as const };
   try {
-    const response = await providerFetch(`https://fund.monex.co.jp/detail/${encodeURIComponent(providerCode)}`, {
+    const response = await fetch(`https://fund.monex.co.jp/detail/${encodeURIComponent(providerCode)}`, {
       cache: "no-store",
       headers: { Accept: "text/html", "User-Agent": USER_AGENT },
       signal: AbortSignal.timeout(20_000),

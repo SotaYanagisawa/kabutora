@@ -1,57 +1,73 @@
-import {MarketCoordinator as ProductionCoordinator} from "../lib/server/market/coordinator";
-import {readPublicResource} from "../lib/server/market/publisher";
-import type {MarketWorkerEnv} from "../lib/cloudflare-market-env";
-export class MarketCoordinator extends ProductionCoordinator {
- constructor(state:ConstructorParameters<typeof ProductionCoordinator>[0],env:MarketWorkerEnv) {
-  super(state,env);
-  // Exercise cache publication while acquisition is durably budget-deferred.
-  // This local fixture must never call a real market provider.
-  state.storage.sql.exec("INSERT INTO metadata VALUES ('provider:blockedUntil',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",String(Date.now()+86400000));
- }
+import { MarketCoordinator as ProductionCoordinator, marketStub, type MarketWorkerEnv } from "../lib/server/market-object";
+import { routeMarketRequest } from "../lib/server/market-router";
+
+/**
+ * Local-only harness for `pnpm test:worker`: the production router and Durable Object
+ * in workerd, with upstream providers replaced by a fake that adds real latency.
+ * Production worker-entry.ts never imports this module.
+ */
+const upstream = { calls: 0, fail: false, latencyMs: 80 };
+const HOSTS = new Set(["query1.finance.yahoo.com", "query2.finance.yahoo.com", "finance.yahoo.co.jp", "www.japannext.co.jp"]);
+const realFetch = globalThis.fetch.bind(globalThis);
+
+function spark(symbols: string[], days: number) {
+  const now = Math.floor(Date.now() / 1000);
+  const step = days === 1 ? 300 : 900;
+  const count = days === 1 ? 78 : 130;
+  return {
+    spark: {
+      result: symbols.map((symbol) => {
+        const timestamp = Array.from({ length: count }, (_, index) => now - 60 - (count - 1 - index) * step);
+        return {
+          symbol,
+          response: [{
+            meta: { regularMarketPrice: 100.125, regularMarketTime: now - 60, previousClose: 99, shortName: symbol, currentTradingPeriod: { regular: { start: now - 20_000, end: now + 3_600 } } },
+            timestamp,
+            indicators: { quote: [{ close: timestamp.map((_, index) => 100 + (index % 5) / 8) }] },
+          }],
+        };
+      }),
+    },
+  };
 }
-/** Local-only test entry; production worker-entry.ts never imports this module. */
+
+function chart() {
+  const start = Date.UTC(2018, 0, 2) / 1000;
+  const timestamp = Array.from({ length: 100 }, (_, index) => start + index * 30 * 86_400);
+  return { chart: { result: [{ meta: { currency: "USD", firstTradeDate: start }, timestamp, indicators: { quote: [{ close: timestamp.map(() => 100) }], adjclose: [{ adjclose: timestamp.map(() => 99) }] }, events: {} }] } };
+}
+
+globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = new URL(input instanceof Request ? input.url : String(input));
+  if (!HOSTS.has(url.hostname)) return realFetch(input, init);
+  upstream.calls += 1;
+  await new Promise((resolve) => setTimeout(resolve, upstream.latencyMs));
+  if (upstream.fail) throw new Error("synthetic_upstream_outage");
+  if (url.pathname === "/v7/finance/spark") return Response.json(spark(url.searchParams.get("symbols")!.split(","), url.searchParams.get("range") === "5d" ? 5 : 1));
+  if (url.pathname.startsWith("/v8/finance/chart/")) return Response.json(chart());
+  if (url.hostname === "finance.yahoo.co.jp") return new Response('"mainDomesticIndexPriceBoard":{"price":"3,000.5","changePriceRate":"+0.10","japanUpdateTime":"15:30"}');
+  return new Response('mdata[ 1 ] = [ "7203", "", "", "", "100", "101", "99", "100.5", "10.0" ];', { headers: { "Last-Modified": new Date(Date.now() - 30_000).toUTCString() } });
+};
+
+export class MarketCoordinator extends ProductionCoordinator {
+  async fetch(request: Request) {
+    const url = new URL(request.url);
+    if (url.pathname !== "/__upstream") return super.fetch(request);
+    if (url.searchParams.has("fail")) upstream.fail = url.searchParams.get("fail") === "1";
+    const calls = upstream.calls;
+    if (url.searchParams.has("reset")) upstream.calls = 0;
+    return Response.json({ calls });
+  }
+}
+
 export default {
- async fetch(request:Request,env:MarketWorkerEnv) {
-  if(!env.MARKET_DB || !env.MARKET_COORDINATOR) return new Response(null,{status:503});
-  const path=new URL(request.url).pathname;
-  if(path==="/__health") return new Response("local-runtime");
-  if(path==="/__seedmax" && request.method==="POST") {
-   const url=new URL(request.url), offset=Number(url.searchParams.get("offset") ?? 0), timestamp=new Date().toISOString();
-   const statements=[];
-   for(let i=offset;i<Math.min(200,offset+10);i++) {
-    const symbol=String(7000+i),id=`sec-${symbol}`;
-    const quote={securityId:id,symbol,exchangeMic:"XTKS",currency:"JPY",price:"100.125",marketTimestamp:timestamp,fetchedAt:timestamp,freshness:"delayed",provider:"synthetic-runtime",session:"regular",priceType:"delayed_last",venueCode:"TSE",validationStatus:"valid"};
-    const points=Array.from({length:2000},(_,j)=>({securityId:id,timestamp:new Date(Date.now()-(1999-j)*60000).toISOString(),price:"100.125",provider:"synthetic-runtime",session:"regular"}));
-    statements.push(env.MARKET_DB.prepare("INSERT INTO market_securities VALUES (?,?,?,'XTKS','JPY','TSE','stock',1,?,?,?)").bind(id,symbol,symbol,timestamp,timestamp,timestamp),
-     env.MARKET_DB.prepare("INSERT INTO market_quotes VALUES (?,?,?,?,'regular','delayed','valid',?)").bind(id,JSON.stringify(quote),timestamp,timestamp,timestamp),
-     env.MARKET_DB.prepare("INSERT INTO market_intraday VALUES (?,?,?,?,?)").bind(id,JSON.stringify(points),points[0].timestamp,points.at(-1)!.timestamp,timestamp),
-     env.MARKET_DB.prepare("INSERT INTO market_history_chunks VALUES (?,'2026-10',?,?)").bind(id,JSON.stringify([{securityId:id,date:"2026-10-01",close:"100.125",provider:"synthetic-runtime"}]),timestamp));
-   }
-   await env.MARKET_DB.batch(statements);return new Response(null,{status:204});
-  }
-  if(path==="/__seedframes" && request.method==="POST") {
-   const offset=Number(new URL(request.url).searchParams.get("offset") ?? 0), payload=JSON.stringify(Object.fromEntries(Array.from({length:200},(_,i)=>[String(7000+i),["99.125","10"]])));
-   const rows=Array.from({length:Math.min(100,1500-offset)},(_,j)=>{
-    const minute=new Date(Date.now()-(1499-offset-j)*60000).toISOString();return {minute,payload};
-   });
-   await env.MARKET_DB.prepare("INSERT INTO market_pts_frames SELECT 'synthetic-session','JNX_DAY',json_extract(value,'$.minute'),json_extract(value,'$.minute'),json_extract(value,'$.payload'),200,json_extract(value,'$.minute') FROM json_each(?)").bind(JSON.stringify(rows)).run();
-   return new Response(null,{status:204});
-  }
-  if(path==="/__seed" && request.method==="POST") {
-   const timestamp=new Date().toISOString();
-   const quote={securityId:"sec-us-aapl",symbol:"AAPL",exchangeMic:"XNAS",currency:"USD",price:"100.125",marketTimestamp:timestamp,fetchedAt:timestamp,freshness:"delayed",provider:"synthetic-runtime",session:"closed",priceType:"official_close",venueCode:"US",validationStatus:"valid"};
-   const bars=[{securityId:"sec-us-aapl",date:"2026-10-01",close:"100.125",provider:"synthetic-runtime"}];
-   await env.MARKET_DB.batch([
-    env.MARKET_DB.prepare("INSERT INTO market_securities VALUES ('sec-us-aapl','AAPL','AAPL','XNAS','USD','US','stock',1,?,?,?)").bind(timestamp,timestamp,timestamp),
-    env.MARKET_DB.prepare("INSERT INTO market_quotes VALUES ('sec-us-aapl',?,?,?,'closed','delayed','valid',?)").bind(JSON.stringify(quote),timestamp,timestamp,timestamp),
-    env.MARKET_DB.prepare("INSERT INTO market_history_chunks VALUES ('sec-us-aapl','2026-10',?,?)").bind(JSON.stringify(bars),timestamp),
-   ]);
-   return new Response(null,{status:204});
-  }
-  if(path==="/__wake") return env.MARKET_COORDINATOR.get(env.MARKET_COORDINATOR.idFromName("public-market-v2")).fetch("https://coordinator/wake");
-  if(path==="/__progress") return env.MARKET_COORDINATOR.get(env.MARKET_COORDINATOR.idFromName("public-market-v2")).fetch("https://coordinator/progress?runId=synthetic-runtime");
-  if(path==="/__status") return env.MARKET_COORDINATOR.get(env.MARKET_COORDINATOR.idFromName("public-market-v2")).fetch("https://coordinator/status");
-  if(path==="/data") return readPublicResource(env.MARKET_DB,request);
-  return new Response(null,{status:404});
- }
+  async fetch(request: Request, env: MarketWorkerEnv) {
+    const url = new URL(request.url);
+    if (url.pathname === "/__health") return new Response("local-runtime");
+    if (url.pathname === "/__upstream") return marketStub(env).fetch(`https://market/__upstream${url.search}`);
+    if (url.pathname === "/__tick") return marketStub(env).fetch("https://market/tick", { method: "POST" });
+    // Authenticated data paths, reached here without Firebase tokens.
+    if (url.pathname.startsWith("/__market/")) return marketStub(env).fetch(new Request(`https://kabutora.test/api/market/${url.pathname.slice(10)}${url.search}`, request));
+    return await routeMarketRequest(request, env) ?? new Response("not found", { status: 404 });
+  },
 };

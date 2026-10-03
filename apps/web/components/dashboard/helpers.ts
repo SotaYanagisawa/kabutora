@@ -5,14 +5,12 @@ import type {
   MarketQuote,
 } from "@kabutora/domain";
 import type { PortfolioNotification } from "../../lib/portfolio-notifications";
-import type { MarketSessionStatus } from "../../lib/market-session";
 import { calendarDateLabelJa } from "../../lib/calendar-time";
 import { compactNumber } from "../../lib/compact-number";
 import { exchangeTimeZone, exchangeTimeZoneCode, marketDateTimeLabel } from "../../lib/chart-presentation";
 import { mergePortfolioNotifications } from "../../lib/portfolio-notifications";
 import { convertAmount, validUsdJpy } from "../../lib/money-conversion";
 export { convertAmount, validUsdJpy };
-import { Decimal } from "@kabutora/domain";
 import { freshnessLabel, notificationTypes } from "./constants";
 import type {
   CustomDateRange,
@@ -83,20 +81,6 @@ export function resilientBrowserStorage(kind: "localStorage" | "sessionStorage" 
 
 export const safeLocalStorage = resilientBrowserStorage("localStorage");
 export const safeSessionStorage = resilientBrowserStorage("sessionStorage");
-
-export async function pooledClientMap<T, R>(items: T[], concurrency: number, task: (item: T) => Promise<R>) {
-  const result = new Array<R>(items.length);
-  let cursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-      while (cursor < items.length) {
-        const index = cursor++;
-        result[index] = await task(items[index]);
-      }
-    }),
-  );
-  return result;
-}
 
 export function filterDatedHistory<T extends { date: string }>(
   points: T[],
@@ -383,14 +367,6 @@ export function mergeDistributionEvents(...groups: DistributionEvent[][]) {
     const rightDate = right.paymentDate ?? right.exDate ?? right.recordDate ?? "";
     return leftDate === rightDate ? left.id.localeCompare(right.id) : leftDate.localeCompare(rightDate);
   });
-}
-
-export function latestMarketSessions(responses: Array<{ payload: { marketSessions?: MarketSessionStatus[] } }>) {
-  for (let index = responses.length - 1; index >= 0; index -= 1) {
-    const sessions = responses[index].payload.marketSessions;
-    if (sessions?.length) return sessions;
-  }
-  return null;
 }
 
 export function quoteTradeSourceLabel(quote: MarketQuote) {

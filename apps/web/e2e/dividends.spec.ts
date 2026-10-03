@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "./strict-fixture";
+import { mockMarket } from "./market-fixture";
 import { resolve as resolvePath } from "node:path";
 
 const generatedAt = new Date().toISOString();
@@ -9,99 +10,63 @@ async function openDividendFixture(page: Page, { largeDividend = false }: { larg
     path: resolvePath(process.cwd(), "apps/web/data/demo-seed.json"),
     contentType: "application/json",
   }));
-  await page.route("**/api/market/quotes", async (route) => {
-    const request = route.request().postDataJSON() as { securityIds?: string };
-    const ids = request.securityIds?.split(",").filter(Boolean) ?? [];
-    await route.fulfill({ json: {
-      generatedAt,
-      marketSessions: [],
-      quotes: ids.flatMap((securityId) => {
-        if (securityId === "sec-7203-xtks") return [{ securityId, symbol: "7203", exchangeMic: "XTKS", currency: "JPY", price: "3000", previousRegularClose: "2950", marketTimestamp: generatedAt, fetchedAt: generatedAt, freshness: "cached", provider: "fixture", session: "closed", priceType: "official_close", venueCode: "TSE", validationStatus: "valid" }];
-        if (securityId === "sec-us-aapl-xnas") return [{ securityId, symbol: "AAPL", exchangeMic: "XNAS", currency: "USD", price: "220", previousRegularClose: "218", marketTimestamp: generatedAt, fetchedAt: generatedAt, freshness: "cached", provider: "fixture", session: "closed", priceType: "official_close", venueCode: "US", validationStatus: "valid" }];
-        return [];
-      }),
-      intraday: ids.flatMap((securityId) => securityId.startsWith("sec-fx-") ? [] : [
-        { securityId, timestamp: firstIntradayAt, price: securityId.includes("aapl") ? "218" : "2950", provider: "fixture" },
-        { securityId, timestamp: generatedAt, price: securityId.includes("aapl") ? "220" : "3000", provider: "fixture" },
-      ]), failures: [],
-      coverage: { requested: ids.length, returned: ids.length, fresh: 0, stale: 0, suspect: 0 },
-    } });
-  });
-  await page.route("**/api/market/history", async (route) => {
-    const request = route.request().postDataJSON() as { securityIds?: string; from?: string };
-    const ids = request.securityIds?.split(",").filter(Boolean) ?? [];
-    if (request.from && request.from < "2025-04-01") {
-      await route.fulfill({ status: 500, json: { message: "Pre-purchase dividends must not expand FX or price-history requirements" } });
-      return;
-    }
-    await route.fulfill({ json: {
-      generatedAt,
-      marketSessions: [],
-      bars: ids.flatMap((securityId) => [
-        { securityId, date: "2025-04-01", close: securityId === "sec-fx-usdjpy" ? "150" : "100", provider: "fixture" },
-        { securityId, date: "2026-08-31", close: securityId === "sec-fx-usdjpy" ? "150" : "120", provider: "fixture" },
-      ]),
-      corporateActions: [],
-      inceptionDates: {}, failures: [],
-      coverage: { requested: ids.length, returned: ids.length },
-    } });
-  });
-  await page.route("**/api/market/distributions", async (route) => {
-    const request = route.request().postDataJSON() as { securityIds?: string };
-    const ids = request.securityIds?.split(",").filter(Boolean) ?? [];
-    const hasToyota = ids.some((id) => id === "sec-7203" || id === "sec-7203-xtks");
-    const hasApple = ids.some((id) => id === "sec-us-aapl" || id === "sec-us-aapl-xnas");
-    await route.fulfill({ json: {
-      generatedAt,
-      distributions: [
-        ...(hasToyota ? [{
-          id: "sec-7203-xtks-cash_dividend-20260327",
-          securityId: "sec-7203-xtks",
-          type: "CASH_DIVIDEND" as const,
-          exDate: "2026-03-27",
-          amountPerUnit: largeDividend ? "98765432100" : "30",
-          distributionUnit: "1",
-          currency: "JPY",
-          sourceProvider: "fixture_reported",
-          confidence: "reported" as const,
-          status: "estimated" as const,
-        }] : []),
-        ...(hasApple ? [{
-          id: "sec-us-aapl-xnas-cash_dividend-20260515",
-          securityId: "sec-us-aapl-xnas",
-          type: "CASH_DIVIDEND" as const,
-          exDate: "2026-05-15",
-          amountPerUnit: "0.25",
-          distributionUnit: "1",
-          currency: "USD",
-          sourceProvider: "fixture_reported",
-          confidence: "reported" as const,
-          status: "estimated" as const,
-        }] : []),
-        ...(hasApple ? [{
-          id: "sec-us-aapl-xnas-cash_dividend-20200101",
-          securityId: "sec-us-aapl-xnas",
-          type: "CASH_DIVIDEND" as const,
-          exDate: "2020-01-01",
-          amountPerUnit: "0.20",
-          distributionUnit: "1",
-          currency: "USD",
-          sourceProvider: "fixture_reported",
-          confidence: "reported" as const,
-          status: "paid" as const,
-        }] : []),
-      ],
-      corporateActions: [],
-      coverage: ids.map((securityId) => ({ securityId, coveredFrom: "2000-01-01", checkedThrough: "2026-08-31", checkedAt: generatedAt, eventCount: securityId.startsWith("sec-7203") ? 1 : 2, status: "ready", sourceProvider: "fixture_reported" })),
-      failures: [],
-    } });
-  });
-  await page.route("**/api/market/benchmarks**", (route) => route.fulfill({ json: {
+  const ids = ["sec-7203-xtks", "sec-us-aapl-xnas"];
+  await mockMarket(page, {
     generatedAt,
-    marketSessions: [],
+    quotes: [
+      { securityId: "sec-7203-xtks", symbol: "7203", exchangeMic: "XTKS", currency: "JPY", price: "3000", previousRegularClose: "2950", marketTimestamp: generatedAt, fetchedAt: generatedAt, freshness: "cached", provider: "fixture", session: "closed", priceType: "official_close", venueCode: "TSE", validationStatus: "valid" },
+      { securityId: "sec-us-aapl-xnas", symbol: "AAPL", exchangeMic: "XNAS", currency: "USD", price: "220", previousRegularClose: "218", marketTimestamp: generatedAt, fetchedAt: generatedAt, freshness: "cached", provider: "fixture", session: "closed", priceType: "official_close", venueCode: "US", validationStatus: "valid" },
+    ],
+    intraday: ids.flatMap((securityId) => [
+      { securityId, timestamp: firstIntradayAt, price: securityId.includes("aapl") ? "218" : "2950", provider: "fixture" },
+      { securityId, timestamp: generatedAt, price: securityId.includes("aapl") ? "220" : "3000", provider: "fixture" },
+    ]),
     benchmarks: [{ id: "usd-jpy", label: "USD/JPY", symbol: "JPY=X", value: 150, changeRatio: 0, marketTimestamp: generatedAt, freshness: "cached", fetchedAt: generatedAt }],
-    failures: [],
-  } }));
+    // Only the earliest purchase year may leave the device; pre-purchase dividends must not widen it.
+    bars: (from) => from < "2025-01-01" ? null : [...ids, "sec-fx-usdjpy"].flatMap((securityId) => [
+      { securityId, date: "2025-04-01", close: securityId === "sec-fx-usdjpy" ? "150" : "100", provider: "fixture" },
+      { securityId, date: "2026-08-31", close: securityId === "sec-fx-usdjpy" ? "150" : "120", provider: "fixture" },
+    ]),
+    distributions: [
+      {
+        id: "sec-7203-xtks-cash_dividend-20260327",
+        securityId: "sec-7203-xtks",
+        type: "CASH_DIVIDEND",
+        exDate: "2026-03-27",
+        amountPerUnit: largeDividend ? "98765432100" : "30",
+        distributionUnit: "1",
+        currency: "JPY",
+        sourceProvider: "fixture_reported",
+        confidence: "reported",
+        status: "estimated",
+      },
+      {
+        id: "sec-us-aapl-xnas-cash_dividend-20260515",
+        securityId: "sec-us-aapl-xnas",
+        type: "CASH_DIVIDEND",
+        exDate: "2026-05-15",
+        amountPerUnit: "0.25",
+        distributionUnit: "1",
+        currency: "USD",
+        sourceProvider: "fixture_reported",
+        confidence: "reported",
+        status: "estimated",
+      },
+      {
+        id: "sec-us-aapl-xnas-cash_dividend-20200101",
+        securityId: "sec-us-aapl-xnas",
+        type: "CASH_DIVIDEND",
+        exDate: "2020-01-01",
+        amountPerUnit: "0.20",
+        distributionUnit: "1",
+        currency: "USD",
+        sourceProvider: "fixture_reported",
+        confidence: "reported",
+        status: "paid",
+      },
+    ],
+    coverage: ["sec-7203", "sec-us-aapl"].map((securityId) => ({ securityId, coveredFrom: "2000-01-01", checkedThrough: "2026-08-31", checkedAt: generatedAt, eventCount: securityId === "sec-7203" ? 1 : 2, status: "ready", sourceProvider: "fixture_reported" })),
+  });
   await page.goto("/");
   await expect(page.getByRole("button", { name: /^配当(?:金)?$/u })).toBeVisible({ timeout: 20_000 });
 }

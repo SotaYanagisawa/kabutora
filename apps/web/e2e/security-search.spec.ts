@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "./strict-fixture";
+import { mockMarket } from "./market-fixture";
 import { resolve as resolvePath } from "node:path";
 
 type SearchResult = {
@@ -42,30 +43,7 @@ async function waitForApp(page: Page) {
     path: resolvePath(process.cwd(), "apps/web/data/demo-seed.json"),
     contentType: "application/json",
   }));
-  await page.route("**/api/market/quotes", (route) => route.fulfill({
-    json: {
-      generatedAt,
-      marketSessions: [],
-      quotes: [],
-      intraday: [],
-      failures: [],
-      coverage: { requested: 0, returned: 0, fresh: 0, stale: 0, suspect: 0 },
-    },
-  }));
-  await page.route("**/api/market/history", (route) => route.fulfill({
-    json: {
-      generatedAt,
-      marketSessions: [],
-      bars: [],
-      corporateActions: [],
-      inceptionDates: {},
-      failures: [],
-      coverage: { requested: 0, returned: 0 },
-    },
-  }));
-  await page.route("**/api/market/benchmarks**", (route) => route.fulfill({
-    json: { generatedAt, marketSessions: [], benchmarks: [], failures: [] },
-  }));
+  await mockMarket(page, { generatedAt });
   await page.goto("/");
   await expect(page.getByRole("button", { name: /^(検索|銘柄検索)$/u })).toBeVisible({ timeout: 20_000 });
 }

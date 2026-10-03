@@ -39,9 +39,6 @@ importers:
       '@kabutora/domain':
         specifier: workspace:*
         version: link:../../packages/domain
-      '@kabutora/market-data':
-        specifier: workspace:*
-        version: link:../../packages/market-data
       '@noble/hashes':
         specifier: ^2.3.0
         version: 2.3.0
@@ -85,8 +82,6 @@ importers:
       decimal.js:
         specifier: ^10.6.0
         version: 10.6.0
-
-  packages/market-data: {}
 
 packages:
 

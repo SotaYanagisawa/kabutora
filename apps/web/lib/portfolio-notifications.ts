@@ -1,4 +1,4 @@
-import { Decimal, calculateAverageCostPortfolio, type CorporateAction, type IntradayBar, type LedgerTransaction, type MarketBar, type MarketQuote } from "@kabutora/domain";
+import { Decimal, calculateAverageCostPortfolio, canonicalDomainSecurityId, type CorporateAction, type IntradayBar, type LedgerTransaction, type MarketBar, type MarketQuote } from "@kabutora/domain";
 
 export type ExternalMarketNotice = {
   id: string;
@@ -153,6 +153,13 @@ function currentPriceNotifications(
   priceMoveThreshold: number = US_PRICE_MOVE_THRESHOLD,
 ) {
   const threshold = Number.isFinite(priceMoveThreshold) && priceMoveThreshold > 0 ? priceMoveThreshold : US_PRICE_MOVE_THRESHOLD;
+  // Group once: market data uses canonical ids, holdings may use exchange-qualified ids.
+  const intradayBySecurity = new Map<string, IntradayBar[]>();
+  for (const bar of intradayBars) {
+    const key = canonicalDomainSecurityId(bar.securityId);
+    const bars = intradayBySecurity.get(key);
+    if (bars) bars.push(bar); else intradayBySecurity.set(key, [bar]);
+  }
   return securities.flatMap((security): PortfolioNotification[] => {
     if (security.exchangeMic !== "XTKS" && !["XNAS", "XNYS", "ARCX", "XASE", "BATS", "OTCM"].includes(security.exchangeMic)) return [];
     if (!security.quote?.previousRegularClose) return [];
@@ -167,7 +174,7 @@ function currentPriceNotifications(
     if (factor !== 1 && Math.abs(current / previous - 1) > 0.35) {
       previous = previous / factor;
     }
-    const securityIntraday = intradayBars.filter((bar) => bar.securityId === security.id && bar.timestamp.slice(0, 10) === quoteDate);
+    const securityIntraday = (intradayBySecurity.get(canonicalDomainSecurityId(security.id)) ?? []).filter((bar) => bar.timestamp.slice(0, 10) === quoteDate);
     if (security.exchangeMic === "XTKS") {
       const width = tseDailyPriceLimit(previous);
       const upper = previous + width;
