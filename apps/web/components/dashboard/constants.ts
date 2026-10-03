@@ -1,7 +1,7 @@
 import corporateActionSeed from "../../data/corporate-actions.json";
 import marketNoticeSeed from "../../data/market-notices.json";
 import type { CorporateAction, MarketQuote } from "@kabutora/domain";
-import type { ExternalMarketNotice, PortfolioNotification } from "../../lib/portfolio-notifications";
+import type { ExternalMarketNotice, PortfolioNotification } from "../../lib/portfolio/portfolio-notifications";
 import {
   Bell,
   Coins,
@@ -22,7 +22,6 @@ export const NAV_ITEMS: Array<{ id: View; label: string; shortLabel: string; ico
 ];
 
 export const MOBILE_NAV_ITEMS = NAV_ITEMS;
-export const DESKTOP_TOUCH_NAVIGATION_ORDER = NAV_ITEMS.map((item) => item.id);
 export const MOBILE_TOUCH_NAVIGATION_ORDER = MOBILE_NAV_ITEMS.map((item) => item.id);
 export const MOBILE_VIEW_INDEX: Record<string, number> = {
   activity: 0,
@@ -41,13 +40,8 @@ export const HISTORY_NETWORK_REVALIDATE_MS = 6 * 60 * 60 * 1000;
 export const HISTORY_INTEGRITY_CHECK_MS = 15 * 60 * 1000;
 export const PULL_REFRESH_THRESHOLD = 64;
 export const PULL_REFRESH_MAX = 100;
-export const PULL_REFRESH_HOLD_HEIGHT = 56;
 export const TOUCH_NAVIGATION_LOCK_PX = 12;
-export const SWIPE_SETTLE_MS = 220;
 export const MOBILE_LAYOUT_QUERY = "(max-width: 840px), (max-height: 500px) and (orientation: landscape)";
-export const motionDuration = (duration: number) =>
-  typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 20 : duration;
-
 export const PERFORMANCE_DERIVATION_VERSION = "market-value-v5-separated-dividends";
 export const FX_SECURITY_ID = "sec-fx-usdjpy";
 export const MARKET_CACHE_KEY = "market-v8";

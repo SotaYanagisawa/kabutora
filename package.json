@@ -13,7 +13,7 @@
     "test": "vitest run",
     "test:fast": "vitest run --exclude '**/vault-crypto.test.ts'",
     "test:domain": "vitest run packages/domain",
-    "test:market": "vitest run apps/web/lib/server apps/web/lib/market-client.test.ts",
+    "test:market": "vitest run apps/web/lib/server apps/web/lib/market/market-client.test.ts",
     "test:worker": "node scripts/test-market-runtime.mjs",
     "test:e2e:search": "playwright test apps/web/e2e/security-search.spec.ts",
     "test:rules": "firebase emulators:exec --only firestore --project demo-kabutora-security-rules \"node firebase/firestore-rules.mjs\"",

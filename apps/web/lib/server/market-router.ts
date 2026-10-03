@@ -1,4 +1,4 @@
-import { authorizeMarketRequest, unauthorizedResponse } from "../server-auth";
+import { authorizeMarketRequest, unauthorizedResponse } from "./server-auth";
 import { searchSecurities } from "./market-search";
 import { marketStub, type MarketWorkerEnv } from "./market-object";
 

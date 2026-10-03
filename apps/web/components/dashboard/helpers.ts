@@ -1,24 +1,13 @@
-import type {
-  CorporateAction,
-  DistributionEvent,
-  IntradayBar,
-  MarketQuote,
-} from "@kabutora/domain";
-import type { PortfolioNotification } from "../../lib/portfolio-notifications";
-import { calendarDateLabelJa } from "../../lib/calendar-time";
-import { compactNumber } from "../../lib/compact-number";
-import { exchangeTimeZone, exchangeTimeZoneCode, marketDateTimeLabel } from "../../lib/chart-presentation";
-import { mergePortfolioNotifications } from "../../lib/portfolio-notifications";
-import { convertAmount, validUsdJpy } from "../../lib/money-conversion";
+import type { CorporateAction, DistributionEvent, IntradayBar, MarketQuote } from "@kabutora/domain";
+import type { PortfolioNotification } from "../../lib/portfolio/portfolio-notifications";
+import { calendarDateLabelJa } from "../../lib/ui/calendar-time";
+import { compactNumber } from "../../lib/ui/compact-number";
+import { exchangeTimeZone, exchangeTimeZoneCode } from "../../lib/charts/chart-presentation";
+import { mergePortfolioNotifications } from "../../lib/portfolio/portfolio-notifications";
+import { convertAmount, validUsdJpy } from "../../lib/portfolio/money-conversion";
+import { notificationTypes } from "./constants";
+import type { CustomDateRange, DisplayCurrency, PackedIntradaySeries, RangeKey, Seed } from "./types";
 export { convertAmount, validUsdJpy };
-import { freshnessLabel, notificationTypes } from "./constants";
-import type {
-  CustomDateRange,
-  DisplayCurrency,
-  PackedIntradaySeries,
-  RangeKey,
-  Seed,
-} from "./types";
 
 export function resilientBrowserStorage(kind: "localStorage" | "sessionStorage" | "memory", prefix = ""): Storage {
   const backing = new Map<string, string>();
@@ -80,8 +69,6 @@ export function resilientBrowserStorage(kind: "localStorage" | "sessionStorage" 
 }
 
 export const safeLocalStorage = resilientBrowserStorage("localStorage");
-export const safeSessionStorage = resilientBrowserStorage("sessionStorage");
-
 export function filterDatedHistory<T extends { date: string }>(
   points: T[],
   range: RangeKey,
@@ -385,13 +372,4 @@ export function quoteTradeSourceLabel(quote: MarketQuote) {
     : quote.priceType === "official_close"
     ? "終値"
     : "最終約定";
-}
-
-export function quoteTimestampLabel(quote: MarketQuote & { exchangeMic?: string }, timeZone?: string) {
-  return `取得 ${shortDateTimeJa(quote.fetchedAt)}（端末） · ${quoteTradeSourceLabel(quote)} ${marketDateTimeLabel(quote.marketTimestamp, quote.exchangeMic, timeZone)}（市場現地） · ${freshnessLabel[quote.freshness]}`;
-}
-
-export function tickerQuoteTimestampLabel(quote: MarketQuote & { exchangeMic?: string }, timeZone?: string) {
-  const freshness = quote.freshness === "near_live" ? "" : ` · ${freshnessLabel[quote.freshness]}`;
-  return `取得 ${shortDateTimeJa(quote.fetchedAt)}（端末） · ${quoteTradeSourceLabel(quote)} ${marketDateTimeLabel(quote.marketTimestamp, quote.exchangeMic, timeZone)}（市場現地）${freshness}`;
 }

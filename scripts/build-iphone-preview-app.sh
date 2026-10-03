@@ -51,7 +51,7 @@ cp -R "$KABUTORA_WEB/public" "$KABUTORA_PACKAGED_WEB/public"
 cp -R "$KABUTORA_WEB/.next/static" "$KABUTORA_PACKAGED_WEB/.next/static"
 
 cp "$KABUTORA_ROOT/scripts/macos/iPhonePreview-Info.plist" "$KABUTORA_STAGE_APP/Contents/Info.plist"
-"$KABUTORA_RUNTIME" "$KABUTORA_ROOT/scripts/render-icon.mjs" "$KABUTORA_WEB/public/icon.svg" "$KABUTORA_STAGE_APP/Contents/Resources/Kabutora.png"
+"$KABUTORA_RUNTIME" "$KABUTORA_ROOT/scripts/render-icon.mjs" "$KABUTORA_ROOT/scripts/macos/app-icon.png" "$KABUTORA_STAGE_APP/Contents/Resources/Kabutora.png"
 
 if [[ -e "$KABUTORA_APP" ]]; then
   mv "$KABUTORA_APP" "$KABUTORA_STAGE/previous-preview.app"

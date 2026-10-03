@@ -1,19 +1,11 @@
 import { memo, useState } from "react";
-import type { IntradayBar, MarketBar } from "@kabutora/domain";
-import type { MarketSessionStatus } from "@/lib/market-session";
-import { shiftCalendarMonths } from "@/lib/calendar-time";
-import type { PortfolioFilter } from "@/lib/portfolio-filter";
+import type { MarketSessionStatus } from "@/lib/market/market-session";
+import { shiftCalendarMonths } from "@/lib/ui/calendar-time";
+import type { PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
 import { AlertTriangle, CalendarDays, Eye, EyeOff, X } from "lucide-react";
 import { AllocationChart, PortfolioChart } from "./charts";
 import { HIDDEN_AMOUNT, PORTFOLIO_RANGES, rangeLabel } from "./constants";
-import {
-  benchmarkNumber,
-  compactMoney,
-  formatDayGainMoney,
-  fxNumber,
-  maybeMoney,
-  signedPercent,
-} from "./helpers";
+import { benchmarkNumber, compactMoney, formatDayGainMoney, fxNumber, maybeMoney, signedPercent } from "./helpers";
 import { HoldingsTable } from "./holdings-table";
 import { MarketSessionIndicator } from "./market-session-indicator";
 import type {
@@ -165,28 +157,7 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
       <div className="market-tape-track">{[0, 1, 2, 3].map(tapeSet)}</div>
     </section>
   );
-}
-
-export function InlineMetric({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd className={tone}>{value}</dd>
-    </div>
-  );
-}
-
-export function Metric({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: string }) {
-  return (
-    <article>
-      <span>{label}</span>
-      <strong className={tone}>{value}</strong>
-      {sub && <small className={tone}>{sub}</small>}
-    </article>
-  );
-}
-
-export function Overview({
+}export function Overview({
   totalValue,
   dayGain,
   dayReturn,
@@ -203,16 +174,12 @@ export function Overview({
   dataReconciled,
   benchmarks,
   benchmarkStatus,
-  valuationComplete,
-  calculationPending = false,
   fxEstimated = false,
   range,
   setRange,
   customRange,
   setCustomRange,
   dateBounds,
-  intradayBySecurity,
-  dailyHistoryBySecurity,
   marketFilter,
   setMarketFilter,
   brokerFilter,
@@ -226,7 +193,6 @@ export function Overview({
   fxReady,
   amountsVisible,
   setAmountsVisible,
-  currentTime,
 }: {
   totalValue: number | null;
   dayGain: number | null;
@@ -244,16 +210,12 @@ export function Overview({
   dataReconciled: boolean;
   benchmarks: Benchmark[];
   benchmarkStatus: MarketStatus;
-  valuationComplete: boolean;
-  calculationPending?: boolean;
   fxEstimated?: boolean;
   range: RangeKey;
   setRange: (range: RangeKey) => void;
   customRange: CustomDateRange | null;
   setCustomRange: (customRange: CustomDateRange | null) => void;
   dateBounds: { min: string; max: string };
-  intradayBySecurity?: Map<string, IntradayBar[]>;
-  dailyHistoryBySecurity?: Map<string, MarketBar[]>;
   marketFilter: PortfolioFilter;
   setMarketFilter: (marketFilter: PortfolioFilter) => void;
   brokerFilter: string;
@@ -267,7 +229,6 @@ export function Overview({
   fxReady: boolean;
   amountsVisible: boolean;
   setAmountsVisible: (visible: boolean) => void;
-  currentTime?: number | null;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [chartValueMode, setChartValueMode] = useState<"market" | "dividendAdjusted">("market");
@@ -481,18 +442,7 @@ export function Overview({
 
         {!isExpanded && (
           <section className="daily-holdings" aria-label={`保有銘柄 ${holdings.length}件`}>
-            <HoldingsTable
-              holdings={holdings}
-              totalValue={effectiveTotalValue}
-              intradayBySecurity={intradayBySecurity}
-              dailyHistoryBySecurity={dailyHistoryBySecurity}
-              marketFilter={marketFilter}
-              dense
-              onSelect={onSelectSecurity}
-              currency={currency}
-              amountsVisible={amountsVisible}
-              currentTime={currentTime}
-            />
+            <HoldingsTable holdings={holdings} dense onSelect={onSelectSecurity} currency={currency} amountsVisible={amountsVisible} />
           </section>
         )}
 

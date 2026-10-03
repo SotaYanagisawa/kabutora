@@ -1,6 +1,6 @@
 "use client";
 
-import { CLIENT_BUILD_ID, isReleaseMismatchError, reloadClient, repairClientShell } from "@/lib/client-recovery";
+import { CLIENT_BUILD_ID, isReleaseMismatchError, reloadClient, repairClientShell } from "@/lib/ui/client-recovery";
 
 export default function GlobalError({ error }: { error: Error & { digest?: string } }) {
   const mismatch = isReleaseMismatchError(error);

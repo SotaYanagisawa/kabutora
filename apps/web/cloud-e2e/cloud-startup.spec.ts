@@ -2,7 +2,7 @@ import { test, expect, type Page } from "../e2e/strict-fixture";
 import type { Request as BrowserRequest } from "@playwright/test";
 import { initializeTestEnvironment } from "@firebase/rules-unit-testing";
 import { doc, getDoc, setDoc } from "firebase/firestore";
-import { createEncryptedVault, createGoogleProtectedVault, createRecoveryVault, decryptVaultWithDataKey } from "../lib/vault-crypto";
+import { createEncryptedVault, createGoogleProtectedVault, createRecoveryVault } from "../lib/vault/vault-crypto";
 import demo from "../data/demo-seed.json";
 import { readFile } from "node:fs/promises";
 import { mockMarket, type MarketFixture } from "../e2e/market-fixture";
@@ -195,7 +195,7 @@ test("verified migration removes the usable cloud key and preserves the encrypte
       expect((await getDoc(doc(db, "users", uid, "keys", "google-account"))).exists()).toBe(false);
       const vault = (await getDoc(doc(db, "users", uid, "vaults", "default"))).data();
       expect(vault?.version).toBe(2);
-      const { unlockVaultWithRecoveryKey } = await import("../lib/vault-crypto");
+      const { unlockVaultWithRecoveryKey } = await import("../lib/vault/vault-crypto");
       const unlocked = await unlockVaultWithRecoveryKey<typeof demo>(vault as any, key);
       expect(unlocked.data.transactions).toEqual(demo.transactions);
       activatedRawKey = unlocked.accountKey;
@@ -362,7 +362,7 @@ test("restoring a legacy encrypted backup activates a verified fresh generation"
     await environment.withSecurityRulesDisabled(async (context) => {
       const vault = (await getDoc(doc(context.firestore(), "users", uid, "vaults", "default"))).data();
       expect(vault?.keyId).not.toBe(created.envelope.keyId);
-      const { unlockVaultWithRecoveryKey } = await import("../lib/vault-crypto");
+      const { unlockVaultWithRecoveryKey } = await import("../lib/vault/vault-crypto");
       const unlocked = await unlockVaultWithRecoveryKey<typeof restoredSeed>(vault as any, recovery);
       expect(unlocked.data.accounts).toEqual(restoredSeed.accounts);
       expect(unlocked.data.transactions).toEqual(restoredSeed.transactions);

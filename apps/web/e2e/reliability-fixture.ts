@@ -17,7 +17,7 @@ export function syntheticPortfolio(securityCount = 20, transactionCount = 1000, 
     const date = dates[us ? days - 80 + Math.floor(index / securityCount) % 60 : Math.floor(index / securityCount) % (days - 1)];
     return { ...demo.transactions[us ? 1 : 0], id: `synthetic-trade-${index}`, securityId: security.id, tradeDate: date, quantity: "0.125", pricePerShare: us ? "20.12" : "1000.12", grossAmount: new Decimal("0.125").mul(us ? "20.12" : "1000.12").toString(), original: { ...demo.transactions[us ? 1 : 0].original, broker: accounts[us ? 1 : 0].broker, row: index + 1 } };
   });
-  const bars: MarketBar[] = securities.flatMap((security, index) => dates.map((date, day) => ({ securityId: security.id, date, close: new Decimal(security.currency === "USD" ? "20.12" : "1000.12").plus(new Decimal(day % 21).div(10)).toString(), provider: "synthetic" })));
+  const bars: MarketBar[] = securities.flatMap((security) => dates.map((date, day) => ({ securityId: security.id, date, close: new Decimal(security.currency === "USD" ? "20.12" : "1000.12").plus(new Decimal(day % 21).div(10)).toString(), provider: "synthetic" })));
   for (const date of dates) bars.push({ securityId: "sec-fx-usdjpy", date, close: "150.123", provider: "synthetic" });
   const generatedAt = new Date().toISOString();
   const quotes = [

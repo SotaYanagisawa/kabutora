@@ -7,18 +7,17 @@ import {
   type CorporateAction,
   type MarketBar,
 } from "@kabutora/domain";
-import type { PortfolioNotification } from "@/lib/portfolio-notifications";
-import { localDateInputValue } from "@/lib/calendar-time";
-import { marketDateKey, marketDateTimeLabel, marketSessionDateKey, sanitizeDatedPoints } from "@/lib/chart-presentation";
-import { marketDisplayName } from "@/lib/market-label";
-import { isUsSecurity } from "@/lib/portfolio-filter";
-import { ArrowLeft, ChevronRight, Pencil, Trash2 } from "lucide-react";
+import type { PortfolioNotification } from "@/lib/portfolio/portfolio-notifications";
+import { localDateInputValue } from "@/lib/ui/calendar-time";
+import { marketDateTimeLabel, marketSessionDateKey, sanitizeDatedPoints } from "@/lib/charts/chart-presentation";
+import { marketDisplayName } from "@/lib/market/market-label";
+import { isUsSecurity } from "@/lib/portfolio/portfolio-filter";
+import { ArrowLeft } from "lucide-react";
 import { Ledger } from "./activity-view";
 import { PortfolioChart, StockPriceChart } from "./charts";
 import { freshnessLabel, HIDDEN_AMOUNT } from "./constants";
 import {
   compactMoney,
-  dateJa,
   filterDatedHistory,
   isFundSecurity,
   isIndexSecurity,

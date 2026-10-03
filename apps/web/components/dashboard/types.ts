@@ -7,16 +7,10 @@ import type {
   MarketBar,
   PortfolioSummary,
 } from "@kabutora/domain";
-import type { PortfolioNotification } from "@/lib/portfolio-notifications";
-import type { HistoryQuality, PackedHistorySeries } from "@/lib/market-history";
-import type {
-  DistributionCoverage,
-  MarketDistributionBatchResult,
-  ServerBenchmark,
-  ServerMarketSnapshot,
-  ServerRemoteQuote,
-} from "@/lib/server-market-types";
-import type { MarketSessionStatus } from "@/lib/market-session";
+import type { PortfolioNotification } from "@/lib/portfolio/portfolio-notifications";
+import type { PackedHistorySeries } from "@/lib/market/market-history";
+import type { DistributionCoverage, ServerBenchmark, ServerMarketSnapshot, ServerRemoteQuote } from "@/lib/market/market-api-types";
+import type { MarketSessionStatus } from "@/lib/market/market-session";
 
 export type Seed = {
   portfolio: { id: string; name: string; baseCurrency: string; defaultCostBasisMethod: string };
@@ -178,8 +172,6 @@ export type TouchGesture = {
   pullEnabled: boolean;
   swipeBlocked: boolean;
 };
-
-export type SwipePhase = "idle" | "dragging" | "settling";
 export type DataSecurityAction = "encrypted-backup" | "export-csv" | "export-json" | "logout";
 
 export type DashboardProps = {
@@ -198,7 +190,6 @@ export type DashboardProps = {
   onRestoreBackup?: (file: File) => void;
   allowPlaintextExport?: boolean;
   allowPersistentMarketCache?: boolean;
-  onLock?: () => Promise<void> | void;
   onLogout?: () => Promise<void> | void;
   onStartupReady?: () => void;
 };

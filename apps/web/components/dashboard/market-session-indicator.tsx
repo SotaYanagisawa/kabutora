@@ -1,4 +1,4 @@
-import type { MarketSessionStatus } from "@/lib/market-session";
+import type { MarketSessionStatus } from "@/lib/market/market-session";
 import type { MarketStatus } from "./types";
 
 export function MarketSessionIndicator({ sessions, quoteStatus }: { sessions: MarketSessionStatus[]; quoteStatus: MarketStatus }) {

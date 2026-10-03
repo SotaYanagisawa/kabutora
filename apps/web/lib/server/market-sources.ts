@@ -1,11 +1,11 @@
 import { Decimal, type CorporateAction, type DistributionEvent, type MarketBar, type MarketQuote } from "@kabutora/domain";
-import { getMonexForeignFundHistory, getMonexForeignFundQuoteBundle } from "../monex-foreign-fund";
-import { getYahooJapanFundDistributions, getYahooJapanFundHistory, getYahooJapanFundQuoteBundle } from "../yahoo-japan-fund";
-import { getYahooHistory, tokyoMarketTimestamp } from "../yahoo-market";
-import { JAPANNEXT_PTS_URLS, parseJapannextPtsSource, type JapannextPtsWindow } from "../japannext-pts";
-import { inspectMarketHistory } from "../market-history";
-import type { RequestedSecurity } from "../market-security";
-import type { DistributionCoverage, ServerBenchmark, ServerRemoteQuote } from "../server-market-types";
+import { getMonexForeignFundHistory, getMonexForeignFundQuoteBundle } from "./providers/monex-foreign-fund";
+import { getYahooJapanFundDistributions, getYahooJapanFundHistory, getYahooJapanFundQuoteBundle } from "./providers/yahoo-japan-fund";
+import { getYahooHistory, tokyoMarketTimestamp } from "./providers/yahoo-market";
+import { JAPANNEXT_PTS_URLS, parseJapannextPtsSource, type JapannextPtsWindow } from "./providers/japannext-pts";
+import { inspectMarketHistory } from "../market/market-history";
+import type { RequestedSecurity } from "../market/market-security";
+import type { DistributionCoverage, ServerBenchmark, ServerRemoteQuote } from "../market/market-api-types";
 
 /** Upstream adapters. Pure network + parsing; no storage, no portfolio data. */
 

@@ -49,7 +49,7 @@ cp "$KABUTORA_ROOT/scripts/macos/launcher" "$KABUTORA_STAGE/株トラ.app/Conten
 chmod +x "$KABUTORA_STAGE/株トラ.app/Contents/MacOS/株トラ"
 
 KABUTORA_ICON_SOURCE="$KABUTORA_STAGE/株トラ.app/Contents/Resources/Kabutora.png"
-"$KABUTORA_RUNTIME" "$KABUTORA_ROOT/scripts/render-icon.mjs" "$KABUTORA_WEB/public/icon.svg" "$KABUTORA_ICON_SOURCE"
+"$KABUTORA_RUNTIME" "$KABUTORA_ROOT/scripts/render-icon.mjs" "$KABUTORA_ROOT/scripts/macos/app-icon.png" "$KABUTORA_ICON_SOURCE"
 
 if [[ -e "$KABUTORA_APP" ]]; then
   mv "$KABUTORA_APP" "$KABUTORA_STAGE/previous-株トラ.app"

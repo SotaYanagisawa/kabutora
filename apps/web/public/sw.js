@@ -1,5 +1,5 @@
-const CACHE = "kabutora-shell-v92";
-const SHELL = ["/manifest.webmanifest?v=92", "/kabutora-logo.png", "/icon.svg", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"];
+const CACHE = "kabutora-shell-v93";
+const SHELL = ["/manifest.webmanifest?v=93", "/kabutora-logo.png", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"];
 const SHELL_PATHS = new Set(SHELL.map((path) => new URL(path, self.location.origin).pathname));
 
 self.addEventListener("install", (event) => {

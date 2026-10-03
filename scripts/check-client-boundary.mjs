@@ -15,7 +15,7 @@ export function checkClientBoundary(workspace) {
   const visit = (file, chain = []) => {
     if (visited.has(file)) return;
     visited.add(file);
-    if (/\/lib\/(?:server\/|server-[^/]+\.tsx?$|cloudflare-market-env\.ts$)/u.test(file)) throw new Error(`Client imports server runtime: ${[...chain, file].map((value) => path.relative(web, value)).join(" -> ")}`);
+    if (/\/lib\/server\//u.test(file)) throw new Error(`Client imports server runtime: ${[...chain, file].map((value) => path.relative(web, value)).join(" -> ")}`);
     const ast = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
     const walk = (node) => {
       if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {

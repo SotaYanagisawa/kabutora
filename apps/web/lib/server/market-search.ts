@@ -1,12 +1,12 @@
-import { parseYahooJapanFundSearch, type YahooJapanFundSearchResult } from "../yahoo-japan-fund";
-import { searchKnownJapanFunds } from "../japan-fund-catalog";
-import { searchEmbeddedCatalog } from "../stock-catalog";
-import { normalizeYahooGlobalQuote } from "../global-security";
-import type { YahooUsdSearchQuote } from "../usd-security";
-import { stableMarketErrorMessage } from "../market-api-response";
-import { searchProviderPlan } from "../market-search-plan";
+import { parseYahooJapanFundSearch, type YahooJapanFundSearchResult } from "./providers/yahoo-japan-fund";
+import { searchKnownJapanFunds } from "../market/japan-fund-catalog";
+import { searchEmbeddedCatalog } from "../market/stock-catalog";
+import { normalizeYahooGlobalQuote } from "./providers/global-security";
+import type { YahooUsdSearchQuote } from "./providers/usd-security";
+import { stableMarketErrorMessage } from "../market/market-api-response";
+import { searchProviderPlan } from "./providers/market-search-plan";
 
-import type { CatalogSecurity } from "../stock-catalog";
+import type { CatalogSecurity } from "../market/stock-catalog";
 
 type YahooSearchPayload = { quotes?: YahooUsdSearchQuote[] };
 type SearchResult =

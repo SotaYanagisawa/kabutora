@@ -3,8 +3,8 @@
 import type React from "react";
 import type { Decimal } from "@kabutora/domain";
 import { X, Trash2, ShieldCheck } from "lucide-react";
-import SecuritySearchField from "../security-search-field";
-import { localDateInputValue } from "@/lib/calendar-time";
+import SecuritySearchField from "../search/security-search-field";
+import { localDateInputValue } from "@/lib/ui/calendar-time";
 import {
   isFundSecurity,
   isIndexSecurity,
