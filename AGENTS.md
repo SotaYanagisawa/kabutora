@@ -17,7 +17,7 @@
 - Preserve existing features, UI controls, settings, data formats, and public exports unless the user explicitly asks to change them.
 - Plaintext portfolio data—symbols tied to a user, shares, prices, amounts, balances, accounts, and transactions—must never reach Cloudflare or unencrypted Firestore. Only encrypted vault or event payloads may cross the sync boundary.
 - Use `Decimal` from `@kabutora/domain` for financial calculations. Native number conversion is allowed only at display and chart boundaries.
-- React client code must never import edge modules (`apps/web/lib/server-*` or `apps/web/lib/server/`).
+- React client code must never import edge modules: anything under `apps/web/lib/server/` (type-only imports are allowed).
 - Market requests from cloud clients carry no user symbol lists. Everyone reads the shared catalog snapshot and filters locally; see [`docs/market-backend.md`](docs/market-backend.md).
 - Keep the build ID deterministic across all Next.js build processes. Use the shared build-ID source; never add independent runtime timestamps to `next.config.mjs`.
 
@@ -27,14 +27,16 @@
 |---|---|
 | `packages/domain` | Pure accounting and portfolio-history engine |
 | `apps/web/app` | Next.js routes and application shell |
-| `apps/web/components` | Client UI and orchestration |
-| `apps/web/lib` | Client services, sync, crypto, market adapters, and edge services |
+| `apps/web/components` | Client UI: `app/` shell, `dashboard/` coordinator + hooks + views, `watchlist/`, `search/`, `charts/` |
+| `apps/web/lib` | Framework-light modules by domain: `charts/ market/ portfolio/ sync/ vault/ ui/`, and edge-only `server/` |
 | `firebase` | Encrypted portfolio access rules |
 | `scripts` | Builds, packaging, and boundary verification |
 
-The `apps/web/lib/{charts,domain,market,server,sync,ui,vault}/index.ts` files are navigation barrels. Prefer direct leaf-module imports in production code so client/edge boundaries stay visible and bundlers do not pull broad graphs.
+There are no barrel `index.ts` files: import leaf modules directly (`@/lib/market/market-session`) so client/edge boundaries stay visible and bundlers do not pull broad graphs. File basenames are unique across the repo.
 
 ## Verification
+
+Run commands from the repository root. Typecheck takes seconds (incremental) and the unit suite about 6 s; the Playwright matrix takes about 7 minutes.
 
 - Focused unit test: `pnpm test <test-file>`
 - Fast unit suite: `pnpm test:fast`

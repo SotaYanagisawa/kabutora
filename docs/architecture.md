@@ -51,10 +51,10 @@ flowchart TB
 
 | Package / Directory | Role | Description |
 |---|---|---|
-| [`apps/web`](file:///Users/sotay/Code_Projects/株トラ/apps/web) | **Web App & API** | Next.js 15 App Router application, responsive UI components, Lightweight Charts, and Cloudflare OpenNext entrypoint. |
-| [`packages/domain`](file:///Users/sotay/Code_Projects/株トラ/packages/domain) | **Domain Logic** | Pure TypeScript accounting engine. Calculates FIFO cost basis, average cost lots, corporate actions (splits/reverse splits), and multi-currency values with `Decimal.js`. |
-| [`firebase`](file:///Users/sotay/Code_Projects/株トラ/firebase) | **Security Rules** | Firestore security rules enforcing user ownership and rejecting unauthenticated or malformed writes. |
-| [`scripts`](file:///Users/sotay/Code_Projects/株トラ/scripts) | **Tooling** | Native macOS wrapper and iPhone preview packagers, privacy boundary verification scripts. |
+| [`apps/web`](../apps/web) | **Web App & API** | Next.js 15 App Router application, responsive UI components, Lightweight Charts, and Cloudflare OpenNext entrypoint. |
+| [`packages/domain`](../packages/domain) | **Domain Logic** | Pure TypeScript accounting engine. Calculates FIFO cost basis, average cost lots, corporate actions (splits/reverse splits), and multi-currency values with `Decimal.js`. |
+| [`firebase`](../firebase) | **Security Rules** | Firestore security rules enforcing user ownership and rejecting unauthenticated or malformed writes. |
+| [`scripts`](../scripts) | **Tooling** | Native macOS wrapper and iPhone preview packagers, privacy boundary verification scripts. |
 
 ---
 

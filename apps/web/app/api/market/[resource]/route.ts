@@ -1,4 +1,4 @@
-import { authorizeMarketRequest, unauthorizedResponse } from "@/lib/server-auth";
+import { authorizeMarketRequest, unauthorizedResponse } from "@/lib/server/server-auth";
 import { MarketHub, MemoryMarketStore, serveMarket } from "@/lib/server/market-hub";
 import { searchSecurities } from "@/lib/server/market-search";
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { normalizeRequestedSecurity } from "../market-security";
+import { normalizeRequestedSecurity } from "../market/market-security";
 import recorded from "./fixtures/yahoo-spark-1d.json";
 import { fetchSpark, parseSpark, quoteFromSpark, type SparkResult } from "./market-sources";
 

@@ -69,7 +69,7 @@ final class PreviewDelegate: NSObject, NSApplicationDelegate, WKNavigationDelega
         <style>
         *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;place-items:center;overflow:hidden;padding:16px;background:#f4f4f3;color:#171717;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif;text-align:center}.content{--logo-size:clamp(92px,min(30vw,22vh),132px);width:min(360px,100%);display:grid;grid-template-rows:auto auto auto;gap:clamp(12px,2.5vh,22px);align-items:center;justify-items:center}.logo{width:var(--logo-size);height:var(--logo-size);display:block;border-radius:clamp(20px,6vw,29px);box-shadow:0 18px 42px rgba(12,17,29,.13),0 3px 10px rgba(12,17,29,.08)}.brand strong{display:block;font-size:clamp(28px,min(8vw,6vh),34px);line-height:1.1;letter-spacing:0}.copy p{margin:0;font-size:13px;font-weight:700}.copy small{display:block;margin-top:7px;color:#686868;font-size:9.5px;line-height:1.55}
         </style>
-        <main class="content"><img class="logo" src="icon.svg" alt=""><header class="brand"><strong>株トラ</strong></header><div class="copy"><p id="startup-label">プレビューを準備中</p><small id="startup-detail">暗号化データとローカルサーバーを確認しています</small></div></main>
+        <main class="content"><img class="logo" src="icon-512.png" alt=""><header class="brand"><strong>株トラ</strong></header><div class="copy"><p id="startup-label">プレビューを準備中</p><small id="startup-detail">暗号化データとローカルサーバーを確認しています</small></div></main>
         """, baseURL: startupAssetURL)
 
         stopStalePreviewServer()

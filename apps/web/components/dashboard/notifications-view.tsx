@@ -1,6 +1,5 @@
 import { memo, useMemo, useState } from "react";
-import type { PortfolioNotification } from "@/lib/portfolio-notifications";
-import type { MarketStatus } from "./types";
+import type { PortfolioNotification } from "@/lib/portfolio/portfolio-notifications";
 import { Bell, Check, ChevronRight } from "lucide-react";
 import { dateJa, money, number, signedPercent } from "./helpers";
 
@@ -166,12 +165,6 @@ export function NotificationsView({
   onRead,
   onReadAll,
   onOpenSecurity,
-  monitoredCount,
-  quoteStatus,
-  historyStatus,
-  latestQuoteAt,
-  externalFeedConnected,
-  onRefresh,
 }: {
   notifications: PortfolioNotification[];
   securityMap: Map<string, any>;
@@ -180,12 +173,6 @@ export function NotificationsView({
   onRead: (id: string) => void;
   onReadAll: (ids?: string[]) => void;
   onOpenSecurity?: (securityId: string) => void;
-  monitoredCount?: number;
-  quoteStatus?: MarketStatus;
-  historyStatus?: MarketStatus;
-  latestQuoteAt?: string | null;
-  externalFeedConnected?: boolean;
-  onRefresh?: (force?: boolean) => Promise<void>;
 }) {
   const [filter, setFilter] = useState<"ALL" | "CORPORATE" | "PRICE">("ALL");
   const readIds = useMemo(() => new Set<string>(readNotificationIds), [readNotificationIds]);

@@ -1,11 +1,10 @@
-import { estimateNetDividendDecimal } from "@/lib/dividend-arithmetic";
-import { useBrowserPreferences } from "../browser-preferences";
+import { estimateNetDividendDecimal } from "@/lib/portfolio/dividend-arithmetic";
+import { useBrowserPreferences } from "../app/browser-preferences";
 import { memo, useCallback, useMemo, useState } from "react";
 import type { DistributionEvent, DividendReceipt } from "@kabutora/domain";
 import { Decimal, canonicalDomainSecurityId } from "@kabutora/domain";
-import type { DistributionCoverage } from "@/lib/server-market-types";
-import { LightweightBarChart, LightweightLineChart } from "@/components/lightweight-charts";
-import { AlertTriangle, ArrowLeft, ArrowRight, Coins, RefreshCw, Search, X } from "lucide-react";
+import { LightweightLineChart } from "@/components/charts/lightweight-charts";
+import { AlertTriangle, ArrowLeft, ArrowRight, Coins, Search, X } from "lucide-react";
 import {
   DIVIDEND_DISPLAY_CURRENCY_KEY,
   DIVIDEND_MARKET_FILTER_KEY,
@@ -14,25 +13,10 @@ import {
   DIVIDEND_TAX_MODE_KEY,
   HIDDEN_AMOUNT,
 } from "./constants";
-import {
-  compactMoney,
-  dateJa,
-  money,
-  number,
-  securityQuantityUnit,
-} from "./helpers";
-import {
-  isFundSecurity,
-  isIndexSecurity,
-  isEtfSecurity,
-  isUsSecurity,
-  isJpSecurity,
-  securityAssetLabel,
-  securityMatchesPortfolioFilter,
-  type PortfolioFilter,
-} from "@/lib/portfolio-filter";
-import { getEmbeddedCatalogSecurities } from "@/lib/stock-catalog";
-import { normalizeRequestedSecurity } from "@/lib/market-security";
+import { dateJa, money, number, securityQuantityUnit } from "./helpers";
+import { securityAssetLabel, securityMatchesPortfolioFilter, type PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
+import { getEmbeddedCatalogSecurities } from "@/lib/market/stock-catalog";
+import { normalizeRequestedSecurity } from "@/lib/market/market-security";
 import type { DisplayCurrency, MarketStatus, SearchSecurity, Seed } from "./types";
 
 const embeddedCatalogSecurities = new Map(getEmbeddedCatalogSecurities().map((s) => [canonicalDomainSecurityId(s.id), s]));
@@ -171,7 +155,6 @@ export function MonthlyDividendLineChart({
       xLabel={(item) => item.monthLabel}
       yValue={(item) => (taxMode === "net" ? item.net : item.gross)}
       yTickFormatter={(val) => (amountsVisible ? formatDividendAxisTick(val, currency) : "")}
-      valueFormatter={(val) => (amountsVisible ? formatDividendAxisTick(val, currency) : "")}
       tickCount={5}
       yAxisWidth={amountsVisible ? (currency === "JPY" ? 54 : 46) : 12}
       xAxisHeight={38}
@@ -231,7 +214,6 @@ export function DividendsView({
   receipts,
   distributions,
   nativeDistributions = [],
-  coverage = [],
   securityMap,
   accountMap,
   currency,
@@ -251,12 +233,10 @@ export function DividendsView({
   amountsVisible,
   fxUnavailable = false,
   onSelectSecurity,
-  onRefresh,
 }: {
   receipts: DividendReceipt[];
   distributions: DistributionEvent[];
   nativeDistributions?: DistributionEvent[];
-  coverage?: DistributionCoverage[];
   securityMap: Map<string, Seed["securities"][number] & { name?: string }>;
   accountMap: Map<string, Seed["accounts"][number]>;
   currency: "JPY" | "USD";
@@ -276,7 +256,6 @@ export function DividendsView({
   amountsVisible: boolean;
   fxUnavailable?: boolean;
   onSelectSecurity?: (securityId: string) => void;
-  onRefresh?: () => void;
 }) {
   const preferenceStorage = useBrowserPreferences();
   const [internalPeriod, setInternalPeriod] = useState<string>(() => {

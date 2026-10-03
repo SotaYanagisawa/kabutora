@@ -7,7 +7,7 @@ import {
   isActivelyUpdating,
   resolveUpdatingMessage,
   type UpdatingPhase,
-} from "@/lib/updating-status";
+} from "@/lib/ui/updating-status";
 
 export interface UpdatingBannerProps {
   isManualRefreshing: boolean;

@@ -105,8 +105,8 @@ Kabutora is organized as a clean TypeScript monorepo using `pnpm`:
 ├── apps/
 │   └── web/                   # Next.js 15 App Router & Cloudflare edge integration
 │       ├── app/               # Application shell & authenticated market API routes
-│       ├── components/        # UI coordinators and feature component directories
-│       └── lib/               # Client services, crypto, sync, market and edge modules
+│       ├── components/        # UI by feature: app/, dashboard/ (coordinator + hooks + views), watchlist/, search/, charts/
+│       └── lib/               # charts/ market/ portfolio/ sync/ vault/ ui/ — and edge-only server/
 ├── packages/
 │   └── domain/                # Pure TypeScript accounting engine (FIFO, cost basis, splits)
 ├── firebase/                  # Security rules and database index definitions
@@ -195,4 +195,4 @@ For complete cloud configuration details, including Firebase authentication and 
 
 ## License
 
-Kabutora is open source software licensed under the [MIT License](LICENSE).
+Kabutora is intended to be released under the MIT License (a `LICENSE` file has not been added yet).

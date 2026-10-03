@@ -1,9 +1,8 @@
-import { useBrowserPreferences } from "../browser-preferences";
+import { useBrowserPreferences } from "../app/browser-preferences";
 import { memo, useEffect, useMemo, useState } from "react";
-import { canonicalDomainSecurityId, type IntradayBar, type MarketBar } from "@kabutora/domain";
-import { companyDisplayName, shortSecurityDisplayName } from "@/lib/company-name";
-import { marketDisplayName } from "@/lib/market-label";
-import { isUsSecurity, type PortfolioFilter } from "@/lib/portfolio-filter";
+import { companyDisplayName, shortSecurityDisplayName } from "@/lib/ui/company-name";
+import { marketDisplayName } from "@/lib/market/market-label";
+import { isUsSecurity } from "@/lib/portfolio/portfolio-filter";
 import { freshnessLabel, HIDDEN_AMOUNT } from "./constants";
 import {
   compactMoney,
@@ -12,12 +11,7 @@ import {
   isFundSecurity,
   maybeMoney,
   maybeSignedMoney,
-  money,
-  number,
   quoteTradeSourceLabel,
-  securityPriceBasis,
-  securityQuantityUnit,
-  shortDateTimeJa,
   signedPercent,
 } from "./helpers";
 import type { DashboardHolding, DisplayCurrency, RemoteQuote } from "./types";
@@ -34,26 +28,16 @@ export type HoldingsSort =
 
 export function HoldingsTable({
   holdings,
-  totalValue,
-  intradayBySecurity,
-  dailyHistoryBySecurity,
-  marketFilter = "ALL",
   dense = false,
   onSelect,
   currency,
   amountsVisible = true,
-  currentTime,
 }: {
   holdings: DashboardHolding[];
-  totalValue: number | null;
-  intradayBySecurity?: Map<string, IntradayBar[]>;
-  dailyHistoryBySecurity?: Map<string, MarketBar[]>;
-  marketFilter?: PortfolioFilter;
   dense?: boolean;
   onSelect?: (securityId: string) => void;
   currency: DisplayCurrency;
   amountsVisible?: boolean;
-  currentTime?: number | null;
 }) {
   const preferenceStorage = useBrowserPreferences();
   const [sortBy, setSortBy] = useState<HoldingsSort>(() => {
@@ -173,23 +157,9 @@ export function HoldingsTable({
 
       <table className="holdings-table-content is-grid">
         <tbody className="holdings-grid-body">
-          {sortedHoldings.map((holding) => {
-            const canonicalId = canonicalDomainSecurityId(holding.securityId);
-            return (
-              <FastHoldingsTableRow
-                key={holding.securityId}
-                holding={holding}
-                currency={currency}
-                amountsVisible={amountsVisible}
-                totalValue={totalValue}
-                intraday={intradayBySecurity?.get(holding.securityId) ?? intradayBySecurity?.get(canonicalId) ?? intradayBySecurity?.get(`${canonicalId}-xtks`)}
-                dailyHistory={dailyHistoryBySecurity?.get(holding.securityId) ?? dailyHistoryBySecurity?.get(canonicalId) ?? dailyHistoryBySecurity?.get(`${canonicalId}-xtks`)}
-                marketFilter={marketFilter}
-                onSelect={onSelect}
-                currentTime={currentTime}
-              />
-            );
-          })}
+          {sortedHoldings.map((holding) => (
+            <FastHoldingsTableRow key={holding.securityId} holding={holding} currency={currency} amountsVisible={amountsVisible} onSelect={onSelect} />
+          ))}
         </tbody>
       </table>
     </div>
@@ -200,22 +170,12 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   holding,
   currency,
   amountsVisible,
-  totalValue,
-  intraday = [],
-  dailyHistory = [],
-  marketFilter = "ALL",
   onSelect,
-  currentTime,
 }: {
   holding: DashboardHolding;
   currency: DisplayCurrency;
   amountsVisible: boolean;
-  totalValue: number | null;
-  intraday?: IntradayBar[];
-  dailyHistory?: MarketBar[];
-  marketFilter?: PortfolioFilter;
   onSelect?: (securityId: string) => void;
-  currentTime?: number | null;
 }) {
   const sec = holding.security;
   const isUs = isUsSecurity(sec, holding.securityId);

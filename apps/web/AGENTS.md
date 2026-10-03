@@ -5,11 +5,12 @@ This guide applies to `apps/web`. The root invariants remain in force.
 ## Boundaries and routing
 
 - `app/`: Next.js layouts, pages, and route handlers.
-- `components/`: client UI. Keep orchestration at feature roots and move focused rendering into feature directories.
-- `lib/`: framework-light services and utilities. Keep server-only modules out of client dependency graphs.
+- `components/`: client UI grouped by feature (`app/`, `dashboard/`, `watchlist/`, `search/`, `charts/`). Keep orchestration in hooks at the feature root and focused rendering in views.
+- `lib/`: framework-light modules grouped by domain (`charts/`, `market/`, `portfolio/`, `sync/`, `vault/`, `ui/`). Edge-only code lives in `lib/server/` and must stay out of client dependency graphs.
+- `app/globals.css`: the single global stylesheet, in cascade order. Find styles by searching for `SECTION: <name>`; keep new rules in the matching section and add mobile overrides to `SECTION: responsive`. Keep it one file: splitting it with `@import` or multiple imports lets the bundler reorder rules.
 - `e2e/` and `cloud-e2e/`: local UI coverage and encrypted multi-device coverage.
 
-Prefer `@/` imports across web areas and relative imports within one feature directory. Import leaf modules directly; broad barrels can hide an edge dependency in a client bundle.
+Prefer `@/` imports across web areas and relative imports within one feature directory. Import leaf modules directly; do not add barrel `index.ts` files, which can hide an edge dependency in a client bundle.
 
 ## Change rules
 

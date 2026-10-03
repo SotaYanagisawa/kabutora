@@ -1,5 +1,5 @@
-import ClientAppRoot from "@/components/client-app-root";
-import { portfolioMarketSessions } from "@/lib/market-session";
+import ClientAppRoot from "@/components/app/client-app-root";
+import { portfolioMarketSessions } from "@/lib/market/market-session";
 
 // The middleware generates a fresh CSP nonce for every document request.
 // Rendering this route dynamically lets Next.js attach that nonce to its

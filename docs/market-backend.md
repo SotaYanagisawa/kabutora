@@ -21,7 +21,7 @@ flowchart LR
 | [`lib/server/market-object.ts`](../apps/web/lib/server/market-object.ts) | Durable Object wrapper: SQLite store, one-time D1 catalog import, cron tick |
 | [`lib/server/market-router.ts`](../apps/web/lib/server/market-router.ts) | Worker routing: authentication, then the object (or search) |
 | [`app/api/market/[resource]/route.ts`](../apps/web/app/api/market/[resource]/route.ts) | Same hub in memory for the local Mac app and `next dev` |
-| [`lib/market-client.ts`](../apps/web/lib/market-client.ts) | The only browser transport: shared request, ETag/`since`, saved-state restore |
+| [`lib/market/market-client.ts`](../apps/web/lib/market/market-client.ts) | The only browser transport: shared request, ETag/`since`, saved-state restore |
 
 ## Freshness and cost
 

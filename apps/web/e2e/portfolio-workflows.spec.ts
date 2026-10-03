@@ -1,8 +1,8 @@
 import { test, expect } from "./strict-fixture";
 import { installSyntheticPortfolio, syntheticPortfolio } from "./reliability-fixture";
 import { readFile } from "node:fs/promises";
-import { unlockVaultWithPassphrase } from "../lib/vault-crypto";
-import { validatePortfolio } from "../lib/portfolio-validation";
+import { unlockVaultWithPassphrase } from "../lib/vault/vault-crypto";
+import { validatePortfolio } from "../lib/portfolio/portfolio-validation";
 
 test("fund trade drafts, accounts, edit, delete, calendar and encrypted backup preserve accounting", async ({ page }) => {
   test.setTimeout(120_000);

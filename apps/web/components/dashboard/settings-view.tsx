@@ -1,22 +1,13 @@
 import { memo, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { portfolioFilterLabel, type PortfolioFilter } from "@/lib/portfolio-filter";
-import { DEFAULT_PRICE_ALERT_PERCENT, PRICE_ALERT_THRESHOLDS } from "@/lib/portfolio-notifications";
-import type { HistoryQuality } from "@/lib/market-history";
+import { portfolioFilterLabel, type PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
+import { PRICE_ALERT_THRESHOLDS } from "@/lib/portfolio/portfolio-notifications";
+import type { HistoryQuality } from "@/lib/market/market-history";
 import { Download, LogOut, ShieldCheck } from "lucide-react";
 import { ACCENT_THEMES, APP_RELEASE_DATE, APP_VERSION, UPDATE_FREQUENCIES } from "./constants";
-import { CLIENT_BUILD_ID } from "@/lib/client-recovery";
+import { CLIENT_BUILD_ID } from "@/lib/ui/client-recovery";
 import { benchmarkNumber, shortDateTimeJa, timeJa } from "./helpers";
-import type {
-  AccentTheme,
-  DataSecurityAction,
-  DisplayCurrency,
-  FetchHealth,
-  HistoryCacheMeta,
-  MarketStatus,
-  Seed,
-  UpdateFrequency,
-} from "./types";
+import type { AccentTheme, DataSecurityAction, DisplayCurrency, FetchHealth, HistoryCacheMeta, MarketStatus, Seed, UpdateFrequency } from "./types";
 
 export function SettingsView({
   seed,
@@ -25,7 +16,6 @@ export function SettingsView({
   onEncryptedBackup,
   onRestoreBackup,
   allowPlaintextExport,
-  onLock,
   onLogout,
   dark,
   setDark,
@@ -53,7 +43,6 @@ export function SettingsView({
   setAutoRefresh,
   updateFrequency,
   setUpdateFrequency,
-  effectiveUpdateMinutes,
   hideScrollbar,
   setHideScrollbar,
   displayCurrency,
@@ -74,7 +63,6 @@ export function SettingsView({
   onEncryptedBackup?: (seed: Seed) => void;
   onRestoreBackup?: (file: File) => void;
   allowPlaintextExport?: boolean;
-  onLock?: () => Promise<void> | void;
   onLogout?: () => Promise<void> | void;
   dark: boolean;
   setDark: (dark: boolean) => void;
@@ -113,7 +101,6 @@ export function SettingsView({
   setAutoRefresh: (autoRefresh: boolean) => void;
   updateFrequency: UpdateFrequency;
   setUpdateFrequency: (freq: UpdateFrequency) => void;
-  effectiveUpdateMinutes?: number;
   hideScrollbar: boolean;
   setHideScrollbar: (hide: boolean) => void;
   displayCurrency: DisplayCurrency;
