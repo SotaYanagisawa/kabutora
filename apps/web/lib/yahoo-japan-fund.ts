@@ -1,5 +1,4 @@
-import { boundedMarketCacheSet } from "./server/market/bounded-cache";
-import { providerFetch } from "./server/market/provider-fetch";
+import { boundedMarketCacheSet } from "./bounded-cache";
 import type { DistributionEvent, IntradayBar, MarketBar, MarketQuote } from "@kabutora/domain";
 import type { JapanFundSearchResult } from "./japan-fund-catalog";
 
@@ -227,7 +226,7 @@ const BLACKROCK_DISTRIBUTION_PAGES: Record<string, string> = {
 async function requestBlackRockDistributions(code: string, securityId: string) {
   const productUrl = BLACKROCK_DISTRIBUTION_PAGES[code];
   if (!productUrl) return null;
-  const pageResponse = await providerFetch(productUrl, {
+  const pageResponse = await fetch(productUrl, {
     cache: "no-store",
     headers: { Accept: "text/html", "User-Agent": USER_AGENT },
     signal: AbortSignal.timeout(12_000),
@@ -238,7 +237,7 @@ async function requestBlackRockDistributions(code: string, securityId: string) {
     ?? /data-ajaxuri="([^"]+\.ajax\?tab=distributions&fileType=json&subtab=table)"/u.exec(pageHtml)?.[1];
   if (!endpoint) throw new Error("BlackRock distribution endpoint unavailable");
   const endpointUrl = new URL(endpoint.replaceAll("&amp;", "&"), productUrl).toString();
-  const response = await providerFetch(endpointUrl, {
+  const response = await fetch(endpointUrl, {
     cache: "no-store",
     headers: { Accept: "application/json", Referer: productUrl, "User-Agent": USER_AGENT },
     signal: AbortSignal.timeout(12_000),
@@ -258,7 +257,7 @@ async function requestFundDistributions(code: string, securityId: string, force:
     let events = official;
     if (!events) {
       const sourceUrl = `https://finance.yahoo.co.jp/quote/${encodeURIComponent(code)}/dividendinfo`;
-      const response = await providerFetch(sourceUrl, {
+      const response = await fetch(sourceUrl, {
         cache: "no-store",
         headers: { Accept: "text/html", "User-Agent": USER_AGENT },
         signal: AbortSignal.timeout(12_000),
@@ -283,7 +282,7 @@ async function fetchFundPage(code: string, force: boolean) {
   const cached = pageCache.get(code);
   if (!force && cached && cached.expiresAt > Date.now()) return { page: cached.value, cacheState: "memory" as const };
   try {
-    const response = await providerFetch(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(code)}/chart`, {
+    const response = await fetch(`https://finance.yahoo.co.jp/quote/${encodeURIComponent(code)}/chart`, {
       cache: "no-store",
       headers: { Accept: "text/html", "User-Agent": USER_AGENT },
       signal: AbortSignal.timeout(12_000),
@@ -380,7 +379,7 @@ async function requestHistory(code: string, securityId: string, token: string, f
   url.searchParams.set("size", String(MAX_DAILY_HISTORY_SIZE));
   url.searchParams.set("timeFrame", "daily");
   url.searchParams.set("toDate", compactYmd(to));
-  const response = await providerFetch(url, {
+  const response = await fetch(url, {
     cache: "no-store",
     headers: {
       Accept: "application/json",
@@ -394,9 +393,8 @@ async function requestHistory(code: string, securityId: string, token: string, f
   if (!response.ok) throw new Error(`Yahoo Japan fund history returned ${response.status}`);
   const payload = await response.json() as FundHistoryPayload;
   if (payload.error?.length) throw new Error(payload.error[0]?.message || "Yahoo Japan fund history unavailable");
-  const bars = parseYahooJapanFundHistory(payload, securityId);
-  if (!bars.length) throw new Error(`${code}: no usable fund history`);
-  return bars;
+  // A window before the fund's launch is legitimately empty.
+  return parseYahooJapanFundHistory(payload, securityId);
 }
 
 export async function getYahooJapanFundHistory(code: string, securityId: string, period1: number, period2: number, force = false) {
@@ -414,6 +412,7 @@ export async function getYahooJapanFundHistory(code: string, securityId: string,
       requestFundDistributions(code, securityId, force).catch(() => []),
     ]);
     const bars = [...new Map(incoming.flat().map((bar) => [`${bar.securityId}:${bar.date}`, bar])).values()].sort((a, b) => a.date.localeCompare(b.date));
+    if (!bars.length) throw new Error(`${code}: no usable fund history`);
     boundedMarketCacheSet(historyCache, cacheKey, { value: { bars, distributions }, expiresAt: Date.now() + FUND_TTL_MS, staleUntil: Date.now() + STALE_TTL_MS });
     const requestedStart = new Date(`${from}T00:00:00Z`).getTime();
     const firstBar = new Date(`${bars[0].date}T00:00:00Z`).getTime();

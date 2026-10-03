@@ -1,15 +1,11 @@
-export { MarketCoordinator } from "./lib/server/market/coordinator";
+export { MarketCoordinator } from "./lib/server/market-object";
 import openNextWorker, {
   BucketCachePurge,
   DOQueueHandler,
   DOShardedTagCache,
 } from "./.open-next/worker.js";
-import type { D1DatabaseLike, MarketWorkerEnv } from "./lib/cloudflare-market-env";
-import { collectJapannextPts } from "./lib/server-pts-collector";
-import { isD1DailyLimitError, isMarketRefreshJob, processMarketRefreshJob, scheduleMarketRefresh } from "./lib/server-market-scheduler";
-import { routeMarketRequest } from "./lib/server-market-router";
-import type { MarketRequestContext } from "./lib/server-market-request-context";
-import { prepareMarketSnapshotResponses } from "./lib/server-market-response-cache";
+import { marketStub, type MarketWorkerEnv } from "./lib/server/market-object";
+import { routeMarketRequest } from "./lib/server/market-router";
 
 export { BucketCachePurge, DOQueueHandler, DOShardedTagCache };
 
@@ -51,68 +47,20 @@ async function proxyFirebaseAuthHelper(request: Request) {
   });
 }
 
+type ExecutionContext = { waitUntil(promise: Promise<unknown>): void; passThroughOnException?(): void };
+
 export default {
-  async fetch(request: Request, env: MarketRequestContext["env"], ctx: MarketRequestContext["ctx"]) {
-    const marketResponse = await routeMarketRequest(request, { env, ctx });
-    if (marketResponse) return marketResponse;
-    const authResponse = await proxyFirebaseAuthHelper(request);
-    if (authResponse) return authResponse;
-    return openNextWorker.fetch(request, env, ctx);
+  async fetch(request: Request, env: MarketWorkerEnv, ctx: ExecutionContext) {
+    return await routeMarketRequest(request, env)
+      ?? await proxyFirebaseAuthHelper(request)
+      ?? openNextWorker.fetch(request, env, ctx);
   },
-  async scheduled(controller: { scheduledTime: number; cron?: string }, env: MarketWorkerEnv, ctx: { waitUntil: (promise: Promise<unknown>) => void }) {
-    if (!env.MARKET_DB) return;
-    if (env.MARKET_COORDINATOR && (env.KABUTORA_MARKET_BACKEND === "v2" || env.KABUTORA_MARKET_CANARY === "true")) {
-      ctx.waitUntil(env.MARKET_COORDINATOR.get(env.MARKET_COORDINATOR.idFromName("public-market-v2")).fetch("https://coordinator/wake"));
-      if (env.KABUTORA_MARKET_BACKEND === "v2") return;
-    }
-    if (controller.cron === "* * * * *") {
-      ctx.waitUntil(collectJapannextPts(env.MARKET_DB, controller.scheduledTime));
-      return;
-    }
-    if (env.MARKET_REFRESH_QUEUE) {
-      ctx.waitUntil(scheduleMarketRefresh(env.MARKET_DB, env.MARKET_REFRESH_QUEUE, controller.scheduledTime));
-    }
+  /** Every minute: PTS frames plus background history/dividend refresh inside the market object. */
+  async scheduled(_controller: unknown, env: MarketWorkerEnv, ctx: ExecutionContext) {
+    if (env.MARKET_COORDINATOR) ctx.waitUntil(marketStub(env).fetch("https://market/tick", { method: "POST" }));
   },
-  async queue(batch: {
-    messages: Array<{
-      body: unknown;
-      ack: () => void;
-      retry: (options?: { delaySeconds?: number }) => void;
-    }>;
-  }, env: MarketWorkerEnv) {
-    if (!env.MARKET_DB) {
-      for (const message of batch.messages) message.retry({ delaySeconds: 300 });
-      return;
-    }
-    const db: D1DatabaseLike = env.MARKET_DB;
-    await Promise.all(batch.messages.map(async (message) => {
-      if (!isMarketRefreshJob(message.body)) {
-        message.ack();
-        return;
-      }
-      try {
-        if (env.MARKET_COORDINATOR && env.KABUTORA_MARKET_BACKEND === "v2") {
-          const admitted = await env.MARKET_COORDINATOR.get(env.MARKET_COORDINATOR.idFromName("public-market-v2")).fetch("https://coordinator/enqueue", { method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(message.body) });
-          if (!admitted.ok) throw new Error("coordinator_admission_failed");
-          message.ack();
-          return;
-        }
-        await processMarketRefreshJob(db, message.body, env.MARKET_REFRESH_QUEUE);
-        if (message.body.kind === "benchmarks") {
-          await prepareMarketSnapshotResponses(db);
-        } else if (message.body.kind === "quotes") {
-          // Trailing quote chunks or off-hours runs refresh the prepared cache
-          // only when the existing payload is older than 8 minutes, avoiding
-          // redundant preparations on every 20-symbol chunk.
-          await prepareMarketSnapshotResponses(db, { minIntervalMs: 8 * 60_000 });
-        }
-        message.ack();
-      } catch (error) {
-        // Retrying quota-rejected writes every two minutes builds a backlog
-        // that stampedes D1 as soon as the UTC-day allowance resets.
-        if (isD1DailyLimitError(error)) message.ack();
-        else message.retry({ delaySeconds: 120 });
-      }
-    }));
+  /** Drains messages left behind by the retired queue scheduler. */
+  async queue(batch: { messages: Array<{ ack(): void }> }) {
+    for (const message of batch.messages) message.ack();
   },
 };

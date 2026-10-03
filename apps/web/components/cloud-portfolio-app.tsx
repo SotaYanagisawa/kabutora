@@ -13,8 +13,8 @@ import { settleInitialAuthSession } from "@/lib/initial-auth-session";
 import { startupLabels, type PortfolioStartupState, type StartupStage } from "@/lib/portfolio-startup";
 import { diffTransactionChanges } from "@/lib/transaction-event-merge";
 import { isNewerAccountRevision } from "@/lib/account-event-merge";
-import { clearInMemorySnapshotCache, getCachedServerMarketSnapshot, loadStartupMarketSnapshots } from "@/lib/client-market-service";
-import { clearCompactQuotesCache } from "@/lib/client-market-cache";
+import { fetchMarketSnapshot, latestMarketSnapshot, resetMarketClient, restoreMarketClient } from "@/lib/market-client";
+import { clearCompactQuotesCache, readServerSnapshotCache } from "@/lib/client-market-cache";
 import type { ServerMarketSnapshot } from "@/lib/server-market-types";
 import type { MarketSessionStatus } from "@/lib/market-session";
 import type { DeviceTrustMode } from "@/lib/firebase-config";
@@ -51,7 +51,7 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
   const [backupSeed, setBackupSeed] = useState<Seed | null>(null);
   const [queue, setQueue] = useState({ pending: 0, memoryOnly: 0, storageUnavailable: false });
   const [debouncedPending, setDebouncedPending] = useState(false);
-  const [market, setMarket] = useState<ServerMarketSnapshot | null | undefined>(() => getCachedServerMarketSnapshot("compact"));
+  const [market, setMarket] = useState<ServerMarketSnapshot | null | undefined>(() => latestMarketSnapshot());
   const session = useRef<PortfolioSession | null>(null);
   const preferenceSaveScheduler = useRef<PreferenceSaveScheduler<UserPreferences> | null>(null);
 
@@ -160,14 +160,29 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
     preferenceSaveScheduler.current?.enqueue(value);
   }, []);
 
+  // Paint the last saved prices instantly, then replace them with one fresh catalog request.
   useEffect(() => {
-    clearInMemorySnapshotCache();
+    resetMarketClient({ persist: deviceMode === "trusted" });
     if (!targetUid) { setMarket(null); return; }
     let active = true;
-    void loadStartupMarketSnapshots({
-      allowPersistentCache: deviceMode === "trusted",
-      onSnapshot: (snapshot) => { if (active) setMarket(snapshot); },
-    });
+    if (deviceMode === "trusted") {
+      const saved = readServerSnapshotCache("full");
+      restoreMarketClient(saved);
+      void saved.then((entry) => {
+        if (!active || !entry) return;
+        // Saved prices carry no live clock or session authority; fresh data always wins.
+        setMarket((current) => current ?? { ...entry.snapshot, generatedAt: "", marketSessions: [], refresh: { ...entry.snapshot.refresh, status: "partial" } });
+      });
+    }
+    return () => { active = false; };
+  }, [deviceMode, targetUid]);
+
+  useEffect(() => {
+    if (!targetUid) return;
+    let active = true;
+    void fetchMarketSnapshot().then((snapshot) => {
+      if (active && snapshot) setMarket(snapshot);
+    }).catch(() => undefined);
     return () => { active = false; };
   }, [deviceMode, targetUid, user]);
 

@@ -25,14 +25,12 @@ flowchart TB
     subgraph Edge["⚡ Edge Infrastructure (Cloudflare Workers)"]
         Worker["OpenNext Cloudflare Worker"]
         AuthCheck["App Check & Auth Verifier"]
-        MarketProxy["Market API & Snapshot Reader"]
-        Scheduler["10-minute Cron + Queue"]
-        D1[("D1 Public Market Data")]
+        MarketProxy["Market object\n(Durable Object, catalog snapshot)"]
+        Scheduler["1-minute Cron tick\n(PTS, history warm-up)"]
         
         Worker --> AuthCheck
         AuthCheck --> MarketProxy
         Scheduler --> MarketProxy
-        MarketProxy <--> D1
     end
 
     subgraph Backend["☁️ Secure Cloud Services"]
@@ -55,7 +53,6 @@ flowchart TB
 |---|---|---|
 | [`apps/web`](file:///Users/sotay/Code_Projects/株トラ/apps/web) | **Web App & API** | Next.js 15 App Router application, responsive UI components, Lightweight Charts, and Cloudflare OpenNext entrypoint. |
 | [`packages/domain`](file:///Users/sotay/Code_Projects/株トラ/packages/domain) | **Domain Logic** | Pure TypeScript accounting engine. Calculates FIFO cost basis, average cost lots, corporate actions (splits/reverse splits), and multi-currency values with `Decimal.js`. |
-| [`packages/market-data`](file:///Users/sotay/Code_Projects/株トラ/packages/market-data) | **Market Models** | Normalized data schemas, provider abstractions, and PTS (night trading) session interfaces. |
 | [`firebase`](file:///Users/sotay/Code_Projects/株トラ/firebase) | **Security Rules** | Firestore security rules enforcing user ownership and rejecting unauthenticated or malformed writes. |
 | [`scripts`](file:///Users/sotay/Code_Projects/株トラ/scripts) | **Tooling** | Native macOS wrapper and iPhone preview packagers, privacy boundary verification scripts. |
 
@@ -79,18 +76,16 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    Cron["10-minute Cron"] --> Queue["Public-symbol jobs"]
-    Queue --> Fetch["Fetch upstream providers"]
-    Fetch --> D1[("D1 snapshots")]
-    Client["Client UI"] -->|"One authenticated startup read"| Edge["Cloudflare Worker"]
-    Edge --> D1
-    D1 --> Client
-    Client -->|"Authenticated manual refresh"| Queue
+    Client["Client UI"] -->|"One GET (ETag + since)"| Edge["Worker router (auth)"]
+    Edge --> Hub["Market object\n15 s snapshot"]
+    Hub -->|"stale: 10 parallel batches"| Yahoo["Yahoo spark"]
+    Hub --> Pages["Fund NAV / TOPIX / Japannext\n(background)"]
+    Cron["1-minute Cron"] --> Hub
 ```
 
-- **Intraday 15-Minute Bars**: Real-time 5-day session bars for active holdings.
-- **Historical Daily Bars**: Long-term price history loaded incrementally on-demand for the Performance view.
-- **Tiered Caching**: Cloudflare D1 snapshots plus the client IndexedDB cache minimize startup requests and preserve offline fallback.
-- **Privacy Split**: D1 contains public symbols and market data only; Firestore portfolio documents remain ciphertext and are decrypted only in the client.
-- **Snapshot-first refresh**: Browser refreshes enqueue symbol-only work and immediately return to the cached snapshot. Quote completion is merged through conditional ETag reads; price refresh never waits for historical backfill.
+- **One request for prices**: quotes, benchmarks and five days of intraday bars for the whole shared catalog (max 200 symbols) arrive in one response, refreshed on read when older than 15 seconds.
+- **Historical Daily Bars**: Stored per symbol and year in the market object; the client requests the catalog from its earliest needed year and filters locally.
+- **Caching**: The object keeps the snapshot in memory and SQLite; the client keeps the last snapshot in IndexedDB so a reopened app renders instantly and revalidates with an ETag.
+- **Privacy Split**: Market requests carry no holdings; Firestore portfolio documents remain ciphertext and are decrypted only in the client.
+- See [Market backend](market-backend.md) for budgets and checks.
 - **Search isolation**: Search keystrokes stay inside a small component, local matches render immediately, obsolete provider requests are aborted, and the server applies a bounded provider deadline.

@@ -1,6 +1,4 @@
 import { createRemoteJWKSet, decodeProtectedHeader, importX509, jwtVerify, type JWTPayload } from "jose";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { currentMarketRequestContext } from "./server-market-request-context";
 
 const FIREBASE_CERTS_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
 const appCheckKeys = createRemoteJWKSet(new URL("https://firebaseappcheck.googleapis.com/v1/jwks"));
@@ -80,12 +78,15 @@ async function verifyAppCheckToken(token: string, projectNumber: string, appId?:
   if (appId && result.payload.sub !== appId) throw new Error("App Check app mismatch");
 }
 
-export async function authorizeMarketRequest(request: Request) {
-  const nativeContext = currentMarketRequestContext();
-  const cloudflareEnv = nativeContext?.env ?? (await getCloudflareContext({ async: true }).catch(() => null))?.env;
-  const env = (cloudflareEnv ?? process.env) as Record<string, string | undefined>;
-  const localPrivateMode = !nativeContext && (Boolean(process.env.KABUTORA_LOCAL_VAULT_PATH) || process.env.NODE_ENV === "development");
-  if (localPrivateMode && env.KABUTORA_REQUIRE_AUTH !== "true") return { uid: "local" };
+export type MarketAuthEnv = Record<string, unknown>;
+
+/**
+ * Firebase ID token + member allowlist (+ App Check when required).
+ * `local` is the user's own Mac app or `next dev`, where auth is optional.
+ */
+export async function authorizeMarketRequest(request: Request, rawEnv: MarketAuthEnv, options: { local?: boolean } = {}) {
+  const env = rawEnv as Record<string, string | undefined>;
+  if (options.local && env.KABUTORA_REQUIRE_AUTH !== "true") return { uid: "local" };
   const projectId = env.FIREBASE_PROJECT_ID;
   if (!projectId) throw new MarketAuthUnavailable("authentication_not_configured");
   const authorization = request.headers.get("Authorization");

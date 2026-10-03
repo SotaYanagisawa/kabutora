@@ -1,25 +1,9 @@
 import type { MarketBar } from "@kabutora/domain";
 
-// Keep each invocation comfortably below Workers Free's 50 external-subrequest
-// limit. Redirects and optional company-name lookups also count, so a batch of
-// 16 could cross the limit even though the primary provider plan fit on paper.
-export const MARKET_REQUEST_BATCH_SIZE = 8;
 export const HISTORY_START_GRACE_DAYS = 7;
 export const MAX_EXPECTED_MARKET_GAP_DAYS = 14;
 
 export type HistoryRequirement = Map<string, string>;
-
-export type HistoryFetchBatch = {
-  securityIds: string[];
-  from: string;
-  forceRefresh?: boolean;
-};
-
-function subtractDays(date: string, days: number) {
-  const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() - days);
-  return value.toISOString().slice(0, 10);
-}
 
 function addDays(date: string, days: number) {
   const value = new Date(`${date}T00:00:00Z`);
@@ -47,7 +31,7 @@ export function historyRequirementSatisfied(
   );
 }
 
-export function splitSecurityIds(value: string, batchSize = MARKET_REQUEST_BATCH_SIZE) {
+export function splitSecurityIds(value: string, batchSize = Number.MAX_SAFE_INTEGER) {
   const ids = [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean))];
   const batches: string[][] = [];
   for (let index = 0; index < ids.length; index += batchSize) batches.push(ids.slice(index, index + batchSize));
@@ -105,38 +89,4 @@ export function missingHistoryRequirements(
       ? [securityId]
       : [];
   });
-}
-
-export function buildHistoryFetchPlan(
-  securityIds: string,
-  requirements: HistoryRequirement,
-  bars: MarketBar[],
-  batchSize = MARKET_REQUEST_BATCH_SIZE,
-  inceptionDates: Record<string, string> = {},
-  throughDate?: string,
-): HistoryFetchBatch[] {
-  const coverage = historyCoverage(bars);
-  const defaultFiveYearsAgo = subtractDays(new Date().toISOString().slice(0, 10), 365 * 5 + 30);
-  const requests = splitSecurityIds(securityIds, Number.MAX_SAFE_INTEGER).flat().map((securityId) => {
-      const required = requirements.get(securityId) ?? defaultFiveYearsAgo;
-      const current = coverage.get(securityId);
-      const internalGap = firstInternalHistoryGap(bars, securityId, required, MAX_EXPECTED_MARKET_GAP_DAYS, throughDate);
-      const isMissing = !historyRequirementSatisfied(current?.first, required, HISTORY_START_GRACE_DAYS, inceptionDates[securityId]);
-      const isTailStale = Boolean(current?.last && throughDate && throughDate > current.last && daysBetween(current.last, throughDate) > 4);
-      return {
-        securityId,
-        from: isMissing ? required : internalGap ?? subtractDays(current!.last, 7),
-        forceRefresh: Boolean(internalGap || isTailStale),
-      };
-    }).sort((a, b) => Number(b.forceRefresh) - Number(a.forceRefresh) || a.from.localeCompare(b.from) || a.securityId.localeCompare(b.securityId));
-
-  const batches: HistoryFetchBatch[] = [];
-  for (const forceRefresh of [true, false]) {
-    const matching = requests.filter((request) => request.forceRefresh === forceRefresh);
-    for (let index = 0; index < matching.length; index += batchSize) {
-      const group = matching.slice(index, index + batchSize);
-      batches.push({ securityIds: group.map((request) => request.securityId), from: group[0].from, ...(forceRefresh ? { forceRefresh: true } : {}) });
-    }
-  }
-  return batches;
 }

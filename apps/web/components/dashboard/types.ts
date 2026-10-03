@@ -67,35 +67,7 @@ export type Seed = {
 export type RemoteQuote = ServerRemoteQuote;
 export type MarketStatus = "idle" | "loading" | "ready" | "partial" | "error";
 
-export type QuoteResponse = {
-  generatedAt?: string;
-  marketSessions?: MarketSessionStatus[];
-  quotes: RemoteQuote[];
-  intraday: IntradayBar[];
-  failures: Array<{ securityId: string; symbol: string; message: string }>;
-  coverage: { requested: number; returned: number; fresh: number; stale: number; suspect: number };
-};
-
-export type HistoryResponse = {
-  generatedAt?: string;
-  marketSessions?: MarketSessionStatus[];
-  bars: MarketBar[];
-  corporateActions: CorporateAction[];
-  distributions?: DistributionEvent[];
-  inceptionDates?: Record<string, string>;
-  quality?: HistoryQuality;
-  failures: Array<{ securityId: string; symbol: string; message: string }>;
-  coverage: { requested: number; returned: number };
-};
-
 export type Benchmark = ServerBenchmark;
-export type BenchmarkResponse = {
-  generatedAt?: string;
-  marketSessions?: MarketSessionStatus[];
-  benchmarks: Benchmark[];
-  failures: Array<{ id: string; message: string }>;
-};
-
 export type SearchSecurity = Seed["securities"][number] & { exchangeLabel?: string };
 export type DashboardSecurity = Omit<SearchSecurity, "providerSymbols"> & {
   providerSymbols?: SearchSecurity["providerSymbols"];
@@ -160,7 +132,6 @@ export type HistoryCachePayload = {
   inceptionDates?: Record<string, string>;
 };
 
-export type DistributionResponse = MarketDistributionBatchResult;
 export type DistributionCachePayload = {
   schemaVersion: number;
   savedAt: string;
@@ -231,3 +202,6 @@ export type DashboardProps = {
   onLogout?: () => Promise<void> | void;
   onStartupReady?: () => void;
 };
+
+/** Outcome of one market snapshot load, for the manual-refresh toast. */
+export type MarketLoadResult = "updated" | "partial" | "failed";

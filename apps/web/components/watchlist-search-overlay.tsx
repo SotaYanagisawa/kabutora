@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Check, Plus, RefreshCw, Search, X } from "lucide-react";
-import { registerPublicMarketSelection } from "@/lib/public-market-client";
+import { registerMarketSecurities } from "@/lib/market-client";
 import { marketDisplayName } from "@/lib/market-label";
 import type { SearchSecurity } from "./dashboard";
 import { useSecuritySearch } from "./use-security-search";
@@ -41,7 +41,7 @@ export default memo(function WatchlistSearchOverlay({
   const choose = useCallback((security: SearchSecurity) => {
     pendingSubmitQueryRef.current = null;
     onClose();
-    void registerPublicMarketSelection(security.id).catch(()=>false);
+    void registerMarketSecurities([security.id]).catch(()=>false);
     onSelectSecurity(security);
   }, [onClose, onSelectSecurity]);
 
@@ -111,7 +111,7 @@ export default memo(function WatchlistSearchOverlay({
     event.preventDefault();
     event.stopPropagation();
     if (watchedIds.has(security.id)) onRemoveSecurity(security.id);
-    else { void registerPublicMarketSelection(security.id).catch(()=>false); onAddSecurity(security); }
+    else { void registerMarketSecurities([security.id]).catch(()=>false); onAddSecurity(security); }
   };
 
   const queryActive = Boolean(inputValue.trim());

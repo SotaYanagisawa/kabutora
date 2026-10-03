@@ -5,20 +5,21 @@
   "scripts": {
     "dev": "pnpm --filter @kabutora/web dev",
     "build": "pnpm --filter @kabutora/web build",
-    "typecheck": "pnpm --filter @kabutora/domain typecheck && pnpm --filter @kabutora/market-data typecheck && pnpm --filter @kabutora/web typecheck",
+    "typecheck": "pnpm --filter @kabutora/domain typecheck && pnpm --filter @kabutora/web typecheck",
     "tc": "pnpm typecheck",
     "check": "pnpm typecheck && pnpm test",
-    "check:full": "pnpm check && pnpm test:rules && pnpm verify:privacy && pnpm test:worker && pnpm exec playwright test",
+    "check:full": "pnpm check && pnpm test:worker && pnpm verify:privacy && pnpm exec playwright test && pnpm test:rules",
+    "check:live": "KABUTORA_LIVE=1 vitest run apps/web/lib/server/market-live.test.ts",
     "test": "vitest run",
-    "test:worker": "node scripts/test-market-runtime.mjs",
-    "test:worker:stress": "KABUTORA_RUNTIME_STRESS=1 node scripts/test-market-runtime.mjs",
     "test:fast": "vitest run --exclude '**/vault-crypto.test.ts'",
     "test:domain": "vitest run packages/domain",
-    "test:market": "vitest run apps/web/lib/server-market*.test.ts apps/web/lib/yahoo-*.test.ts",
+    "test:market": "vitest run apps/web/lib/server apps/web/lib/market-client.test.ts",
+    "test:worker": "node scripts/test-market-runtime.mjs",
     "test:e2e:search": "playwright test apps/web/e2e/security-search.spec.ts",
     "test:rules": "firebase emulators:exec --only firestore --project demo-kabutora-security-rules \"node firebase/firestore-rules.mjs\"",
+    "test:cloud": "firebase emulators:exec --only auth,firestore --project demo-kabutora-security-rules \"playwright test --config playwright.cloud.config.ts\"",
     "verify:privacy": "node scripts/verify-private-data-boundary.mjs",
-    "test:cloud": "firebase emulators:exec --only auth,firestore --project demo-kabutora-security-rules \"playwright test --config playwright.cloud.config.ts\""
+    "verify:prod": "node scripts/verify-production.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.51.1",

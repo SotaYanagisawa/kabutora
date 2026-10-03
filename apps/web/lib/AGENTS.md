@@ -8,10 +8,10 @@
 |---|---|
 | Accounting adapters | `domain-worker*`, `portfolio-history-calculation`, `portfolio-calculation-inputs`, validation and Decimal helpers |
 | Charts | `chart-domain`, `chart-geometry`, `chart-presentation` |
-| Market client | `client-market-*`, caches, session/clock, catalogs, search, snapshot merge |
+| Market client | `market-client` (the only market transport), `client-market-cache`, session/clock, catalogs, search, snapshot merge |
 | Encrypted sync | `portfolio-*`, event merge modules, Firebase client/config, recovery and status modules |
 | Vault | `vault-*`, `argon2-key`, trusted-device and verified-vault stores |
-| Edge market services | `server-*`, `cloudflare-market-env`, upstream/provider modules |
+| Edge market services | `server/market-*` (hub, Durable Object, router, sources, search), `server-auth`, `server-market-types`, fund/PTS/Yahoo adapters |
 | UI utilities | touch navigation, page visibility, operation deadlines |
 
 ## Rules

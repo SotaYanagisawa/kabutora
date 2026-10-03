@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "./strict-fixture";
+import { mockMarket } from "./market-fixture";
 import { resolve as resolvePath } from "node:path";
 
 const generatedAt = "2026-08-31T12:00:00.000Z";
@@ -8,33 +9,7 @@ async function setupPage(page: Page) {
     path: resolvePath(process.cwd(), "apps/web/data/demo-seed.json"),
     contentType: "application/json",
   }));
-  await page.route("**/api/market/quotes", async (route) => {
-    await route.fulfill({ json: {
-      generatedAt,
-      marketSessions: [],
-      quotes: [],
-      intraday: [],
-      failures: [],
-      coverage: { requested: 0, returned: 0, fresh: 0, stale: 0, suspect: 0 },
-    } });
-  });
-  await page.route("**/api/market/history", async (route) => {
-    await route.fulfill({ json: {
-      generatedAt,
-      marketSessions: [],
-      bars: [],
-      corporateActions: [],
-      inceptionDates: {},
-      failures: [],
-      coverage: { requested: 0, returned: 0 },
-    } });
-  });
-  await page.route("**/api/market/benchmarks**", (route) => route.fulfill({ json: {
-    generatedAt,
-    marketSessions: [],
-    benchmarks: [],
-    failures: [],
-  } }));
+  await mockMarket(page, { generatedAt });
 
   await page.goto("/");
   const toolbar = page.locator(".daily-performance-toolbar");

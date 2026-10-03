@@ -7,7 +7,7 @@ test("older Safari without AbortSignal.timeout still starts and loads prices", a
   });
   let quoteRequests = 0;
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/api/market/quotes") quoteRequests += 1;
+    if (new URL(request.url()).pathname === "/api/market/snapshot") quoteRequests += 1;
   });
   await installSyntheticPortfolio(page, syntheticPortfolio(4, 20, 200));
   await page.goto("/");
@@ -19,7 +19,7 @@ test("older Safari without AbortSignal.timeout still starts and loads prices", a
 test("quote requests settle on startup and do not loop repeatedly", async ({ page }) => {
   let quoteRequests = 0;
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/api/market/quotes") quoteRequests += 1;
+    if (new URL(request.url()).pathname === "/api/market/snapshot") quoteRequests += 1;
   });
   await installSyntheticPortfolio(page, syntheticPortfolio(4, 20, 200));
   await page.goto("/");
@@ -93,7 +93,6 @@ test("100 portfolio filter changes settle within two jobs and keep input-to-pain
 test("idle-preloaded main menu switches paint within 100 ms", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   await installSyntheticPortfolio(page, syntheticPortfolio(12, 240, 400));
-  await page.route("**/api/market/distributions", (route) => route.fulfill({ json: { distributions: [], coverage: [], failures: [] } }));
   await page.goto("/");
   const workspace = page.locator("main.workspace");
   await expect(workspace).toBeVisible({ timeout: 20_000 });
@@ -126,7 +125,7 @@ test("precomputed chart durations switch within 100 ms without additional market
   test.setTimeout(120_000);
   let quoteRequests = 0;
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/api/market/quotes") quoteRequests += 1;
+    if (new URL(request.url()).pathname === "/api/market/snapshot") quoteRequests += 1;
   });
   await installSyntheticPortfolio(page, syntheticPortfolio(20, 1_000, 1_800));
   await page.goto("/");
@@ -215,7 +214,6 @@ test("unsupported workers use the yielding fallback and missing FX remains expli
   fixture.quotes = fixture.quotes.filter((quote) => quote.securityId !== "sec-fx-usdjpy");
   await page.addInitScript(() => Object.defineProperty(window, "Worker", { value: undefined }));
   await installSyntheticPortfolio(page, fixture);
-  await page.route("**/api/market/benchmarks**", (route) => route.fulfill({ json: { benchmarks: [], failures: [] } }));
   await page.goto("/");
   const workspace = page.locator("main.workspace");
   const filter = page.getByRole("combobox", { name: /資産区分(?:と国)?で絞り込み/u });
@@ -230,7 +228,7 @@ test("unsupported workers use the yielding fallback and missing FX remains expli
 test("switching market filters and selecting JP and US stocks does not trigger quote storm or crash", async ({ page }) => {
   let quoteRequests = 0;
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/api/market/quotes") quoteRequests += 1;
+    if (new URL(request.url()).pathname === "/api/market/snapshot") quoteRequests += 1;
   });
   await installSyntheticPortfolio(page, syntheticPortfolio(6, 40, 200));
   await page.goto("/");

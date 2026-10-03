@@ -4,7 +4,6 @@ import { mkdtempSync, readFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { importPKCS8, exportJWK, importX509, SignJWT } from "jose";
 const env = vi.hoisted(() => ({FIREBASE_PROJECT_ID:"synthetic-project",FIREBASE_PROJECT_NUMBER:"123456",FIREBASE_WEB_APP_ID:"synthetic-app",KABUTORA_REQUIRE_AUTH:"true",KABUTORA_REQUIRE_APP_CHECK:"true",KABUTORA_ALLOWED_UIDS:"member-a,member-b"}));
-vi.mock("./server-market-request-context",()=>({currentMarketRequestContext:()=>({env})}));
 let directory:string, certificate:string, privateKey:Awaited<ReturnType<typeof importPKCS8>>, publicJwk:Awaited<ReturnType<typeof exportJWK>>;
 beforeAll(async()=>{
   directory=mkdtempSync(`${tmpdir()}/kabutora-synthetic-auth-`);chmodSync(directory,0o700);
@@ -28,11 +27,11 @@ it("verifies real signatures and App Check for two members, denies outsiders, ex
     throw new Error("unexpected_network_destination");
   });
   const {authorizeMarketRequest}=await import("./server-auth");
-  await expect(authorizeMarketRequest(await request("member-a"))).resolves.toEqual({uid:"member-a"});
-  await expect(authorizeMarketRequest(await request("member-b"))).resolves.toEqual({uid:"member-b"});
-  await expect(authorizeMarketRequest(await request("outsider"))).rejects.toThrow("Account is not authorized");
-  await expect(authorizeMarketRequest(await request("member-a",{expired:true}))).rejects.toThrow();
-  await expect(authorizeMarketRequest(await request("member-a",{appCheck:false}))).rejects.toThrow("App verification required");
+  await expect(authorizeMarketRequest(await request("member-a"),env)).resolves.toEqual({uid:"member-a"});
+  await expect(authorizeMarketRequest(await request("member-b"),env)).resolves.toEqual({uid:"member-b"});
+  await expect(authorizeMarketRequest(await request("outsider"),env)).rejects.toThrow("Account is not authorized");
+  await expect(authorizeMarketRequest(await request("member-a",{expired:true}),env)).rejects.toThrow();
+  await expect(authorizeMarketRequest(await request("member-a",{appCheck:false}),env)).rejects.toThrow("App verification required");
   env.KABUTORA_ALLOWED_UIDS="member-a";
-  await expect(authorizeMarketRequest(await request("member-b"))).rejects.toThrow("Account is not authorized");
+  await expect(authorizeMarketRequest(await request("member-b"),env)).rejects.toThrow("Account is not authorized");
 });

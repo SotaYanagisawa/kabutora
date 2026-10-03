@@ -1,12 +1,11 @@
 # Market API Guide
 
-These routes expose public market data through the Cloudflare edge boundary.
+On Cloudflare, `/api/market/*` is routed by [`lib/server/market-router.ts`](../../../lib/server/market-router.ts) before Next.js and served by the `MarketCoordinator` Durable Object. The single route in `[resource]/route.ts` serves the same `MarketHub` in memory for the local Mac app and `next dev`. See [`docs/market-backend.md`](../../../../../docs/market-backend.md).
 
-- Authenticate every non-health request with the shared server-auth helpers.
-- Accept only normalized public security descriptors or identifiers. Never accept portfolio records, quantities, balances, brokers, account IDs, transaction IDs, emails, or user display data.
-- Keep route handlers thin: validate input, call a server service, and return a stable response with appropriate cache headers.
-- Use D1/queue bindings through `cloudflare-market-env.ts`; do not import these routes or server modules from client components.
-- Preserve ETag and snapshot-first behavior. Manual refresh enqueues work and must not block on history backfill.
-- Bound upstream calls with timeouts and return partial coverage/failure metadata rather than discarding successful results.
+- Authenticate every request except `health` with `authorizeMarketRequest`.
+- Cloud reads (`snapshot`, `history`, `distributions`) take no symbol lists: the response covers the shared public catalog and the browser filters locally. `history` accepts only a year start.
+- `registry` accepts a body with exactly `securityIds`. Cloud clients send one explicit search selection per call (the object enforces this); the catalog is capped at 200.
+- Never accept portfolio records, quantities, balances, brokers, account or transaction IDs, emails or user display data.
+- Requests never wait on slow page scrapes or history backfill. Upstream work stays within 50 subrequests per invocation and keeps the last good data on failure.
 
-Run the affected route/service tests, `pnpm verify:privacy`, and the root full gate before completion.
+Run `pnpm test:market`, `pnpm test:worker`, `pnpm verify:privacy`, and the root full gate before completion.

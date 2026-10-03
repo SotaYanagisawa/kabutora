@@ -1,6 +1,6 @@
 // Client-side market quote consumption, caching, security catalogs, and search.
 
-export * from "../client-market-service";
+export * from "../market-client";
 export * from "../client-market-cache";
 export * from "../intraday-cache";
 export * from "../market-history";

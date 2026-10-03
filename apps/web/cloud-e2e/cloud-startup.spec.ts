@@ -5,6 +5,7 @@ import { doc, getDoc, setDoc } from "firebase/firestore";
 import { createEncryptedVault, createGoogleProtectedVault, createRecoveryVault, decryptVaultWithDataKey } from "../lib/vault-crypto";
 import demo from "../data/demo-seed.json";
 import { readFile } from "node:fs/promises";
+import { mockMarket, type MarketFixture } from "../e2e/market-fixture";
 
 const projectId = "demo-kabutora-security-rules";
 const password = "kabutora-emulator-only-password";
@@ -40,23 +41,22 @@ async function marketRoutes(page: Page, snapshot?: Record<string, unknown>) {
     const settled = (request: BrowserRequest) => { if (activity.pending.delete(request)) activity.changedAt = Date.now(); };
     page.on("requestfinished", settled);
     page.on("requestfailed", settled);
+    // Cloud clients may only send symbol-free market reads; held symbols never leave the device.
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (!url.pathname.startsWith("/api/market/") || url.pathname === "/api/market/search") return;
+      const params = [...url.searchParams].filter(([name]) => !["since", "catalog", "refresh", "from"].includes(name));
+      const sent = `${JSON.stringify(params)} ${request.postData() ?? ""}`.toLowerCase();
+      if (/7203|aapl/u.test(sent)) throw new Error(`market request leaked a held symbol: ${url.pathname}`);
+    });
   }
-  await page.route("**/api/market/data?**", route => {
-    const url = new URL(route.request().url()), resource = url.searchParams.get("resource");
-    const timestamp = new Date().toISOString(), revision = "a".repeat(64);
-    if (!url.searchParams.has("chunk")) return route.fulfill({json:{resource,revision,chunk_count:1,published_at:timestamp},headers:{"X-Market-Server-Time":timestamp}});
-    const payload = resource === "quotes" ? {quotes:snapshot?.quotes ?? [],benchmarks:snapshot?.benchmarks ?? [],coverage:snapshot?.coverage ?? {registered:0,quoted:0}}
-      : resource === "intraday" ? {bars:snapshot?.intraday ?? []}
-      : resource === "history" ? {bars:[],corporateActions:[],inceptionDates:{}}
-      : {distributions:[],corporateActions:[],coverage:[]};
-    return route.fulfill({json:payload});
-  });
   await page.route("**/api/local/bootstrap", (route) => route.fulfill({ status: 204 }));
-  await page.route("**/api/market/quotes", (route) => route.fulfill({ json: { quotes: [], intraday: [], failures: [], coverage: { requested: 0, returned: 0 } } }));
-  await page.route("**/api/market/history", (route) => route.fulfill({ json: { bars: [], corporateActions: [], failures: [], coverage: { requested: 0, returned: 0 } } }));
-  await page.route("**/api/market/benchmarks**", (route) => route.fulfill({ json: { benchmarks: [], failures: [] } }));
-  await page.route("**/api/market/intraday**", (route) => route.fulfill({ json: { bars: [], sessions: [], coverage: { requested: 0, ready: 0, currentReady: 0 }, revision: null, generatedAt: new Date().toISOString() } }));
-  if (snapshot) await page.route("**/api/market/snapshot**", (route) => route.fulfill({ json: snapshot, headers: { ETag: `"cloud-sparkline-fixture"` } }));
+  await mockMarket(page, {
+    generatedAt: typeof snapshot?.generatedAt === "string" ? snapshot.generatedAt : undefined,
+    quotes: (snapshot?.quotes ?? []) as MarketFixture["quotes"],
+    benchmarks: (snapshot?.benchmarks ?? []) as MarketFixture["benchmarks"],
+    intraday: (snapshot?.intraday ?? []) as MarketFixture["intraday"],
+  });
 }
 async function signIn(page: Page, mode: "個人端末" | "共有端末", snapshot?: Record<string, unknown>) {
   await marketRoutes(page, snapshot);
@@ -275,8 +275,6 @@ test("two trusted devices merge independent preferences and retain encrypted edi
     }
     if (/\/api\/|\/_next\//u.test(request.url()) && !/abort|cancel/iu.test(request.failure()?.errorText ?? "")) failures.push(request.failure()?.errorText ?? "request failed");
   });
-  for (const route of ["distributions", "registry", "refresh"]) await second.route(`**/api/market/${route}`, (request) => request.fulfill({ json: route === "distributions" ? { distributions: [], coverage: [], failures: [] } : { accepted: 0, queued: 0 } }));
-  await second.route("**/api/market/snapshot**", (route) => route.fulfill({ status: 204 }));
   const marketFilter = (target: Page) => target.getByRole("combobox", { name: /資産区分(?:と国)?で絞り込み/u });
   const currencyFilter = (target: Page) => target.getByRole("combobox", { name: "表示通貨", exact: true });
   try {

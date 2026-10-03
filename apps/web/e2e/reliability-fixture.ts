@@ -1,4 +1,5 @@
 import type { Page } from "./strict-fixture";
+import { mockMarket } from "./market-fixture";
 import demo from "../data/demo-seed.json";
 import { Decimal, type MarketBar } from "@kabutora/domain";
 
@@ -28,8 +29,15 @@ export function syntheticPortfolio(securityCount = 20, transactionCount = 1000, 
 
 export async function installSyntheticPortfolio(page: Page, fixture = syntheticPortfolio()) {
   await page.route("**/api/local/bootstrap", (route) => route.fulfill({ json: fixture.seed }));
-  await page.route("**/api/market/quotes", (route) => route.fulfill({ json: { quotes: fixture.quotes, intraday: [], failures: [], coverage: { requested: fixture.quotes.length, returned: fixture.quotes.length }, generatedAt: fixture.generatedAt } }));
-  await page.route("**/api/market/history", (route) => route.fulfill({ json: { bars: fixture.bars, corporateActions: [], failures: [], inceptionDates: {}, coverage: { requested: fixture.quotes.length + 1, returned: fixture.quotes.length + 1 }, generatedAt: fixture.generatedAt } }));
-  await page.route("**/api/market/benchmarks**", (route) => route.fulfill({ json: { benchmarks: [{ id: "usd-jpy", label: "USD/JPY", value: 150.123, marketTimestamp: fixture.generatedAt }], failures: [] } }));
+  await mockMarket(page, {
+    get generatedAt() { return fixture.generatedAt; },
+    get quotes() { return fixture.quotes; },
+    get bars() { return fixture.bars; },
+    get benchmarks() {
+      return fixture.quotes.some((quote) => quote.securityId === "sec-fx-usdjpy")
+        ? [{ id: "usd-jpy", label: "USD/JPY", value: 150.123, marketTimestamp: fixture.generatedAt }]
+        : [];
+    },
+  });
   return fixture;
 }

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "./strict-fixture";
+import { mockMarket } from "./market-fixture";
 import { resolve as resolvePath } from "node:path";
 
 const generatedAt = "2026-08-31T12:00:00.000Z";
@@ -8,38 +9,14 @@ async function setupPage(page: Page) {
     path: resolvePath(process.cwd(), "apps/web/data/demo-seed.json"),
     contentType: "application/json",
   }));
-  await page.route("**/api/market/quotes", async (route) => {
-    await route.fulfill({ json: {
-      generatedAt,
-      marketSessions: [],
-      quotes: [
-        { securityId: "sec-7203-xtks", symbol: "7203", exchangeMic: "XTKS", currency: "JPY", price: "3000", previousRegularClose: "2950", marketTimestamp: generatedAt, fetchedAt: generatedAt, freshness: "cached", provider: "fixture", session: "closed", priceType: "official_close", venueCode: "TSE", validationStatus: "valid" },
-        { securityId: "sec-us-aapl-xnas", symbol: "AAPL", exchangeMic: "XNAS", currency: "USD", price: "220", previousRegularClose: "218", marketTimestamp: generatedAt, fetchedAt: generatedAt, freshness: "cached", provider: "fixture", session: "closed", priceType: "official_close", venueCode: "US", validationStatus: "valid" },
-      ],
-      intraday: [],
-      failures: [],
-      coverage: { requested: 2, returned: 2, fresh: 0, stale: 0, suspect: 0 },
-    } });
-  });
-  await page.route("**/api/market/history", async (route) => {
-    await route.fulfill({ json: {
-      generatedAt,
-      marketSessions: [],
-      bars: [
-        { securityId: "sec-fx-usdjpy", date: "2026-08-31", close: "150", provider: "fixture" },
-      ],
-      corporateActions: [],
-      inceptionDates: {},
-      failures: [],
-      coverage: { requested: 1, returned: 1 },
-    } });
-  });
-  await page.route("**/api/market/benchmarks**", (route) => route.fulfill({ json: {
+  await mockMarket(page, {
     generatedAt,
-    marketSessions: [],
-    benchmarks: [],
-    failures: [],
-  } }));
+    quotes: [
+      { securityId: "sec-7203-xtks", symbol: "7203", exchangeMic: "XTKS", currency: "JPY", price: "3000", previousRegularClose: "2950", marketTimestamp: generatedAt, fetchedAt: generatedAt, freshness: "cached", provider: "fixture", session: "closed", priceType: "official_close", venueCode: "TSE", validationStatus: "valid" },
+      { securityId: "sec-us-aapl-xnas", symbol: "AAPL", exchangeMic: "XNAS", currency: "USD", price: "220", previousRegularClose: "218", marketTimestamp: generatedAt, fetchedAt: generatedAt, freshness: "cached", provider: "fixture", session: "closed", priceType: "official_close", venueCode: "US", validationStatus: "valid" },
+    ],
+    bars: [{ securityId: "sec-fx-usdjpy", date: "2026-08-31", close: "150", provider: "fixture" }],
+  });
 
   await page.goto("/");
   await expect(page.getByRole("button", { name: "通知", exact: true })).toBeVisible({ timeout: 20_000 });
