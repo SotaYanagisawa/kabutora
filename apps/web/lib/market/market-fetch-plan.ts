@@ -59,7 +59,11 @@ export function firstInternalHistoryGap(
   maxGapDays = MAX_EXPECTED_MARKET_GAP_DAYS,
   throughDate?: string,
 ) {
-  const dates = [...new Set(bars.filter((bar) => bar.securityId === securityId).map((bar) => bar.date))].sort();
+  return firstGapInDates(bars.filter((bar) => bar.securityId === securityId).map((bar) => bar.date), requiredFrom, maxGapDays, throughDate);
+}
+
+function firstGapInDates(securityDates: string[], requiredFrom: string, maxGapDays: number, throughDate?: string) {
+  const dates = [...new Set(securityDates)].sort();
   let previous: string | null = null;
   for (const date of dates) {
     if (date < requiredFrom) {
@@ -82,10 +86,18 @@ export function missingHistoryRequirements(
   throughDate?: string,
 ) {
   const coverage = historyCoverage(bars);
+  // One pass groups dates by security instead of one scan of every bar per requirement.
+  const datesBySecurity = new Map<string, string[]>();
+  for (const bar of bars) {
+    if (!requirements.has(bar.securityId)) continue;
+    const dates = datesBySecurity.get(bar.securityId);
+    if (dates) dates.push(bar.date);
+    else datesBySecurity.set(bar.securityId, [bar.date]);
+  }
   return [...requirements].flatMap(([securityId, requiredFrom]) => {
     const current = coverage.get(securityId);
     return !historyRequirementSatisfied(current?.first, requiredFrom, HISTORY_START_GRACE_DAYS, inceptionDates[securityId])
-      || firstInternalHistoryGap(bars, securityId, requiredFrom, MAX_EXPECTED_MARKET_GAP_DAYS, throughDate)
+      || firstGapInDates(datesBySecurity.get(securityId) ?? [], requiredFrom, MAX_EXPECTED_MARKET_GAP_DAYS, throughDate)
       ? [securityId]
       : [];
   });

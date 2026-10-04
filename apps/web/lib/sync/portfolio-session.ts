@@ -192,7 +192,9 @@ export class PortfolioSession {
       }
     }
     this.legacyKeys = await readLegacyVaultKeys(envelope, key);
-    if (!this.events) { this.stage({ stage: "event-replay" }); return; }
+    // A verified cached portfolio already on screen stays there until the event log arrives;
+    // a loading stage here would unmount the dashboard and restart it from scratch.
+    if (!this.events) { if (!this.state.seed) this.stage({ stage: "event-replay" }); return; }
     const pending = await getPendingPortfolioEvents(this.uid);
     const remote = await this.decryptEvents(this.events, envelope, base);
     const local = await this.decryptEvents(pending.map((item) => ({ id: item.id, ...item.event })), envelope, base);

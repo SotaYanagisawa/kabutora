@@ -24,6 +24,25 @@ describe("market history integrity", () => {
     expect(second.quality.checksum).toBe(first.quality.checksum);
   });
 
+  it("orders bars by date, then by locale-collated security ID, so cached checksums stay stable", () => {
+    const ids = ["sec-b", "Sec-A", "sec-a", "sec-1300-xtks", "sec-us-x-xnas"];
+    const bars = ids.flatMap((securityId) => ["2026-01-03", "2026-01-02"].map((date) => ({ securityId, date, close: "100", provider: "fixture" })));
+    const { bars: sorted } = inspectMarketHistory([], bars, []);
+    const collated = [...ids].sort((left, right) => left.localeCompare(right));
+
+    expect(sorted.map((bar) => `${bar.date}|${bar.securityId}`)).toEqual(["2026-01-02", "2026-01-03"].flatMap((date) => collated.map((id) => `${date}|${id}`)));
+  });
+
+  it("rejects calendar dates that do not exist", () => {
+    const result = inspectMarketHistory([], [
+      { securityId: "sec-a", date: "2026-02-29", close: "100", provider: "fixture" },
+      { securityId: "sec-a", date: "2024-02-29", close: "100", provider: "fixture" },
+    ], []);
+
+    expect(result.bars.map((bar) => bar.date)).toEqual(["2024-02-29"]);
+    expect(result.quality.rejectedBars).toBe(1);
+  });
+
   it("accepts a large price move when a verified split explains it", () => {
     const result = inspectMarketHistory([], [
       { securityId: "sec-a", date: "2026-06-26", close: "10000", provider: "network" },

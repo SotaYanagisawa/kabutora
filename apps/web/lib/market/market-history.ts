@@ -17,10 +17,39 @@ export type PackedHistorySeries = Record<string, { provider: string; rows: Array
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 
-function validDate(value: string) {
-  if (!datePattern.test(value)) return false;
-  const parsed = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SPLIT_WINDOW_MS = 4 * DAY_MS;
+
+/**
+ * UTC midnight of an ISO calendar date, or NaN when the date is malformed or does not exist.
+ * Bars of every security share the same few thousand dates, so one inspection parses each once.
+ */
+function createDayClock() {
+  const cache = new Map<string, number>();
+  return (value: string) => {
+    let time = cache.get(value);
+    if (time === undefined) {
+      time = datePattern.test(value) ? Date.parse(`${value}T00:00:00Z`) : Number.NaN;
+      if (Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) !== value) time = Number.NaN;
+      cache.set(value, time);
+    }
+    return time;
+  };
+}
+type DayClock = ReturnType<typeof createDayClock>;
+
+/** Validated ISO dates order the same by code unit as by locale, without a collator call per comparison. */
+const compareDates = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
+
+/**
+ * Bar order: date, then security ID by locale. IDs are collated once (equal IDs share a rank),
+ * so the order, and with it the checksum, matches a `localeCompare` per comparison.
+ */
+function sortBarsByDateAndSecurity(bars: MarketBar[]) {
+  const ids = [...new Set(bars.map((bar) => bar.securityId))].sort((left, right) => left.localeCompare(right));
+  const rank = new Map<string, number>();
+  ids.forEach((id, index) => rank.set(id, index && ids[index - 1]!.localeCompare(id) === 0 ? rank.get(ids[index - 1]!)! : index));
+  return bars.sort((a, b) => compareDates(a.date, b.date) || rank.get(a.securityId)! - rank.get(b.securityId)!);
 }
 
 function checksum(value: string) {
@@ -34,21 +63,10 @@ function checksum(value: string) {
 
 function sanitizeHistoryBars(
   bars: MarketBar[],
-  actions: CorporateAction[],
+  actionDates: Map<string, number[]>,
+  day: DayClock,
 ): { bars: MarketBar[]; repairedCount: number } {
   if (bars.length < 2) return { bars, repairedCount: 0 };
-
-  const actionDates = new Map<string, number[]>();
-  for (const action of actions) {
-    const dates = actionDates.get(action.securityId) ?? [];
-    dates.push(new Date(`${action.effectiveDate}T00:00:00Z`).getTime());
-    actionDates.set(action.securityId, dates);
-  }
-
-  const hasSplitNear = (securityId: string, timestamp: number) => {
-    const dates = actionDates.get(securityId) ?? [];
-    return dates.some((actionDate) => Math.abs(actionDate - timestamp) <= 4 * 24 * 60 * 60 * 1000);
-  };
 
   const bySecurity = new Map<string, MarketBar[]>();
   for (const bar of bars) {
@@ -61,7 +79,10 @@ function sanitizeHistoryBars(
   const result: MarketBar[] = [];
 
   for (const [securityId, secBars] of bySecurity) {
-    const sorted = [...secBars].sort((a, b) => a.date.localeCompare(b.date));
+    const splitDates = actionDates.get(securityId);
+    /** Most securities have no splits, so their bar dates are never parsed. */
+    const nearSplit = (date: string) => Boolean(splitDates?.some((actionDate) => Math.abs(actionDate - day(date)) <= SPLIT_WINDOW_MS));
+    const sorted = [...secBars].sort((a, b) => compareDates(a.date, b.date));
     const n = sorted.length;
     if (n < 2) {
       result.push(...sorted);
@@ -80,9 +101,7 @@ function sanitizeHistoryBars(
       const pCurr = Number(curr.close);
       const pNext = Number(next.close);
       if (!Number.isFinite(pPrev) || !Number.isFinite(pCurr) || !Number.isFinite(pNext) || pPrev <= 0 || pNext <= 0) continue;
-
-      const tCurr = new Date(`${curr.date}T00:00:00Z`).getTime();
-      if (hasSplitNear(securityId, tCurr)) continue;
+      if (nearSplit(curr.date)) continue;
 
       const ratioPrev = pCurr / pPrev;
       const ratioNext = pCurr / pNext;
@@ -93,8 +112,9 @@ function sanitizeHistoryBars(
       const isIsolatedSpike = neighborsConsistent && ratioPrev >= 1.5 && ratioNext >= 1.5;
 
       if (isIsolatedDip || isIsolatedSpike) {
-        const tPrev = new Date(`${prev.date}T00:00:00Z`).getTime();
-        const tNext = new Date(`${next.date}T00:00:00Z`).getTime();
+        const tPrev = day(prev.date);
+        const tCurr = day(curr.date);
+        const tNext = day(next.date);
         const alpha = tNext > tPrev ? Math.max(0, Math.min(1, (tCurr - tPrev) / (tNext - tPrev))) : 0.5;
         const pRepaired = pPrev + alpha * (pNext - pPrev);
         curr.close = String(Math.round(pRepaired * 10000) / 10000);
@@ -122,9 +142,7 @@ function sanitizeHistoryBars(
       const pNext = Number(next.close);
       if (!Number.isFinite(pPrev) || !Number.isFinite(pCurr1) || !Number.isFinite(pCurr2) || !Number.isFinite(pNext) || pPrev <= 0 || pNext <= 0) continue;
 
-      const tCurr1 = new Date(`${curr1.date}T00:00:00Z`).getTime();
-      const tCurr2 = new Date(`${curr2.date}T00:00:00Z`).getTime();
-      if (hasSplitNear(securityId, tCurr1) || hasSplitNear(securityId, tCurr2)) continue;
+      if (nearSplit(curr1.date) || nearSplit(curr2.date)) continue;
 
       const neighborRatio = pNext / pPrev;
       const neighborsConsistent = neighborRatio >= 0.5 && neighborRatio <= 2.0;
@@ -136,8 +154,10 @@ function sanitizeHistoryBars(
         pCurr2 / pPrev >= 1.5 && pCurr2 / pNext >= 1.5;
 
       if (areBothDips || areBothSpikes) {
-        const tPrev = new Date(`${prev.date}T00:00:00Z`).getTime();
-        const tNext = new Date(`${next.date}T00:00:00Z`).getTime();
+        const tPrev = day(prev.date);
+        const tCurr1 = day(curr1.date);
+        const tCurr2 = day(curr2.date);
+        const tNext = day(next.date);
         const span = tNext - tPrev;
         if (span > 0) {
           const alpha1 = Math.max(0, Math.min(1, (tCurr1 - tPrev) / span));
@@ -166,9 +186,7 @@ function sanitizeHistoryBars(
       const aCurr = Number(curr.adjustedClose);
       const aNext = next.adjustedClose ? Number(next.adjustedClose) : Number(next.close);
       if (!Number.isFinite(aPrev) || !Number.isFinite(aCurr) || !Number.isFinite(aNext) || aPrev <= 0 || aNext <= 0) continue;
-
-      const tCurr = new Date(`${curr.date}T00:00:00Z`).getTime();
-      if (hasSplitNear(securityId, tCurr)) continue;
+      if (nearSplit(curr.date)) continue;
 
       const aNeighborRatio = aNext / aPrev;
       const aNeighborsConsistent = aNeighborRatio >= 0.5 && aNeighborRatio <= 2.0;
@@ -176,8 +194,9 @@ function sanitizeHistoryBars(
       const isAdjSpike = aNeighborsConsistent && aCurr / aPrev >= 1.5 && aCurr / aNext >= 1.5;
 
       if (isAdjDip || isAdjSpike) {
-        const tPrev = new Date(`${prev.date}T00:00:00Z`).getTime();
-        const tNext = new Date(`${next.date}T00:00:00Z`).getTime();
+        const tPrev = day(prev.date);
+        const tCurr = day(curr.date);
+        const tNext = day(next.date);
         const alpha = tNext > tPrev ? Math.max(0, Math.min(1, (tCurr - tPrev) / (tNext - tPrev))) : 0.5;
         const aRepaired = aPrev + alpha * (aNext - aPrev);
         curr.adjustedClose = String(Math.round(aRepaired * 10000) / 10000);
@@ -191,9 +210,8 @@ function sanitizeHistoryBars(
       const secondLast = currentBars[n - 2];
       const pLast = Number(last.close);
       const pSecondLast = Number(secondLast.close);
-      const tLast = new Date(`${last.date}T00:00:00Z`).getTime();
 
-      if (Number.isFinite(pLast) && Number.isFinite(pSecondLast) && pSecondLast > 0 && !hasSplitNear(securityId, tLast)) {
+      if (Number.isFinite(pLast) && Number.isFinite(pSecondLast) && pSecondLast > 0 && !nearSplit(last.date)) {
         const tailRatio = pLast / pSecondLast;
         if (tailRatio <= 0.65 || tailRatio >= 1.50) {
           last.close = secondLast.close;
@@ -208,8 +226,7 @@ function sanitizeHistoryBars(
       const second = currentBars[1];
       const pFirst = Number(first.close);
       const pSecond = Number(second.close);
-      const tFirst = new Date(`${first.date}T00:00:00Z`).getTime();
-      if (Number.isFinite(pFirst) && Number.isFinite(pSecond) && pFirst > 0 && !hasSplitNear(securityId, tFirst)) {
+      if (Number.isFinite(pFirst) && Number.isFinite(pSecond) && pFirst > 0 && !nearSplit(first.date)) {
         const leadRatio = pFirst / pSecond;
         if (leadRatio <= 0.65 || leadRatio >= 1.50) {
           first.close = second.close;
@@ -225,12 +242,14 @@ function sanitizeHistoryBars(
   }
 
   return {
-    bars: result.sort((a, b) => a.date.localeCompare(b.date) || a.securityId.localeCompare(b.securityId)),
+    bars: sortBarsByDateAndSecurity(result),
     repairedCount,
   };
 }
 
 export function inspectMarketHistory(existingBars: MarketBar[], incomingBars: MarketBar[], candidateActions: CorporateAction[]) {
+  const day = createDayClock();
+  const validDate = (value: string) => Number.isFinite(day(value));
   const barMap = new Map<string, MarketBar>();
   let rejectedBars = 0;
   let duplicateBars = 0;
@@ -250,7 +269,7 @@ export function inspectMarketHistory(existingBars: MarketBar[], incomingBars: Ma
       ...(Number.isFinite(adjustedClose) && adjustedClose > 0 ? { adjustedClose: String(adjustedClose) } : {}),
     });
   }
-  const rawBars = [...barMap.values()].sort((a, b) => a.date.localeCompare(b.date) || a.securityId.localeCompare(b.securityId));
+  const rawBars = sortBarsByDateAndSecurity([...barMap.values()]);
 
   const actionMap = new Map<string, CorporateAction>();
   let rejectedActions = 0;
@@ -267,11 +286,11 @@ export function inspectMarketHistory(existingBars: MarketBar[], incomingBars: Ma
   const actionDates = new Map<string, number[]>();
   for (const action of actions) {
     const dates = actionDates.get(action.securityId) ?? [];
-    dates.push(new Date(`${action.effectiveDate}T00:00:00Z`).getTime());
+    dates.push(day(action.effectiveDate));
     actionDates.set(action.securityId, dates);
   }
 
-  const { bars, repairedCount } = sanitizeHistoryBars(rawBars, actions);
+  const { bars, repairedCount } = sanitizeHistoryBars(rawBars, actionDates, day);
 
   let suspectMoves = 0;
   const previous = new Map<string, MarketBar>();
@@ -279,8 +298,7 @@ export function inspectMarketHistory(existingBars: MarketBar[], incomingBars: Ma
     const prior = previous.get(bar.securityId);
     if (prior) {
       const ratio = Number(bar.close) / Number(prior.close);
-      const date = new Date(`${bar.date}T00:00:00Z`).getTime();
-      const explainedBySplit = (actionDates.get(bar.securityId) ?? []).some((actionDate) => Math.abs(actionDate - date) <= 4 * 24 * 60 * 60 * 1000);
+      const explainedBySplit = Boolean(actionDates.get(bar.securityId)?.some((actionDate) => Math.abs(actionDate - day(bar.date)) <= SPLIT_WINDOW_MS));
       if (!explainedBySplit && (ratio >= 4 || ratio <= 0.25)) suspectMoves += 1;
     }
     previous.set(bar.securityId, bar);
