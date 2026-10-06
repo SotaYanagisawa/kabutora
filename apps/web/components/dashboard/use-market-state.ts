@@ -40,6 +40,7 @@ import type {
 
 const EMPTY_HEALTH: FetchHealth = { requested: 0, returned: 0, failedIds: [], fallbackIds: [], updatedAt: null };
 const CACHED_MARKET_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const HISTORY_CACHE_SCHEMA_VERSION = 11;
 const now = () => typeof performance === "undefined" ? 0 : performance.now();
 
 export type ApiUsage = {
@@ -131,7 +132,7 @@ export function useMarketState({ initialServerTimeMs, initialMarketSessions = []
 
   const persistHistory = useCallback((savedAt: string, checksum: string, bars: MarketBar[], actions: CorporateAction[], inceptionDates: Record<string, string>) => {
     void writeMarketCache<HistoryCachePayload>(HISTORY_CACHE_KEY, {
-      schemaVersion: 11,
+      schemaVersion: HISTORY_CACHE_SCHEMA_VERSION,
       derivationVersion: PERFORMANCE_DERIVATION_VERSION,
       savedAt,
       checksum,
@@ -166,7 +167,9 @@ export function useMarketState({ initialServerTimeMs, initialMarketSessions = []
         const latest = latestBarBySecurity.get(secId);
         if (!latest || daysBetween(latest.date, dateKey) > 5) continue;
         const existing = barBySecurityDate.get(`${secId}:${dateKey}`);
-        if (!existing || existing.provider === "quote_log") {
+        // A quote already logged at this price changes nothing; skipping it spares a full history re-inspection.
+        const logged = existing?.provider === "quote_log" && existing.close === String(priceNum) && existing.adjustedClose === String(priceNum);
+        if ((!existing || existing.provider === "quote_log") && !logged) {
           quoteBars.push({ securityId: secId, date: dateKey, close: quote.price, adjustedClose: quote.price, provider: "quote_log" });
         }
       }
@@ -264,7 +267,10 @@ export function useMarketState({ initialServerTimeMs, initialMarketSessions = []
           setHistoryCacheMeta(nextMeta);
           if (inspected.bars.length) setHistoryStatus(integrityMismatch ? "partial" : "ready");
           setApiUsage((current) => ({ ...current, integrityChecks: current.integrityChecks + 1 }));
-          persistHistory(savedAt, inspected.quality.checksum, inspected.bars, inspected.actions, cachedHistory.inceptionDates ?? {});
+          // Rewrite only a cache that changed in normalization or format; an intact current one is left as is.
+          const cacheCurrent = Boolean(cachedHistory.series) && cachedHistory.checksum === inspected.quality.checksum
+            && cachedHistory.schemaVersion === HISTORY_CACHE_SCHEMA_VERSION && cachedHistory.derivationVersion === PERFORMANCE_DERIVATION_VERSION;
+          if (!cacheCurrent) persistHistory(savedAt, inspected.quality.checksum, inspected.bars, inspected.actions, cachedHistory.inceptionDates ?? {});
           if (!cachedDistributions && cachedHistory.distributions?.length) {
             const legacyEvents = mergeDistributionEvents(cachedHistory.distributions);
             setDistributions(legacyEvents);

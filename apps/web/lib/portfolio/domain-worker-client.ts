@@ -1,6 +1,6 @@
 import type { DomainWorkerRequest, DomainWorkerResponse } from "./domain-worker";
 import { abortError, OperationTimeoutError } from "../ui/operation-deadline";
-import { calculatePortfolio, emptyPortfolioCalculation, indexHistoryDataset, type PortfolioCalculationResult, type HistoryDataset, type HistorySelection, type IndexedHistoryDataset } from "./portfolio-history-calculation";
+import { calculatePortfolio, emptyPortfolioCalculation, indexHistoryDataset, type PortfolioCalculationResult, type PortfolioSummaryResult, type HistoryDataset, type HistorySelection, type IndexedHistoryDataset } from "./portfolio-history-calculation";
 
 type Job = {
   id: number;
@@ -11,6 +11,7 @@ type Job = {
   settled: boolean;
   cleanup: () => void;
   priority: "foreground" | "background";
+  onSummary?: (summary: PortfolioSummaryResult) => void;
 };
 
 /** One active job and one replacement, shared by one dashboard lifetime. */
@@ -33,10 +34,11 @@ export class PortfolioHistoryCalculator {
 
   diagnostics() { return { ...this.stats, pending: Number(Boolean(this.active)) + Number(Boolean(this.queuedForeground)) + Number(Boolean(this.queuedBackground)) }; }
 
-  calculate(dataset: HistoryDataset, selection: HistorySelection, signal?: AbortSignal, priority: "foreground" | "background" = "foreground"): Promise<PortfolioCalculationResult> {
+  /** `onSummary` receives holdings and totals as soon as they are known, before the history points. */
+  calculate(dataset: HistoryDataset, selection: HistorySelection, signal?: AbortSignal, priority: "foreground" | "background" = "foreground", onSummary?: (summary: PortfolioSummaryResult) => void): Promise<PortfolioCalculationResult> {
     if (this.disposed || signal?.aborted) return Promise.reject(abortError());
     return new Promise((resolve, reject) => {
-      const job: Job = { id: ++this.sequence, dataset, selection, resolve, reject, settled: false, cleanup: () => undefined, priority };
+      const job: Job = { id: ++this.sequence, dataset, selection, resolve, reject, settled: false, cleanup: () => undefined, priority, onSummary };
       const cancel = () => {
         this.settle(job, abortError());
         if (this.queuedForeground === job) this.queuedForeground = null;
@@ -100,6 +102,10 @@ export class PortfolioHistoryCalculator {
           if (this.worker !== worker) return;
           const response = event.data;
           if (response.id !== this.active?.id || response.revision !== this.revision) return;
+          if ("stage" in response) {
+            if (!this.active.settled) this.active.onSummary?.(response.summary);
+            return;
+          }
           this.finish(response.success ? undefined : response.error === "cancelled" ? abortError() : new Error("history_calculation_failed"), response.success ? response.result : emptyPortfolioCalculation);
         });
         worker.addEventListener("error", (e) => { console.warn("[WORKER_EVENT_ERROR]", e.message); if (this.worker === worker) this.workerFailed(); });
@@ -129,7 +135,7 @@ export class PortfolioHistoryCalculator {
       else {
         this.controller = new AbortController();
         const id = job.id;
-        void calculatePortfolio(this.indexed!, job.selection, this.controller.signal).then(
+        void calculatePortfolio(this.indexed!, job.selection, this.controller.signal, (summary) => { if (this.active?.id === id && !job.settled) job.onSummary?.(summary); }).then(
           (points) => { if (this.active?.id === id) this.finish(undefined, points); },
           (error) => { if (this.active?.id === id) this.finish(error); },
         );

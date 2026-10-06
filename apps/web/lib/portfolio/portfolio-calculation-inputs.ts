@@ -4,9 +4,7 @@ import { convertMoney } from "./money-conversion";
 import { abortError } from "../ui/operation-deadline";
 import type { HistoryDataset } from "./portfolio-history-calculation";
 
-/** Prepare complete accounting inputs once per display currency and revision.
- * Filtering does not copy the source history or throw away accounting records. */
-export async function convertCalculationDataset(dataset: HistoryDataset, currency: string, throughDate: string, signal: AbortSignal): Promise<HistoryDataset> {
+function calculationRates(dataset: HistoryDataset, throughDate: string) {
   const securityMap = new Map(dataset.securities.map((item) => [canonicalDomainSecurityId(item.id), item]));
   const nativeCurrency = (id: string | null) => securityMap.get(canonicalDomainSecurityId(id ?? ""))?.currency ?? (id?.startsWith("sec-us-") ? "USD" : "JPY");
   const fx = dataset.bars.filter((bar) => bar.securityId === "sec-fx-usdjpy").sort((a, b) => a.date.localeCompare(b.date));
@@ -20,6 +18,15 @@ export async function convertCalculationDataset(dataset: HistoryDataset, currenc
     }
     return rate;
   };
+  return { nativeCurrency, rateAt };
+}
+
+/**
+ * Accounting inputs (transactions, quotes, dividend receipts) in `currency`, leaving the daily bars
+ * native. Summaries need only these, so they are ready before every historical bar is converted.
+ */
+export function convertCalculationLedger(dataset: HistoryDataset, currency: string, throughDate: string, rates = calculationRates(dataset, throughDate)): HistoryDataset {
+  const { nativeCurrency, rateAt } = rates;
   const transactions = dataset.transactions.flatMap((item) => {
     const from = item.tradeCurrency ?? nativeCurrency(item.securityId);
     const grossAmount = convertMoney(item.grossAmount, from, currency, rateAt(item.tradeDate));
@@ -40,6 +47,19 @@ export async function convertCalculationDataset(dataset: HistoryDataset, currenc
     }
     return { ...item, currency, quote: next };
   });
+  const dividendReceipts = dataset.dividendReceipts?.flatMap((receipt) => {
+    const amount = convertMoney(receipt.grossAmount, receipt.currency, currency, rateAt(receipt.recognitionDate));
+    return amount === null ? [] : [{ ...receipt, currency, grossAmount: amount }];
+  });
+  return { ...dataset, transactions, securities, dividendReceipts };
+}
+
+/** Prepare complete accounting inputs once per display currency and revision.
+ * Filtering does not copy the source history or throw away accounting records. */
+export async function convertCalculationDataset(dataset: HistoryDataset, currency: string, throughDate: string, signal: AbortSignal, ledger?: HistoryDataset): Promise<HistoryDataset> {
+  const rates = calculationRates(dataset, throughDate);
+  const { nativeCurrency, rateAt } = rates;
+  const converted = ledger ?? convertCalculationLedger(dataset, currency, throughDate, rates);
   const bars: MarketBar[] = [];
   let started = performance.now();
   for (const bar of dataset.bars) {
@@ -53,9 +73,5 @@ export async function convertCalculationDataset(dataset: HistoryDataset, currenc
     }
     if (performance.now() - started >= 8) { await new Promise<void>((resolve) => setTimeout(resolve, 0)); started = performance.now(); }
   }
-  const dividendReceipts = dataset.dividendReceipts?.flatMap((receipt) => {
-    const amount = convertMoney(receipt.grossAmount, receipt.currency, currency, rateAt(receipt.recognitionDate));
-    return amount === null ? [] : [{ ...receipt, currency, grossAmount: amount }];
-  });
-  return { ...dataset, transactions, securities, bars, dividendReceipts };
+  return { ...converted, bars };
 }

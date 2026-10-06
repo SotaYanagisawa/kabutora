@@ -339,19 +339,21 @@ export function usePortfolioViewModel(o: Options) {
     fx: { current: currentUsdJpy, previous: previousUsdJpy },
   }), [calculationTransactions, nativeMarketSecurities, historyBars, applicableCorporateActions, stableDividendReceipts, currentUsdJpy, previousUsdJpy]);
   const historyCalculation = usePortfolioHistory({ dataset: historyDataset, summaryViewInputs, activeFilter: marketFilter, brokerFilter, todayKey, workspaceRef: o.workspaceRef });
-  const { activeResult, completed } = historyCalculation;
+  const { activeResult, completed, currentSummary, latestSummary } = historyCalculation;
 
   // Summary calculation is Decimal-heavy. It already runs in the domain
   // worker together with history reconstruction, so doing it twice again on
-  // the main thread made every filter interaction block a frame. Retain the
-  // last complete result until the worker atomically supplies the new view.
+  // the main thread made every filter interaction block a frame. The worker
+  // reports holdings and totals before the history, and the newest ones are
+  // retained until it supplies the current view.
   const calculation = activeResult ?? completed?.result ?? emptyPortfolioCalculation;
   const reconstructedHistory = useMemo(() => activeResult?.points ?? completed?.result?.points ?? [], [activeResult, completed]);
-  const precalculatedSummary = completed?.result?.filterSummaries?.[marketFilter];
-  const visibleSummary = activeResult?.summary ?? (marketFilter === "ALL" ? calculation.summary : (precalculatedSummary ?? calculation.summary));
-  const nativeSummary = activeResult?.nativeSummary ?? calculation.nativeSummary;
+  const summaryFallback = latestSummary ?? calculation;
+  const precalculatedSummary = summaryFallback.filterSummaries?.[marketFilter];
+  const visibleSummary = currentSummary?.summary ?? (marketFilter === "ALL" ? summaryFallback.summary : (precalculatedSummary ?? summaryFallback.summary));
+  const nativeSummary = currentSummary?.nativeSummary ?? summaryFallback.nativeSummary;
   const activeSummary = useMemo(() => projectStockPortfolio(visibleSummary), [visibleSummary]);
-  const reconciliation = calculation.reconciliation;
+  const reconciliation = (currentSummary ?? summaryFallback).reconciliation;
 
   // ---- Valuation readiness and headline metrics -------------------------------------
   const conversionDates = [

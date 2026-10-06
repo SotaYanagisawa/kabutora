@@ -140,7 +140,14 @@ export function useMarketLoaders({
         const canonical = canonicalDomainSecurityId(securityId);
         idsByCanonical.set(canonical, [...idsByCanonical.get(canonical) ?? [], securityId]);
       }
-      const forPortfolio = <T extends { securityId: string }>(items: T[]) => items.flatMap((item) => (idsByCanonical.get(canonicalDomainSecurityId(item.securityId)) ?? [])
+      // Thousands of bars share each ID; canonicalize every distinct ID once.
+      const targetsById = new Map<string, string[]>();
+      const targetsFor = (securityId: string) => {
+        let targets = targetsById.get(securityId);
+        if (!targets) targetsById.set(securityId, targets = idsByCanonical.get(canonicalDomainSecurityId(securityId)) ?? []);
+        return targets;
+      };
+      const forPortfolio = <T extends { securityId: string }>(items: T[]) => items.flatMap((item) => targetsFor(item.securityId)
         .map((securityId) => securityId === item.securityId ? item : { ...item, securityId }));
       const incomingBars = forPortfolio(payload.bars);
       const incomingActions = forPortfolio(payload.corporateActions);

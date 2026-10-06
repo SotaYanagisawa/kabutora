@@ -12,7 +12,7 @@
  */
 import { calculateAverageCostPortfolio, canonicalDomainSecurityId } from "@kabutora/domain";
 import { ArrowLeft, Eye, EyeOff, Moon, Plus, RefreshCw, Sun } from "lucide-react";
-import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BrowserPreferences, useBrowserPreferences } from "@/components/app/browser-preferences";
 import WatchlistView from "@/components/watchlist/watchlist-view";
 import { marketDateKey } from "@/lib/charts/chart-presentation";
@@ -89,6 +89,16 @@ function syncedList<T>(current: T[], incoming: T[]) {
   return current.length === incoming.length && current.every((item, i) => JSON.stringify(item) === JSON.stringify(incoming[i])) ? current : incoming;
 }
 
+/**
+ * Keeps the previous array while a re-synced seed carries equal contents. A cloud replay replaces
+ * every seed array; without this, each one would recompute valuations and reset worker caches.
+ */
+function useSyncedList<T>(incoming: T[]) {
+  const ref = useRef(incoming);
+  ref.current = syncedList(ref.current, incoming);
+  return ref.current;
+}
+
 export default function Dashboard(props: DashboardProps) {
   return <BrowserPreferences persistent={props.allowPersistentMarketCache !== false} namespace={props.preferenceNamespace}><DashboardContents {...props}/></BrowserPreferences>;
 }
@@ -99,12 +109,13 @@ function DashboardContents(props: DashboardProps) {
     onTransactionsChange, onAccountsChange, onSecuritiesChange, onWatchlistChange, onEncryptedBackup, onRestoreBackup, onLogout, onStartupReady,
   } = props;
   const storage = useBrowserPreferences();
+  const seedSecurities = useSyncedList(seed.securities as SearchSecurity[]);
   const prefs = useDashboardPreferences({ seed, storage, onPreferencesChange: props.onPreferencesChange, onWatchlistChange });
   const { watchlist, setWatchlist, displayCurrency, set } = prefs;
   // Filter changes re-run worker calculations; deferring keeps the select controls responsive.
   const calculationBrokerFilter = useDeferredValue(prefs.summaryBrokerFilter);
   const calculationMarketFilter = useDeferredValue(prefs.summaryMarketFilter);
-  const nav = useViewNavigation(seed.securities[0]?.id ?? "");
+  const nav = useViewNavigation(seed.securities[0]?.id ?? "", storage);
   const { view, navigateToView, detailSecurityId } = nav;
   const market = useMarketState(props);
   const [transactions, setTransactions] = useState<Seed["transactions"]>(seed.transactions);
@@ -124,7 +135,7 @@ function DashboardContents(props: DashboardProps) {
   }, []);
 
   // ---- Ledger inputs ----------------------------------------------------------------
-  const allSecurities = useMemo(() => collectSecurities(seed.securities as SearchSecurity[], customSecurities, watchlist, transactions), [customSecurities, seed.securities, transactions, watchlist]);
+  const allSecurities = useMemo(() => collectSecurities(seedSecurities, customSecurities, watchlist, transactions), [customSecurities, seedSecurities, transactions, watchlist]);
   const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const activeAccounts = useMemo(() => accounts.filter((account) => !account.archivedAt), [accounts]);
   const calculationTransactions = useMemo(() => transactions.map((transaction) => ({
@@ -164,8 +175,9 @@ function DashboardContents(props: DashboardProps) {
 
   const gestures = useTouchGestures({ view, navigateToView, closeSecurity: nav.closeSecurity, refreshMarket, isManualRefreshing });
 
+  const viewModelSeed = useMemo(() => ({ ...seed, securities: seedSecurities }), [seed, seedSecurities]);
   const vm = usePortfolioViewModel({
-    seed, storage, transactions, calculationTransactions, allSecurities, customSecurities, watchlist, accountMap, applicableCorporateActions, todayKey,
+    seed: viewModelSeed, storage, transactions, calculationTransactions, allSecurities, customSecurities, watchlist, accountMap, applicableCorporateActions, todayKey,
     sessionClock: market.sessionClock, quotes: market.quotes, benchmarks: market.benchmarks, historyBars: market.historyBars, intradayBars: market.intradayBars,
     distributions: market.distributions, serverMarketSessions: market.serverMarketSessions,
     displayCurrency, dividendDisplayCurrency: prefs.dividendDisplayCurrency, dividendMarketFilter: prefs.dividendMarketFilter,

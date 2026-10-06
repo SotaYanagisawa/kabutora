@@ -1,6 +1,6 @@
 import { calculateAverageCostPortfolio, canonicalDomainSecurityId, indexPortfolioHistoryBars, reconstructPortfolioHistorySteps, type CorporateAction, type DistributionEvent, type DividendReceipt, type LedgerTransaction, type MarketBar, type PortfolioHistoryPoint, type SecurityQuote, type PortfolioSummary } from "@kabutora/domain";
 import { abortError } from "../ui/operation-deadline";
-import { convertCalculationDataset } from "./portfolio-calculation-inputs";
+import { convertCalculationDataset, convertCalculationLedger } from "./portfolio-calculation-inputs";
 import { securityMatchesPortfolioFilter } from "./portfolio-filter";
 import { reconcilePortfolioParts } from "./portfolio-consistency";
 
@@ -15,33 +15,55 @@ export type HistoryDataset = {
 };
 export type HistorySelection = { transactionIds: string[]; throughDate: string; currency?: string; reconcile?: boolean };
 export type PortfolioCalculationResult = { points: PortfolioHistoryPoint[]; summary: PortfolioSummary; nativeSummary: PortfolioSummary; reconciliation: ReturnType<typeof reconcilePortfolioParts>; renderBars: MarketBar[]; nativeRenderBars: MarketBar[]; filterSummaries?: Partial<Record<"ALL" | "JP" | "US" | "FUNDS_INDEXES", PortfolioSummary>> };
+/** Holdings and totals, available before the slower history reconstruction finishes. */
+export type PortfolioSummaryResult = Pick<PortfolioCalculationResult, "summary" | "nativeSummary" | "reconciliation" | "filterSummaries">;
 export const emptyPortfolioCalculation: PortfolioCalculationResult = { points: [], summary: calculateAverageCostPortfolio([], []), nativeSummary: calculateAverageCostPortfolio([], []), reconciliation: { valid: true, differences: [] }, renderBars: [], nativeRenderBars: [], filterSummaries: { ALL: calculateAverageCostPortfolio([], []) } };
-export function indexHistoryDataset(dataset: HistoryDataset) {
-  return { dataset, transactions: new Map(dataset.transactions.map((item) => [item.id, item])), bars: indexPortfolioHistoryBars(dataset.bars), currencies: new Map<string, IndexedHistoryDataset>() };
+export function indexHistoryDataset(dataset: HistoryDataset): IndexedHistoryDataset {
+  // The bar index serves only history reconstruction; summaries never wait for it.
+  let bars: ReturnType<typeof indexPortfolioHistoryBars> | undefined;
+  return {
+    dataset,
+    transactions: new Map(dataset.transactions.map((item) => [item.id, item])),
+    get bars() { return bars ??= indexPortfolioHistoryBars(dataset.bars); },
+    currencies: new Map<string, IndexedHistoryDataset>(),
+  };
 }
 export type IndexedHistoryDataset = { dataset: HistoryDataset; transactions: Map<string, HistoryDataset["transactions"][number]>; bars: ReturnType<typeof indexPortfolioHistoryBars>; currencies: Map<string, IndexedHistoryDataset> };
+type LedgerSource = Pick<IndexedHistoryDataset, "dataset" | "transactions">;
 
-export async function calculatePortfolio(index: IndexedHistoryDataset, selection: HistorySelection, signal: AbortSignal): Promise<PortfolioCalculationResult> {
-  if (signal.aborted) throw abortError();
-  let converted = index;
-  if (selection.currency) {
-    const cacheKey = selection.currency + ":" + selection.throughDate;
-    const cached = index.currencies.get(cacheKey);
-    if (cached) converted = cached;
-    else {
-      converted = indexHistoryDataset(await convertCalculationDataset(index.dataset, selection.currency, selection.throughDate, signal));
-      if (index.currencies.size >= 2) index.currencies.delete(index.currencies.keys().next().value!);
-      index.currencies.set(cacheKey, converted);
-    }
+/** Accounting inputs converted per display currency, cached beside the dataset they came from. */
+const ledgers = new WeakMap<IndexedHistoryDataset, Map<string, LedgerSource>>();
+function convertedLedger(index: IndexedHistoryDataset, currency: string, throughDate: string): LedgerSource {
+  const cache = ledgers.get(index) ?? new Map<string, LedgerSource>();
+  ledgers.set(index, cache);
+  const key = currency + ":" + throughDate;
+  let ledger = cache.get(key);
+  if (!ledger) {
+    const dataset = convertCalculationLedger(index.dataset, currency, throughDate);
+    ledger = { dataset, transactions: new Map(dataset.transactions.map((item) => [item.id, item])) };
+    if (cache.size >= 2) cache.delete(cache.keys().next().value!);
+    cache.set(key, ledger);
   }
-  const selected = (source: IndexedHistoryDataset) => selection.transactionIds.flatMap((id) => { const item = source.transactions.get(id); return item ? [item] : []; });
-  const transactions = selected(converted);
-  const summarize = (source: IndexedHistoryDataset, rows = selected(source)) => {
+  return ledger;
+}
+
+/**
+ * Summary first (reported through `onSummary`), then the history reconstruction. Holdings and
+ * totals therefore appear as soon as they are known, even while the chart is still being built.
+ */
+export async function calculatePortfolio(index: IndexedHistoryDataset, selection: HistorySelection, signal: AbortSignal, onSummary?: (summary: PortfolioSummaryResult) => void): Promise<PortfolioCalculationResult> {
+  if (signal.aborted) throw abortError();
+  const cacheKey = selection.currency ? selection.currency + ":" + selection.throughDate : "";
+  let converted = cacheKey ? index.currencies.get(cacheKey) : index;
+  const ledger: LedgerSource = converted ?? convertedLedger(index, selection.currency!, selection.throughDate);
+  const selected = (source: LedgerSource) => selection.transactionIds.flatMap((id) => { const item = source.transactions.get(id); return item ? [item] : []; });
+  const transactions = selected(ledger);
+  const summarize = (source: LedgerSource, rows = selected(source)) => {
     const ids = new Set(rows.map((row) => `${row.accountId}:${canonicalDomainSecurityId(row.securityId ?? "")}`));
     const receipts = source.dataset.dividendReceipts?.filter((row) => ids.has(`${row.accountId}:${canonicalDomainSecurityId(row.securityId)}`));
     return calculateAverageCostPortfolio(rows, source.dataset.securities, source.dataset.corporateActions, source.dataset.distributions, selection.throughDate, receipts);
   };
-  const summary = summarize(converted, transactions);
+  const summary = summarize(ledger, transactions);
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
   if (signal.aborted) throw abortError();
   const nativeSummary = summarize(index);
@@ -54,13 +76,19 @@ export async function calculatePortfolio(index: IndexedHistoryDataset, selection
     const parts: PortfolioSummary[] = [];
     for (const filter of ["JP", "US", "FUNDS_INDEXES"] as const) {
       const rows = transactions.filter((item) => securityMatchesPortfolioFilter(securities.get(canonicalDomainSecurityId(item.securityId ?? "")), filter, item.securityId ?? undefined));
-      const partSummary = summarize(converted, rows);
+      const partSummary = summarize(ledger, rows);
       parts.push(partSummary);
       filterSummaries[filter] = partSummary;
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
       if (signal.aborted) throw abortError();
     }
     reconciliation = reconcilePortfolioParts(summary, parts);
+  }
+  onSummary?.({ summary, nativeSummary, reconciliation, filterSummaries });
+  if (!converted) {
+    converted = indexHistoryDataset(await convertCalculationDataset(index.dataset, selection.currency!, selection.throughDate, signal, ledger.dataset));
+    if (index.currencies.size >= 2) index.currencies.delete(index.currencies.keys().next().value!);
+    index.currencies.set(cacheKey, converted);
   }
   const points = await calculateHistory(converted, selection, signal);
   return { points, summary, nativeSummary, reconciliation, renderBars: sparklineBars(converted.dataset.bars), nativeRenderBars: sparklineBars(index.dataset.bars), filterSummaries };

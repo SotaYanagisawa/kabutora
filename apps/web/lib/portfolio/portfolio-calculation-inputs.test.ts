@@ -23,6 +23,23 @@ describe("revisioned complete accounting calculation", () => {
     expect(result.nativeSummary.holdings[0].marketValue).toBe("0.03");
     expect(result.points.at(-1)?.totalValue).toBe(result.summary.securitiesValue);
   });
+  it("reports holdings and totals before reconstructing history, matching the final result", async () => {
+    const reported: string[] = [];
+    let summaryAtReport: unknown;
+    const result = await calculatePortfolio(indexHistoryDataset(source), { transactionIds: ["buy", "fund"], throughDate: "2026-08-01", currency: "JPY", reconcile: true }, new AbortController().signal, (summary) => {
+      reported.push("summary");
+      summaryAtReport = summary;
+    });
+    expect(reported).toEqual(["summary"]);
+    expect(summaryAtReport).toEqual({ summary: result.summary, nativeSummary: result.nativeSummary, reconciliation: result.reconciliation, filterSummaries: result.filterSummaries });
+  });
+  it("aborting after the summary skips the history", async () => {
+    const controller = new AbortController();
+    const index = indexHistoryDataset(source);
+    const run = calculatePortfolio(index, { transactionIds: ["buy"], throughDate: "2026-08-01", currency: "USD" }, controller.signal, () => controller.abort());
+    await expect(run).rejects.toHaveProperty("name", "AbortError");
+    expect(index.currencies.size).toBe(0);
+  });
   it("preserves fund units and caches at most two currency conversions", async () => {
     const index = indexHistoryDataset(source);
     for (const currency of ["JPY", "USD", "JPY", "USD"]) await calculatePortfolio(index, { transactionIds: ["fund"], throughDate: "2026-08-01", currency }, new AbortController().signal);

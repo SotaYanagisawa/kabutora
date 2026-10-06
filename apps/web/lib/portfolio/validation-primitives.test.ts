@@ -20,6 +20,10 @@ describe("validation primitives", () => {
     expect(finiteDecimal("0.01", true)).toBe(true);
     expect(finiteDecimal("NaN")).toBe(false);
     expect(finiteDecimal(12)).toBe(false);
+    expect(finiteDecimal("12.")).toBe(true);
+    expect(finiteDecimal("0.000", true)).toBe(false);
+    expect(finiteDecimal("0.000000000000001", true)).toBe(true);
+    expect(finiteDecimal("1.5.2")).toBe(false);
   });
 
   it("accepts parseable dates only", () => {

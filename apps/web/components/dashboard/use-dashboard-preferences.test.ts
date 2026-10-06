@@ -43,6 +43,34 @@ describe("resolveInitialPreferences", () => {
     expect(cloud).toMatchObject({ dark: false, displayCurrency: "NATIVE", needsCloudMigration: false });
   });
 
+  it("keeps a setting edited on this device after the cloud copy, and reports it for re-sync", () => {
+    const storage = memoryStorage({
+      "kabutora-summary-market-filter": "US",
+      "kabutora-display-currency": "USD",
+      "kabutora-summary-range": "1M",
+      "kabutora-preference-clocks-v1": JSON.stringify({ summaryMarketFilter: 2_000, displayCurrency: 500, summaryRange: 2_000 }),
+    });
+    const resolved = resolveInitialPreferences(seed({
+      preferences: { summaryMarketFilter: "JP", displayCurrency: "JPY", summaryRange: "1W", theme: "dark", updatedAt: new Date(1_000).toISOString() },
+      sync: { appliedEventIds: [], preferenceSequences: { summaryMarketFilter: 1_000, displayCurrency: 1_000, summaryRange: 3_000 } },
+    }), storage);
+    // Newer local edit wins; an older local edit and a newer remote edit both defer to the cloud.
+    expect(resolved).toMatchObject({ summaryMarketFilter: "US", displayCurrency: "JPY", range: "1W", dark: true });
+    expect(resolved.newerLocalClocks).toEqual({ summaryMarketFilter: 2_000 });
+  });
+
+  it("falls back to the cloud update time when a field has no per-field sequence, and ignores malformed clocks", () => {
+    const storage = memoryStorage({
+      "kabutora-dividend-tab": "history",
+      "kabutora-preference-clocks-v1": JSON.stringify({ dividendActiveTab: 5_000, theme: "soon", summaryRange: -1 }),
+    });
+    const resolved = resolveInitialPreferences(seed({ preferences: { dividendActiveTab: "securities", updatedAt: new Date(4_000).toISOString() } }), storage);
+    expect(resolved.dividendActiveTab).toBe("history");
+    expect(resolved.newerLocalClocks).toEqual({ dividendActiveTab: 5_000 });
+    expect(resolveInitialPreferences(seed({ preferences: { dividendActiveTab: "securities", updatedAt: new Date(6_000).toISOString() } }), storage).dividendActiveTab).toBe("securities");
+    expect(resolveInitialPreferences(seed(), memoryStorage({ "kabutora-preference-clocks-v1": "{broken" })).newerLocalClocks).toEqual({});
+  });
+
   it("uses a stored watchlist only when the cloud has none, and merges read/acknowledged IDs", () => {
     const storage = memoryStorage({
       "kabutora-watchlist-v1": JSON.stringify([{ id: "sec-7203" }]),

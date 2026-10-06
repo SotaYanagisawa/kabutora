@@ -7,8 +7,8 @@ The dashboard is one coordinator component composed from feature hooks, plus mem
 | File | Owns |
 |---|---|
 | `dashboard.tsx` | Composition and layout only: calls the hooks below, ledger inputs (transactions, accounts, securities), header/nav/views JSX |
-| `use-dashboard-preferences.ts` | Every user preference: initial resolution, browser persistence, per-field cloud reconciliation, upstream change reporting |
-| `use-view-navigation.ts` | Active view, retained (idle-mounted) views, scroll restoration, security detail page and its return target |
+| `use-dashboard-preferences.ts` | Every user preference: initial resolution (a newer edit on this device outranks an older cloud copy and is re-sent), browser persistence, per-field cloud reconciliation, upstream change reporting |
+| `use-view-navigation.ts` | Active view (the last menu page is restored per device), retained views warmed after startup, scroll restoration, security detail page and its return target |
 | `use-market-state.ts` | Market data state, browser market cache hydration/persistence, trusted market clock |
 | `use-market-loaders.ts` | Network loading: quotes/benchmarks/history/distributions, PTS/US intraday polling, auto and manual refresh |
 | `market-requirements.ts` | Pure: which security IDs need quotes/history/distributions, and ID-variant expansion |

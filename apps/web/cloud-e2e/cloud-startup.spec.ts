@@ -71,14 +71,18 @@ async function recover(page: Page, key: string) {
   await expect(page.locator('[data-startup-state="ready"]')).toBeVisible({ timeout: 20_000 });
 }
 
-async function reloadCloud(page: Page, errors: string[]) {
-  // Finish pricing requests before replacing the document. WebKit can report
-  // late Playwright route fulfillment as CORS errors during navigation.
+async function waitForMarketIdle(page: Page) {
   await expect(page.locator(".market-health")).not.toContainText("取得中", { timeout: 20_000 });
   await expect.poll(() => {
     const activity = marketActivity.get(page);
     return Boolean(activity && activity.pending.size === 0 && Date.now() - activity.changedAt >= 250);
   }).toBe(true);
+}
+
+async function reloadCloud(page: Page, errors: string[]) {
+  // Finish pricing requests before replacing the document. WebKit can report
+  // late Playwright route fulfillment as CORS errors during navigation.
+  await waitForMarketIdle(page);
   expect(errors).toEqual([]);
   await page.reload({ waitUntil: "domcontentloaded" });
   // WebKit reports cancellation of the departing document's open Firestore
@@ -232,6 +236,48 @@ test("trusted-device startup falls back to recovery when browser storage is unav
     await expect(page.locator(".sync-status")).toContainText(/保存できません|保存領域を利用できません/u);
     await expect(page.locator("main.workspace")).toBeVisible();
   } finally { await environment.cleanup(); }
+});
+
+test("a filter chosen just before the app is terminated is restored on reopen and reaches other devices", async ({ page, browser, applicationErrors }, testInfo) => {
+  test.setTimeout(120_000);
+  const { environment, created } = await seedCloud();
+  const marketFilter = (target: Page) => target.getByRole("combobox", { name: /資産区分(?:と国)?で絞り込み/u });
+  const secondContext = await browser.newContext({ viewport: page.viewportSize(), isMobile: Boolean(testInfo.project.use.isMobile), hasTouch: Boolean(testInfo.project.use.hasTouch) });
+  try {
+    await signIn(page, "個人端末");
+    await recover(page, created.recoveryKey);
+    await expect(page.getByText("クラウド同期確認済み", { exact: true })).toHaveCount(1);
+    // The cloud first holds an older choice for the same setting.
+    await marketFilter(page).selectOption("US");
+    await page.waitForTimeout(3_000);
+    await expect(page.getByText("クラウド同期確認済み", { exact: true })).toHaveCount(1, { timeout: 20_000 });
+    // Settle first so the reload below lands well inside the 2.5-second save debounce.
+    await waitForMarketIdle(page);
+    // iOS can terminate a backgrounded app without lifecycle events, so the debounced
+    // encrypted save never runs. Swallow the events the scheduler flushes on.
+    await page.evaluate(() => {
+      const drop = (event: Event) => event.stopImmediatePropagation();
+      window.addEventListener("pagehide", drop, { capture: true });
+      document.addEventListener("visibilitychange", drop, { capture: true });
+    });
+    await marketFilter(page).selectOption("JP");
+    await reloadCloud(page, applicationErrors);
+    await expect(page.locator('[data-startup-state="ready"]')).toBeVisible({ timeout: 30_000 });
+    await expect(marketFilter(page)).toHaveValue("JP");
+    // The restored edit is re-sent; another device then opens with it.
+    await expect(page.getByText("クラウド同期確認済み", { exact: true })).toHaveCount(1, { timeout: 20_000 });
+    await page.waitForTimeout(3_000);
+    await expect(page.getByText("クラウド同期確認済み", { exact: true })).toHaveCount(1, { timeout: 20_000 });
+    const second = await secondContext.newPage();
+    await signIn(second, "個人端末");
+    await second.getByLabel("解除パスフレーズ", { exact: true }).fill(passphrase);
+    await second.getByRole("button", { name: "復号して同期を開始" }).click();
+    await expect(second.locator('[data-startup-state="ready"]')).toBeVisible({ timeout: 60_000 });
+    await expect(marketFilter(second)).toHaveValue("JP", { timeout: 20_000 });
+  } finally {
+    await secondContext.close();
+    await environment.cleanup();
+  }
 });
 
 test("two trusted devices merge independent preferences and retain encrypted edits while offline", async ({ page, browser }, testInfo) => {

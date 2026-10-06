@@ -61,6 +61,19 @@ describe("bounded portfolio calculation", () => {
     await expect(calculator.calculate(dataset, selection, controller.signal)).rejects.toHaveProperty("name", "AbortError");
     expect(worker.messages).toEqual([]);
   });
+  it("passes an early summary to the visible job only, before its result", async () => {
+    const summaries: unknown[] = [];
+    const visible = calculator.calculate(dataset, selection, undefined, "foreground", (summary) => summaries.push(summary));
+    const early = { summary: emptyPortfolioCalculation.summary, nativeSummary: emptyPortfolioCalculation.nativeSummary, reconciliation: emptyPortfolioCalculation.reconciliation };
+    worker.reply({ id: 7, revision: 1, stage: "summary", summary: early });
+    expect(summaries).toEqual([]);
+    worker.reply({ id: 1, revision: 1, stage: "summary", summary: early });
+    expect(summaries).toEqual([early]);
+    worker.reply({ id: 1, revision: 1, success: true, result: emptyPortfolioCalculation });
+    await expect(visible).resolves.toEqual(emptyPortfolioCalculation);
+    worker.reply({ id: 1, revision: 1, stage: "summary", summary: early });
+    expect(summaries).toHaveLength(1);
+  });
   it("does not let idle warm-up cancel a visible calculation", async () => {
     const visible = calculator.calculate(dataset, selection);
     const warmup = calculator.calculate(dataset, selection, undefined, "background");

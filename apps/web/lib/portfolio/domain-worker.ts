@@ -1,10 +1,11 @@
-import { calculatePortfolio, indexHistoryDataset, type PortfolioCalculationResult, type HistoryDataset, type HistorySelection, type IndexedHistoryDataset } from "./portfolio-history-calculation";
+import { calculatePortfolio, indexHistoryDataset, type PortfolioCalculationResult, type PortfolioSummaryResult, type HistoryDataset, type HistorySelection, type IndexedHistoryDataset } from "./portfolio-history-calculation";
 
 export type DomainWorkerRequest =
   | { type: "SET_DATASET"; revision: number; dataset: HistoryDataset }
   | { type: "CALCULATE"; id: number; revision: number; selection: HistorySelection }
   | { type: "CANCEL"; id: number };
 export type DomainWorkerResponse =
+  | { id: number; revision: number; stage: "summary"; summary: PortfolioSummaryResult }
   | { id: number; revision: number; success: true; result: PortfolioCalculationResult }
   | { id: number; revision: number; success: false; error: string };
 
@@ -27,7 +28,9 @@ self.addEventListener("message", (event: MessageEvent<DomainWorkerRequest>) => {
   active?.controller.abort();
   active = { id: data.id, controller };
   const task = indexed && revision === data.revision
-    ? calculatePortfolio(indexed, data.selection, controller.signal)
+    ? calculatePortfolio(indexed, data.selection, controller.signal, (summary) => {
+      self.postMessage({ id: data.id, revision: data.revision, stage: "summary", summary } satisfies DomainWorkerResponse);
+    })
     : Promise.reject(new Error("dataset_revision_mismatch"));
   void task.then((result) => {
     self.postMessage({ id: data.id, revision: data.revision, success: true, result } satisfies DomainWorkerResponse);

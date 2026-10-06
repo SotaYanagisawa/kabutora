@@ -16,7 +16,7 @@ let legacy: Awaited<ReturnType<typeof createGoogleProtectedVault>>;
 let modern: Awaited<ReturnType<typeof createRecoveryVault>>;
 const sessions: PortfolioSession[] = [];
 
-function fixture(envelope: KabutoraVaultEnvelope | null, events: StoredPortfolioEvent[] = [], keyRecord = false, mode: "trusted" | "shared" = "shared", stalled = false) {
+function fixture(envelope: KabutoraVaultEnvelope | null, events: StoredPortfolioEvent[] = [], keyRecord = false, mode: "trusted" | "shared" = "shared", stalled = false, eventsStalled = stalled) {
   let vault = envelope;
   let deltas = events;
   let vaultListener: Parameters<PortfolioCloudStore["subscribeVault"]>[1];
@@ -25,7 +25,7 @@ function fixture(envelope: KabutoraVaultEnvelope | null, events: StoredPortfolio
   const receipts = new Set<string>();
   const store: PortfolioCloudStore = {
     subscribeVault: (_uid, listener) => { vaultListener = listener; if (!stalled) queueMicrotask(() => listener(vault, false)); return () => {}; },
-    subscribeEvents: (_uid, listener) => { eventListener = listener; queueMicrotask(() => listener(deltas, false)); return () => {}; },
+    subscribeEvents: (_uid, listener) => { eventListener = listener; if (!eventsStalled) queueMicrotask(() => listener(deltas, false)); return () => {}; },
     subscribeAccountKey: (_uid, listener) => { queueMicrotask(() => listener(keyRecord ? { format: "kabutora-google-account-key", version: 1, ownerUid: "u1", keyId: "old-key", encodedKey: legacy.accountKey, createdAt: "", updatedAt: "" } : null)); return () => {}; },
     saveAccountKey: vi.fn(async () => {}),
     saveVault: vi.fn(async () => {}),
@@ -90,6 +90,22 @@ describe("encrypted cloud startup and recovery", () => {
     await app.session.save([{ kind: "preferences", value: { theme: "dark" } }]);
     expect(app.saved).toEqual([]);
     expect(await getPendingPortfolioEvents("u1")).toHaveLength(1);
+  });
+  it("keeps the cached portfolio on screen when the cloud vault arrives before the event log", async () => {
+    vi.mocked(readVerifiedVault).mockResolvedValue({ uid: "u1", envelope: modern.envelope, verifiedAt: "2026-09-01T00:00:00Z" });
+    vi.mocked(loadTrustedDeviceKey).mockResolvedValue(modern.dataKey);
+    const app = fixture(modern.envelope, [], false, "trusted", true);
+    await vi.waitFor(() => expect(app.state).toMatchObject({ cached: true, startup: { stage: "ready" } }));
+    const stages: string[] = [];
+    const publish = (app.session as unknown as { publish: (state: SessionState) => void }).publish;
+    (app.session as unknown as { publish: (state: SessionState) => void }).publish = (state) => { stages.push(state.startup.stage); publish(state); };
+    app.emitVault();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(stages).not.toContain("event-replay");
+    expect(app.state).toMatchObject({ cached: true, startup: { stage: "ready" } });
+    app.emitEvents([]);
+    await vi.waitFor(() => expect(app.state).toMatchObject({ cached: false, startup: { stage: "ready" } }));
+    expect(app.state?.seed?.transactions).toEqual(seed.transactions);
   });
   it("asks for recovery on a new v2 device, then waits for verified replay before ready", async () => {
     const app = fixture(modern.envelope);
