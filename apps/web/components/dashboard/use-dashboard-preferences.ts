@@ -31,6 +31,8 @@ const ACKNOWLEDGED_ACTIONS_KEY = "kabutora-acknowledged-actions-v1";
 const READ_NOTIFICATIONS_KEY = "kabutora-read-notifications-v1";
 const NOTIFICATION_HISTORY_KEY = "kabutora-notification-history-v1";
 const WATCHLIST_KEY = "kabutora-watchlist-v1";
+/** Per-field edit clocks for preferences changed on this device; lets a newer local edit outrank older cloud state. */
+const PREFERENCE_CLOCKS_KEY = "kabutora-preference-clocks-v1";
 /** Plaintext portfolio keys written by very old releases; removed on startup. */
 const LEGACY_PLAINTEXT_KEYS = ["kabutora-transactions", "kabutora-accounts-v1", "kabutora-custom-securities-v1"];
 
@@ -46,10 +48,35 @@ function parseJson<T>(value: string | null): T | null {
   try { return JSON.parse(value) as T; } catch { return null; }
 }
 
-/** Cloud preferences win; otherwise browser storage; otherwise defaults. */
+type PreferenceClocks = Partial<Record<keyof UserPreferences, number>>;
+
+function readPreferenceClocks(storage: Storage): PreferenceClocks {
+  const parsed = parseJson<unknown>(storage.getItem(PREFERENCE_CLOCKS_KEY));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === "number" && Number.isFinite(value) && value > 0));
+}
+
+/**
+ * Cloud preferences win, unless this device edited a field more recently than the cloud's copy
+ * (for example the app closed before the debounced cloud save); then browser storage wins.
+ * Otherwise browser storage; otherwise defaults.
+ */
 export function resolveInitialPreferences(seed: Seed, storage: Storage) {
   const cloud = seed.preferences;
   const read = (key: string) => storage.getItem(key);
+  const localClocks = readPreferenceClocks(storage);
+  const cloudUpdatedAt = cloud?.updatedAt ? Date.parse(cloud.updatedAt) || 0 : 0;
+  /** Fields whose browser value is newer than the cloud value, with their local edit clocks. */
+  const newerLocalClocks: PreferenceClocks = {};
+  /** The synced value of a setting, or undefined when this device's own edit is newer. */
+  const synced = <K extends keyof UserPreferences>(field: K): UserPreferences[K] | undefined => {
+    const localClock = localClocks[field];
+    if (localClock && localClock > (seed.sync?.preferenceSequences?.[field] ?? cloudUpdatedAt)) {
+      newerLocalClocks[field] = localClock;
+      return undefined;
+    }
+    return cloud?.[field];
+  };
   const parsedWatchlist = parseJson<unknown>(read(WATCHLIST_KEY));
   const savedWatchlist = Array.isArray(parsedWatchlist) ? parsedWatchlist as SearchSecurity[] : null;
   const savedCustomRange = parseJson<CustomDateRange>(read(SUMMARY_CUSTOM_RANGE_KEY));
@@ -63,29 +90,30 @@ export function resolveInitialPreferences(seed: Seed, storage: Storage) {
   const savedDisplayCurrency = read(DISPLAY_CURRENCY_KEY);
   return {
     watchlist: seed.watchlist?.length ? seed.watchlist : savedWatchlist?.length ? savedWatchlist : (seed.watchlist ?? []),
-    dark: (cloud?.theme ?? savedTheme) === "dark",
-    accentTheme: cloud?.accentTheme ?? pick<AccentTheme>(savedAccent, ACCENTS) ?? "graphite",
-    autoRefresh: cloud?.autoRefresh ?? savedAutoRefresh !== "false",
-    updateFrequency: cloud?.updateFrequency ?? pick<UpdateFrequency>(Number(read(UPDATE_FREQUENCY_KEY)), FREQUENCIES) ?? 15,
-    priceAlertThreshold: cloud?.priceAlertThreshold ?? pick<number>(Number(read(PRICE_ALERT_THRESHOLD_KEY)), PRICE_ALERT_THRESHOLDS) ?? DEFAULT_PRICE_ALERT_PERCENT,
-    displayCurrency: cloud?.displayCurrency ?? pick<DisplayCurrency>(savedDisplayCurrency, CURRENCIES) ?? baseCurrency,
-    summaryMarketFilter: cloud?.summaryMarketFilter ?? pick<PortfolioFilter>(read(SUMMARY_MARKET_FILTER_KEY) ?? read(LEGACY_MARKET_FILTER_KEY), FILTERS) ?? "ALL",
-    summaryBrokerFilter: cloud?.summaryBrokerFilter ?? (read(SUMMARY_BROKER_FILTER_KEY) || "ALL"),
-    dividendMarketFilter: cloud?.dividendMarketFilter ?? pick<PortfolioFilter>(read(DIVIDEND_MARKET_FILTER_KEY), FILTERS) ?? "ALL",
-    dividendDisplayCurrency: cloud?.dividendDisplayCurrency ?? pick<DisplayCurrency>(read(DIVIDEND_DISPLAY_CURRENCY_KEY), CURRENCIES) ?? baseCurrency,
-    dividendPeriod: cloud?.dividendPeriod ?? (read(DIVIDEND_PERIOD_KEY) || "ALL"),
-    dividendTaxMode: cloud?.dividendTaxMode ?? (savedTaxMode === "gross" || savedTaxMode === "net" ? savedTaxMode : "gross"),
-    dividendActiveTab: cloud?.dividendActiveTab ?? (savedTab === "securities" || savedTab === "history" ? savedTab : "securities"),
-    range: cloud?.summaryRange ?? (savedRange && (PORTFOLIO_RANGES.includes(savedRange) || savedRange === "CUSTOM") ? savedRange : "ALL"),
-    customRange: cloud?.summaryCustomRange ?? (typeof savedCustomRange?.from === "string" && typeof savedCustomRange.to === "string" ? savedCustomRange : null),
-    summaryAmountsVisible: cloud?.summaryAmountsVisible ?? read(SUMMARY_AMOUNTS_VISIBLE_KEY) !== "false",
-    hideScrollbar: cloud?.hideScrollbar ?? read(HIDE_SCROLLBAR_KEY) !== "false",
+    dark: (synced("theme") ?? savedTheme) === "dark",
+    accentTheme: synced("accentTheme") ?? pick<AccentTheme>(savedAccent, ACCENTS) ?? "graphite",
+    autoRefresh: synced("autoRefresh") ?? savedAutoRefresh !== "false",
+    updateFrequency: synced("updateFrequency") ?? pick<UpdateFrequency>(Number(read(UPDATE_FREQUENCY_KEY)), FREQUENCIES) ?? 15,
+    priceAlertThreshold: synced("priceAlertThreshold") ?? pick<number>(Number(read(PRICE_ALERT_THRESHOLD_KEY)), PRICE_ALERT_THRESHOLDS) ?? DEFAULT_PRICE_ALERT_PERCENT,
+    displayCurrency: synced("displayCurrency") ?? pick<DisplayCurrency>(savedDisplayCurrency, CURRENCIES) ?? baseCurrency,
+    summaryMarketFilter: synced("summaryMarketFilter") ?? pick<PortfolioFilter>(read(SUMMARY_MARKET_FILTER_KEY) ?? read(LEGACY_MARKET_FILTER_KEY), FILTERS) ?? "ALL",
+    summaryBrokerFilter: synced("summaryBrokerFilter") ?? (read(SUMMARY_BROKER_FILTER_KEY) || "ALL"),
+    dividendMarketFilter: synced("dividendMarketFilter") ?? pick<PortfolioFilter>(read(DIVIDEND_MARKET_FILTER_KEY), FILTERS) ?? "ALL",
+    dividendDisplayCurrency: synced("dividendDisplayCurrency") ?? pick<DisplayCurrency>(read(DIVIDEND_DISPLAY_CURRENCY_KEY), CURRENCIES) ?? baseCurrency,
+    dividendPeriod: synced("dividendPeriod") ?? (read(DIVIDEND_PERIOD_KEY) || "ALL"),
+    dividendTaxMode: synced("dividendTaxMode") ?? (savedTaxMode === "gross" || savedTaxMode === "net" ? savedTaxMode : "gross"),
+    dividendActiveTab: synced("dividendActiveTab") ?? (savedTab === "securities" || savedTab === "history" ? savedTab : "securities"),
+    range: synced("summaryRange") ?? (savedRange && (PORTFOLIO_RANGES.includes(savedRange) || savedRange === "CUSTOM") ? savedRange : "ALL"),
+    customRange: synced("summaryCustomRange") ?? (typeof savedCustomRange?.from === "string" && typeof savedCustomRange.to === "string" ? savedCustomRange : null),
+    summaryAmountsVisible: synced("summaryAmountsVisible") ?? read(SUMMARY_AMOUNTS_VISIBLE_KEY) !== "false",
+    hideScrollbar: synced("hideScrollbar") ?? read(HIDE_SCROLLBAR_KEY) !== "false",
     acknowledgedActionIds: [...new Set([...readStoredIds(storage, ACKNOWLEDGED_ACTIONS_KEY), ...(cloud?.acknowledgedActions ?? [])])],
     readNotificationIds: [...new Set([...readStoredIds(storage, READ_NOTIFICATIONS_KEY), ...(cloud?.readNotifications ?? [])])],
     notificationHistory: cloud?.notificationHistory ?? readStoredNotifications(storage),
     /** True when an old browser-only preference set exists and should be uploaded once. */
     needsCloudMigration: !cloud && Boolean(savedTheme || savedDisplayCurrency || savedAccent || savedAutoRefresh),
     hasSavedWatchlist: Boolean(savedWatchlist?.length),
+    newerLocalClocks,
   };
 }
 
@@ -98,6 +126,9 @@ function useStoredValue<T>(storage: Storage, key: string, value: T, serialize: (
     // `serialize` is an inline pure formatter; persistence follows value changes only.
   }, [key, storage, value]); // eslint-disable-line react-hooks/exhaustive-deps
 }
+
+/** Re-synced equal values keep their identity, so dependent memos and views do not recompute. */
+const sameJson = (current: unknown, incoming: unknown) => current === incoming || JSON.stringify(current) === JSON.stringify(incoming);
 
 const mergeIds = (current: string[], incoming: string[]) => {
   const merged = [...new Set([...current, ...incoming])];
@@ -136,13 +167,15 @@ export function useDashboardPreferences({ seed, storage, onPreferencesChange, on
   const [notificationHistory, setNotificationHistory] = useState<PortfolioNotification[]>(initial.notificationHistory);
 
   // Local edit clocks: a synced value only replaces a field this device has not edited more recently.
-  const lastLocalPrefTimestampRef = useRef(0);
-  const localPrefTimestampsRef = useRef<Partial<Record<keyof UserPreferences, number>>>({});
+  // Edits newer than the cloud copy at startup keep their clocks until the cloud acknowledges them.
+  const lastLocalPrefTimestampRef = useRef(Math.max(0, ...Object.values(initial.newerLocalClocks)));
+  const localPrefTimestampsRef = useRef<PreferenceClocks>({ ...initial.newerLocalClocks });
   const markLocalPrefEdit = useCallback((key: keyof UserPreferences) => {
-    const now = Date.now();
+    const now = Math.max(Date.now(), lastLocalPrefTimestampRef.current + 1);
     lastLocalPrefTimestampRef.current = now;
     localPrefTimestampsRef.current[key] = now;
-  }, []);
+    storage.setItem(PREFERENCE_CLOCKS_KEY, JSON.stringify({ ...readPreferenceClocks(storage), [key]: now }));
+  }, [storage]);
 
   /** Setters for user-initiated changes; each records a local edit clock for its field. */
   const set = useMemo(() => {
@@ -178,28 +211,37 @@ export function useDashboardPreferences({ seed, storage, onPreferencesChange, on
     else if (initial.hasSavedWatchlist) void onWatchlistChange?.(initial.watchlist);
     else if (storage.getItem(WATCHLIST_KEY)) storage.removeItem(WATCHLIST_KEY);
     for (const key of LEGACY_PLAINTEXT_KEYS) storage.removeItem(key);
+    const initialPreferences: UserPreferences = {
+      theme: initial.dark ? "dark" : "light",
+      accentTheme: initial.accentTheme,
+      autoRefresh: initial.autoRefresh,
+      updateFrequency: initial.updateFrequency,
+      displayCurrency: initial.displayCurrency,
+      summaryMarketFilter: initial.summaryMarketFilter,
+      summaryBrokerFilter: initial.summaryBrokerFilter,
+      dividendMarketFilter: initial.dividendMarketFilter,
+      dividendDisplayCurrency: initial.dividendDisplayCurrency,
+      dividendPeriod: initial.dividendPeriod,
+      dividendTaxMode: initial.dividendTaxMode,
+      dividendActiveTab: initial.dividendActiveTab,
+      summaryAmountsVisible: initial.summaryAmountsVisible,
+      hideScrollbar: initial.hideScrollbar,
+      summaryRange: initial.range,
+      summaryCustomRange: initial.customRange,
+      priceAlertThreshold: initial.priceAlertThreshold,
+      acknowledgedActions: initial.acknowledgedActionIds,
+      readNotifications: initial.readNotificationIds,
+      notificationHistory: initial.notificationHistory,
+    };
     if (initial.needsCloudMigration) {
+      void onPreferencesChange?.({ ...initialPreferences, updatedAt: new Date().toISOString() });
+    } else if (Object.keys(initial.newerLocalClocks).length) {
+      // Re-send edits the cloud never received, at their original edit clocks.
+      const fields = Object.keys(initial.newerLocalClocks) as Array<keyof UserPreferences>;
       void onPreferencesChange?.({
-        theme: initial.dark ? "dark" : "light",
-        accentTheme: initial.accentTheme,
-        autoRefresh: initial.autoRefresh,
-        updateFrequency: initial.updateFrequency,
-        displayCurrency: initial.displayCurrency,
-        summaryMarketFilter: initial.summaryMarketFilter,
-        summaryBrokerFilter: initial.summaryBrokerFilter,
-        dividendMarketFilter: initial.dividendMarketFilter,
-        dividendDisplayCurrency: initial.dividendDisplayCurrency,
-        dividendPeriod: initial.dividendPeriod,
-        dividendTaxMode: initial.dividendTaxMode,
-        dividendActiveTab: initial.dividendActiveTab,
-        summaryAmountsVisible: initial.summaryAmountsVisible,
-        hideScrollbar: initial.hideScrollbar,
-        summaryRange: initial.range,
-        priceAlertThreshold: initial.priceAlertThreshold,
-        acknowledgedActions: initial.acknowledgedActionIds,
-        readNotifications: initial.readNotificationIds,
-        notificationHistory: initial.notificationHistory,
-        updatedAt: new Date().toISOString(),
+        ...Object.fromEntries(fields.map((field) => [field, initialPreferences[field]])),
+        updatedAt: new Date(lastLocalPrefTimestampRef.current).toISOString(),
+        preferenceSequences: { ...initial.newerLocalClocks },
       });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -297,11 +339,11 @@ export function useDashboardPreferences({ seed, storage, onPreferencesChange, on
     if (canApply("priceAlertThreshold") && pick(p.priceAlertThreshold, PRICE_ALERT_THRESHOLDS)) setPriceAlertThreshold(p.priceAlertThreshold!);
     if (Array.isArray(p.acknowledgedActions)) setAcknowledgedActionIds((current) => mergeIds(current, p.acknowledgedActions!));
     if (Array.isArray(p.readNotifications)) setReadNotificationIds((current) => mergeIds(current, p.readNotifications!));
-    if (Array.isArray(p.notificationHistory)) setNotificationHistory(p.notificationHistory);
+    if (Array.isArray(p.notificationHistory)) setNotificationHistory((current) => sameJson(current, p.notificationHistory) ? current : p.notificationHistory!);
   }, [seed.preferences]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (Array.isArray(seed.watchlist)) setWatchlist(seed.watchlist);
+    if (Array.isArray(seed.watchlist)) setWatchlist((current) => sameJson(current, seed.watchlist) ? current : seed.watchlist!);
   }, [seed.watchlist]);
 
   // Report locally changed fields (with their edit clocks) upstream.

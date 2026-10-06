@@ -12,7 +12,7 @@
  */
 import { marketKey } from "@kabutora/domain/market";
 import { ArrowLeft, Eye, EyeOff, Moon, Plus, RefreshCw, Sun } from "lucide-react";
-import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { BrowserPreferences, useBrowserPreferences } from "@/components/app/browser-preferences";
 import WatchlistView from "@/components/watchlist/watchlist-view";
 import { normalizeRequestedSecurity } from "@/lib/market/market-security";
@@ -86,6 +86,16 @@ function syncedList<T>(current: T[], incoming: T[]) {
   return current.length === incoming.length && current.every((item, i) => JSON.stringify(item) === JSON.stringify(incoming[i])) ? current : incoming;
 }
 
+/**
+ * Keeps the previous array while a re-synced seed carries equal contents. A cloud replay replaces
+ * every seed array; without this, each one would recompute valuations.
+ */
+function useSyncedList<T>(incoming: T[]) {
+  const ref = useRef(incoming);
+  ref.current = syncedList(ref.current, incoming);
+  return ref.current;
+}
+
 export default function Dashboard(props: DashboardProps) {
   return <BrowserPreferences persistent={props.allowPersistentMarketCache !== false} namespace={props.preferenceNamespace}><DashboardContents {...props}/></BrowserPreferences>;
 }
@@ -96,12 +106,13 @@ function DashboardContents(props: DashboardProps) {
     onTransactionsChange, onAccountsChange, onSecuritiesChange, onWatchlistChange, onEncryptedBackup, onRestoreBackup, onLogout, onStartupReady,
   } = props;
   const storage = useBrowserPreferences();
+  const seedSecurities = useSyncedList(seed.securities as SearchSecurity[]);
   const prefs = useDashboardPreferences({ seed, storage, onPreferencesChange: props.onPreferencesChange, onWatchlistChange });
   const { watchlist, setWatchlist, displayCurrency, set } = prefs;
   // Filter changes re-run the engine; deferring keeps the select controls responsive.
   const calculationBrokerFilter = useDeferredValue(prefs.summaryBrokerFilter);
   const calculationMarketFilter = useDeferredValue(prefs.summaryMarketFilter);
-  const nav = useViewNavigation(seed.securities[0]?.id ?? "");
+  const nav = useViewNavigation(seed.securities[0]?.id ?? "", storage);
   const { view, navigateToView, detailSecurityId } = nav;
   const [transactions, setTransactions] = useState<Seed["transactions"]>(seed.transactions);
   const [accounts, setAccounts] = useState<Seed["accounts"]>(seed.accounts);
@@ -120,7 +131,7 @@ function DashboardContents(props: DashboardProps) {
   }, []);
 
   // ---- Ledger inputs ----------------------------------------------------------------
-  const allSecurities = useMemo(() => collectSecurities(seed.securities as SearchSecurity[], customSecurities, watchlist, transactions), [customSecurities, seed.securities, transactions, watchlist]);
+  const allSecurities = useMemo(() => collectSecurities(seedSecurities, customSecurities, watchlist, transactions), [customSecurities, seedSecurities, transactions, watchlist]);
   const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const activeAccounts = useMemo(() => accounts.filter((account) => !account.archivedAt), [accounts]);
 
