@@ -1,8 +1,6 @@
-import { estimateNetDividendDecimal } from "@/lib/portfolio/dividend-arithmetic";
 import { useBrowserPreferences } from "../app/browser-preferences";
-import { memo, useCallback, useMemo, useState } from "react";
-import type { DistributionEvent, DividendReceipt } from "@kabutora/domain";
-import { Decimal, canonicalDomainSecurityId } from "@kabutora/domain";
+import { memo, useMemo, useState } from "react";
+import { marketKey } from "@kabutora/domain/market";
 import { LightweightLineChart } from "@/components/charts/lightweight-charts";
 import { AlertTriangle, ArrowLeft, ArrowRight, Coins, Search, X } from "lucide-react";
 import {
@@ -17,19 +15,18 @@ import { dateJa, money, number, securityQuantityUnit } from "./helpers";
 import { securityAssetLabel, securityMatchesPortfolioFilter, type PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
 import { getEmbeddedCatalogSecurities } from "@/lib/market/stock-catalog";
 import { normalizeRequestedSecurity } from "@/lib/market/market-security";
-import type { DisplayCurrency, MarketStatus, SearchSecurity, Seed } from "./types";
+import type { DashboardReceipt, DisplayCurrency, MarketStatus, SearchSecurity, Seed } from "./types";
 
-const embeddedCatalogSecurities = new Map(getEmbeddedCatalogSecurities().map((s) => [canonicalDomainSecurityId(s.id), s]));
+const embeddedCatalogSecurities = new Map(getEmbeddedCatalogSecurities().map((s) => [marketKey(s.id), s]));
 
 export function resolveSecurity(
   securityId: string,
   securityMap: Map<string, (Seed["securities"][number] & { name?: string }) | SearchSecurity>,
 ) {
   if (securityMap.has(securityId)) return securityMap.get(securityId)!;
-  const canonical = canonicalDomainSecurityId(securityId);
-  if (securityMap.has(canonical)) return securityMap.get(canonical)!;
+  const canonical = marketKey(securityId);
   for (const s of securityMap.values()) {
-    if (s.id && canonicalDomainSecurityId(s.id) === canonical) return s;
+    if (s.id && marketKey(s.id) === canonical) return s;
   }
   const embedded = embeddedCatalogSecurities.get(canonical);
   if (embedded) return embedded;
@@ -61,9 +58,42 @@ export function isTaxFreeAccount(account?: Seed["accounts"][number] | null): boo
   return account.accountType === "nisa_growth" || account.accountType === "nisa_tsumitate" || account.accountType === "nisa";
 }
 
+/** Estimated withholding: 10% US tax on USD dividends, then 20.315% Japanese tax outside NISA. */
 export function estimateNetDividend(grossAmount: number, currency: string, isTaxFree: boolean): number {
-  return estimateNetDividendDecimal(grossAmount, currency, isTaxFree).toNumber();
+  const afterForeign = grossAmount * (currency === "USD" ? 0.9 : 1);
+  return isTaxFree ? afterForeign : afterForeign * 0.79685;
 }
+
+/** Engine receipt in the shape the dividend tables read; unconvertible receipts stay in their native currency. */
+type ViewReceipt = {
+  id: string;
+  securityId: string;
+  accountId: string;
+  recognitionDate: string;
+  entitlementDate: string;
+  eligibleQuantity: number;
+  amountPerUnit: number;
+  distributionUnit: number;
+  grossAmount: number;
+  currency: string;
+  sourceCurrency: string;
+  sourceGrossAmount: number;
+};
+
+const toViewReceipt = (receipt: DashboardReceipt): ViewReceipt => ({
+  id: receipt.id,
+  securityId: receipt.securityId,
+  accountId: receipt.accountId,
+  recognitionDate: receipt.recognitionDate,
+  entitlementDate: receipt.exDate,
+  eligibleQuantity: receipt.quantity,
+  amountPerUnit: receipt.amountPerUnit,
+  distributionUnit: receipt.unit,
+  grossAmount: receipt.amount ?? receipt.nativeAmount,
+  currency: receipt.amount == null ? receipt.nativeCurrency : receipt.currency,
+  sourceCurrency: receipt.nativeCurrency,
+  sourceGrossAmount: receipt.nativeAmount,
+});
 
 
 const formatDividendAxisTick = (val: number, currency: "JPY" | "USD") => {
@@ -211,9 +241,7 @@ export const MonthlyDividendBarChart = MonthlyDividendLineChart;
 
 
 export function DividendsView({
-  receipts,
-  distributions,
-  nativeDistributions = [],
+  receipts: engineReceipts,
   securityMap,
   accountMap,
   currency,
@@ -234,9 +262,7 @@ export function DividendsView({
   fxUnavailable = false,
   onSelectSecurity,
 }: {
-  receipts: DividendReceipt[];
-  distributions: DistributionEvent[];
-  nativeDistributions?: DistributionEvent[];
+  receipts: DashboardReceipt[];
   securityMap: Map<string, Seed["securities"][number] & { name?: string }>;
   accountMap: Map<string, Seed["accounts"][number]>;
   currency: "JPY" | "USD";
@@ -258,6 +284,7 @@ export function DividendsView({
   onSelectSecurity?: (securityId: string) => void;
 }) {
   const preferenceStorage = useBrowserPreferences();
+  const receipts = useMemo(() => engineReceipts.map(toViewReceipt), [engineReceipts]);
   const [internalPeriod, setInternalPeriod] = useState<string>(() => {
     if (typeof window === "undefined") return "ALL";
     return preferenceStorage.getItem(DIVIDEND_PERIOD_KEY) ?? "ALL";
@@ -366,7 +393,7 @@ export function DividendsView({
     const query = searchQuery.toLowerCase().trim();
     return periodReceipts.filter((receipt) => {
       if (selectedMonth && !receipt.recognitionDate.startsWith(selectedMonth)) return false;
-      if (selectedSecurityId && canonicalDomainSecurityId(receipt.securityId) !== canonicalDomainSecurityId(selectedSecurityId)) return false;
+      if (selectedSecurityId && marketKey(receipt.securityId) !== marketKey(selectedSecurityId)) return false;
       if (query) {
         const security = resolveSecurity(receipt.securityId, securityMap);
         const account = accountMap.get(receipt.accountId);
@@ -383,45 +410,34 @@ export function DividendsView({
     );
   }, [filteredReceipts]);
 
-  const nativeEventMap = useMemo(() => {
-    const map = new Map<string, DistributionEvent>();
-    for (const event of [...distributions, ...nativeDistributions]) {
-      map.set(event.id, event);
-    }
-    return map;
-  }, [distributions, nativeDistributions]);
-  const sourceCurrencyFor = useCallback(
-    (receipt: DividendReceipt) => receipt.sourceCurrency ?? nativeEventMap.get(receipt.distributionId)?.currency ?? receipt.currency,
-    [nativeEventMap],
-  );
-
+  const sourceCurrencyFor = (receipt: ViewReceipt) => receipt.sourceCurrency;
   const convertedPeriodReceipts = periodReceipts.filter((receipt) => receipt.currency === currency);
-  const totalGrossDecimal = convertedPeriodReceipts.reduce((sum, receipt) => sum.plus(receipt.grossAmount), new Decimal(0));
-  const totalNetDecimal = convertedPeriodReceipts.reduce((sum, receipt) => sum.plus(estimateNetDividendDecimal(receipt.grossAmount, sourceCurrencyFor(receipt), isTaxFreeAccount(accountMap.get(receipt.accountId)))), new Decimal(0));
+  const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
+  const totalGrossValue = sum(convertedPeriodReceipts.map((receipt) => receipt.grossAmount));
+  const totalNetValue = sum(convertedPeriodReceipts.map((receipt) => estimateNetDividend(receipt.grossAmount, sourceCurrencyFor(receipt), isTaxFreeAccount(accountMap.get(receipt.accountId)))));
   const nisaReceipts = convertedPeriodReceipts.filter((receipt) => isTaxFreeAccount(accountMap.get(receipt.accountId)));
-  const nisaGross = nisaReceipts.reduce((sum, receipt) => sum.plus(receipt.grossAmount), new Decimal(0));
-  const nisaNet = nisaReceipts.reduce((sum, receipt) => sum.plus(estimateNetDividendDecimal(receipt.grossAmount, sourceCurrencyFor(receipt), true)), new Decimal(0));
-  const totalGross = totalGrossDecimal.toNumber();
-  const displayTotalDecimal = taxMode === "net" ? totalNetDecimal : totalGrossDecimal;
-  const displayTotal = displayTotalDecimal.toNumber();
-  const displayNisa = (taxMode === "net" ? nisaNet : nisaGross).toNumber();
-  const displayTaxable = Decimal.max(0, taxMode === "net" ? totalNetDecimal.minus(nisaNet) : totalGrossDecimal.minus(nisaGross)).toNumber();
-  const nisaRatio = totalGrossDecimal.gt(0) ? nisaGross.div(totalGrossDecimal).mul(100).toNumber() : 0;
+  const nisaGross = sum(nisaReceipts.map((receipt) => receipt.grossAmount));
+  const nisaNet = sum(nisaReceipts.map((receipt) => estimateNetDividend(receipt.grossAmount, sourceCurrencyFor(receipt), true)));
+  const totalGross = totalGrossValue;
+  const displayTotal = taxMode === "net" ? totalNetValue : totalGrossValue;
+  const displayNisa = taxMode === "net" ? nisaNet : nisaGross;
+  const displayTaxable = Math.max(0, taxMode === "net" ? totalNetValue - nisaNet : totalGrossValue - nisaGross);
+  const nisaRatio = totalGrossValue > 0 ? (nisaGross / totalGrossValue) * 100 : 0;
 
   const securityTotals = useMemo(() => {
-    const totals = new Map<string, { gross: Decimal; net: Decimal; count: number }>();
+    const totals = new Map<string, { gross: number; net: number; count: number }>();
     for (const receipt of periodReceipts.filter((receipt) => receipt.currency === currency)) {
-      const gross = new Decimal(receipt.grossAmount);
+      const gross = receipt.grossAmount;
       const isTaxFree = isTaxFreeAccount(accountMap.get(receipt.accountId));
-      const net = estimateNetDividendDecimal(gross, sourceCurrencyFor(receipt), isTaxFree);
-      const entry = totals.get(receipt.securityId) ?? { gross: new Decimal(0), net: new Decimal(0), count: 0 };
-      entry.gross = entry.gross.plus(gross);
-      entry.net = entry.net.plus(net);
+      const net = estimateNetDividend(gross, sourceCurrencyFor(receipt), isTaxFree);
+      const entry = totals.get(receipt.securityId) ?? { gross: 0, net: 0, count: 0 };
+      entry.gross += gross;
+      entry.net += net;
       entry.count += 1;
       totals.set(receipt.securityId, entry);
     }
-    return [...totals].sort((a, b) => (taxMode === "net" ? b[1].net.comparedTo(a[1].net) : b[1].gross.comparedTo(a[1].gross))).map(([id, value]) => [id, { ...value, gross: value.gross.toNumber(), net: value.net.toNumber() }] as const);
-  }, [accountMap, periodReceipts, sourceCurrencyFor, taxMode]);
+    return [...totals].sort((a, b) => (taxMode === "net" ? b[1].net - a[1].net : b[1].gross - a[1].gross));
+  }, [accountMap, currency, periodReceipts, taxMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   // Monthly Data for line plot
@@ -458,20 +474,20 @@ export function DividendsView({
 
     const uniqueMonths = Array.from(new Set(months));
 
-    const monthMap = new Map<string, { gross: Decimal; net: Decimal; taxFree: Decimal; taxable: Decimal; count: number; securities: Set<string> }>();
-    for (const m of uniqueMonths) monthMap.set(m, { gross: new Decimal(0), net: new Decimal(0), taxFree: new Decimal(0), taxable: new Decimal(0), count: 0, securities: new Set() });
+    const monthMap = new Map<string, { gross: number; net: number; taxFree: number; taxable: number; count: number; securities: Set<string> }>();
+    for (const m of uniqueMonths) monthMap.set(m, { gross: 0, net: 0, taxFree: 0, taxable: 0, count: 0, securities: new Set() });
 
     for (const receipt of periodReceipts.filter((receipt) => receipt.currency === currency)) {
       const m = receipt.recognitionDate.slice(0, 7);
       const entry = monthMap.get(m);
       if (entry) {
-        const gross = new Decimal(receipt.grossAmount);
+        const gross = receipt.grossAmount;
         const isTaxFree = isTaxFreeAccount(accountMap.get(receipt.accountId));
-        const net = estimateNetDividendDecimal(gross, sourceCurrencyFor(receipt), isTaxFree);
-        entry.gross = entry.gross.plus(gross);
-        entry.net = entry.net.plus(net);
-        if (isTaxFree) entry.taxFree = entry.taxFree.plus(gross);
-        else entry.taxable = entry.taxable.plus(gross);
+        const net = estimateNetDividend(gross, sourceCurrencyFor(receipt), isTaxFree);
+        entry.gross += gross;
+        entry.net += net;
+        if (isTaxFree) entry.taxFree += gross;
+        else entry.taxable += gross;
         entry.count += 1;
         entry.securities.add(receipt.securityId);
       }
@@ -492,33 +508,33 @@ export function DividendsView({
       return {
         monthKey: m,
         monthLabel,
-        gross: entry.gross.toNumber(),
-        net: entry.net.toNumber(),
-        taxFree: entry.taxFree.toNumber(),
-        taxable: entry.taxable.toNumber(),
+        gross: entry.gross,
+        net: entry.net,
+        taxFree: entry.taxFree,
+        taxable: entry.taxable,
         count: entry.count,
         securities: [...entry.securities],
       };
     });
-  }, [accountMap, assetReceipts, currentYear, period, periodReceipts, sourceCurrencyFor, todayKey]);
+  }, [accountMap, assetReceipts, currency, currentYear, period, periodReceipts, todayKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const monthlyAverage = useMemo(() => {
-    if (period === "LTM") return displayTotalDecimal.div(12).toNumber();
+    if (period === "LTM") return displayTotal / 12;
     if (period === "ALL") {
       const dates = assetReceipts.map((r) => r.recognitionDate).filter(Boolean).sort();
       if (!dates.length) return 0;
       const minM = Number(dates[0].slice(0, 4)) * 12 + Number(dates[0].slice(5, 7));
       const curM = Number(todayKey.slice(0, 4)) * 12 + Number(todayKey.slice(5, 7));
       const totalMonths = Math.max(1, curM - minM + 1);
-      return displayTotalDecimal.div(totalMonths).toNumber();
+      return displayTotal / totalMonths;
     }
     const selectedYr = Number(period);
     const curYr = Number(todayKey.slice(0, 4));
     if (selectedYr === curYr) {
       const curM = Number(todayKey.slice(5, 7));
-      return displayTotalDecimal.div(Math.max(1, curM)).toNumber();
+      return displayTotal / Math.max(1, curM);
     }
-    return displayTotalDecimal.div(12).toNumber();
+    return displayTotal / 12;
   }, [assetReceipts, displayTotal, period, todayKey]);
 
   return (
@@ -549,17 +565,17 @@ export function DividendsView({
               className="dividend-summary-value"
               aria-label={
                 amountsVisible
-                  ? money(period === "ALL" ? new Decimal(monthlyAverage).mul(12).toNumber() : monthlyAverage, currency)
+                  ? money(period === "ALL" ? monthlyAverage * 12 : monthlyAverage, currency)
                   : "金額非表示"
               }
               title={
                 amountsVisible
-                  ? money(period === "ALL" ? new Decimal(monthlyAverage).mul(12).toNumber() : monthlyAverage, currency)
+                  ? money(period === "ALL" ? monthlyAverage * 12 : monthlyAverage, currency)
                   : undefined
               }
             >
               {amountsVisible
-                ? formatDividendSummaryMoney(period === "ALL" ? new Decimal(monthlyAverage).mul(12).toNumber() : monthlyAverage, currency, true)
+                ? formatDividendSummaryMoney(period === "ALL" ? monthlyAverage * 12 : monthlyAverage, currency, true)
                 : HIDDEN_AMOUNT}
             </strong>
           </div>
@@ -758,7 +774,7 @@ export function DividendsView({
                 const assetBadge = securityAssetLabel(security, secId);
                 const amount = taxMode === "net" ? stat.net : stat.gross;
                 const ratio = displayTotal > 0 ? amount / displayTotal : 0;
-                const isSelected = selectedSecurityId === secId || (selectedSecurityId != null && canonicalDomainSecurityId(selectedSecurityId) === canonicalDomainSecurityId(secId));
+                const isSelected = selectedSecurityId === secId || (selectedSecurityId != null && marketKey(selectedSecurityId) === marketKey(secId));
                 return (
                   <div
                     className={`dividend-breakdown-row ${isSelected ? "active" : ""}`}
@@ -813,15 +829,13 @@ export function DividendsView({
                 {sortedReceipts.slice(0, 300).map((receipt) => {
                   const security = resolveSecurity(receipt.securityId, securityMap);
                   const assetBadge = securityAssetLabel(security, receipt.securityId);
-                  const nativeEvent = nativeEventMap.get(receipt.distributionId);
                   const account = accountMap.get(receipt.accountId);
                   const isTaxFree = isTaxFreeAccount(account);
-                  const gross = Number(receipt.grossAmount);
+                  const gross = receipt.grossAmount;
                   const net = estimateNetDividend(gross, sourceCurrencyFor(receipt), isTaxFree);
                   const displayAmount = taxMode === "net" ? net : gross;
-                  const sourceLabel = receipt.confidence === "official" ? "公式" : receipt.confidence === "manual" ? "手入力" : "公開情報";
-                  const unitAmount = nativeEvent?.amountPerUnit ?? receipt.amountPerUnit;
-                  const unitCurrency = nativeEvent?.currency ?? receipt.currency;
+                  const unitAmount = receipt.amountPerUnit;
+                  const unitCurrency = receipt.sourceCurrency;
 
                   return (
                     <tr
@@ -842,26 +856,25 @@ export function DividendsView({
                             <span>{account?.name ?? receipt.accountId}</span>
                             <span className={`tax-badge ${isTaxFree ? "nisa" : "taxable"}`}>{isTaxFree ? "NISA" : "特定"}</span>
                             <span className="tax-badge asset">{assetBadge}</span>
-                            <span className={`tax-badge source ${receipt.confidence}`}>{sourceLabel}</span>
-                            {nativeEvent?.status === "estimated" && <span className="tax-badge estimated">推定</span>}
+                            <span className="tax-badge estimated">推定</span>
                           </small>
                         </div>
                       </td>
                       <td className="div-col-qty">
                         <strong>
-                          {number.format(Number(receipt.eligibleQuantity))}
+                          {number.format(receipt.eligibleQuantity)}
                           {securityQuantityUnit(security, receipt.securityId)}
                         </strong>
                         <small>
-                          @{money(Number(unitAmount), unitCurrency)}
-                          {Number(receipt.distributionUnit) !== 1 ? ` / ${number.format(Number(receipt.distributionUnit))}口` : ""}
+                          @{money(unitAmount, unitCurrency)}
+                          {receipt.distributionUnit !== 1 ? ` / ${number.format(receipt.distributionUnit)}口` : ""}
                         </small>
                       </td>
                       <td className="div-col-amount" aria-label={amountsVisible ? undefined : "金額非表示"}>
                         <strong>{amountsVisible ? money(displayAmount, receipt.currency) : HIDDEN_AMOUNT}</strong>
-                        {receipt.sourceCurrency && receipt.sourceCurrency !== currency && receipt.sourceGrossAmount && (
+                        {receipt.sourceCurrency !== receipt.currency && (
                           <small>
-                            現地 {amountsVisible ? money(Number(receipt.sourceGrossAmount), receipt.sourceCurrency) : HIDDEN_AMOUNT}
+                            現地 {amountsVisible ? money(receipt.sourceGrossAmount, receipt.sourceCurrency) : HIDDEN_AMOUNT}
                           </small>
                         )}
                         {taxMode === "gross" && !isTaxFree && (

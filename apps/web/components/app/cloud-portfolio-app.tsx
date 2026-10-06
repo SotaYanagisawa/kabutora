@@ -14,9 +14,7 @@ import { settleInitialAuthSession } from "@/lib/sync/initial-auth-session";
 import { startupLabels, type PortfolioStartupState, type StartupStage } from "@/lib/sync/portfolio-startup";
 import { diffTransactionChanges } from "@/lib/sync/transaction-event-merge";
 import { isNewerAccountRevision } from "@/lib/sync/account-event-merge";
-import { fetchMarketSnapshot, latestMarketSnapshot, resetMarketClient, restoreMarketClient } from "@/lib/market/market-client";
-import { clearCompactQuotesCache, readServerSnapshotCache } from "@/lib/market/client-market-cache";
-import type { ServerMarketSnapshot } from "@/lib/market/market-api-types";
+import { clearMarketCache, prefetchMarketSnapshot } from "@/lib/market/market-client";
 import type { MarketSessionStatus } from "@/lib/market/market-session";
 import type { DeviceTrustMode } from "@/lib/sync/firebase-config";
 import { pendingSyncIndicatorDelay } from "@/lib/sync/sync-status";
@@ -29,7 +27,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 const initialState: SessionState = { startup: { stage: "vault" }, seed: null, envelope: null, needsUnlock: false, cached: false, cachedAvailable: false, warning: "" };
 const message = (error: unknown) => error instanceof Error ? error.message : "処理を完了できませんでした。再試行してください。";
 
-export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, initialMarketSessions }: { deviceMode: DeviceTrustMode; initialServerTimeMs: number; initialMarketSessions: MarketSessionStatus[] }) {
+export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs }: { deviceMode: DeviceTrustMode; initialServerTimeMs: number; initialMarketSessions?: MarketSessionStatus[] }) {
   const [user, setUser] = useState<User | null>(null);
   const [activeUid, setActiveUid] = useState<string | null>(() => {
     if (typeof window === "undefined" || deviceMode !== "trusted") return null;
@@ -52,7 +50,6 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
   const [backupSeed, setBackupSeed] = useState<Seed | null>(null);
   const [queue, setQueue] = useState({ pending: 0, memoryOnly: 0, storageUnavailable: false });
   const [debouncedPending, setDebouncedPending] = useState(false);
-  const [market, setMarket] = useState<ServerMarketSnapshot | null | undefined>(() => latestMarketSnapshot());
   const session = useRef<PortfolioSession | null>(null);
   const preferenceSaveScheduler = useRef<PreferenceSaveScheduler<UserPreferences> | null>(null);
 
@@ -161,31 +158,10 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
     preferenceSaveScheduler.current?.enqueue(value);
   }, []);
 
-  // Paint the last saved prices instantly, then replace them with one fresh catalog request.
+  // Start the first market request while the vault unlocks; the dashboard picks it up on mount.
   useEffect(() => {
-    resetMarketClient({ persist: deviceMode === "trusted" });
-    if (!targetUid) { setMarket(null); return; }
-    let active = true;
-    if (deviceMode === "trusted") {
-      const saved = readServerSnapshotCache("full");
-      restoreMarketClient(saved);
-      void saved.then((entry) => {
-        if (!active || !entry) return;
-        // Saved prices carry no live clock or session authority; fresh data always wins.
-        setMarket((current) => current ?? { ...entry.snapshot, generatedAt: "", marketSessions: [], refresh: { ...entry.snapshot.refresh, status: "partial" } });
-      });
-    }
-    return () => { active = false; };
-  }, [deviceMode, targetUid]);
-
-  useEffect(() => {
-    if (!targetUid) return;
-    let active = true;
-    void fetchMarketSnapshot().then((snapshot) => {
-      if (active && snapshot) setMarket(snapshot);
-    }).catch(() => undefined);
-    return () => { active = false; };
-  }, [deviceMode, targetUid, user]);
+    if (targetUid) prefetchMarketSnapshot();
+  }, [targetUid]);
 
   const lock = useCallback(() => { session.current?.stop(); setLocked(true); setUnlockValue(""); setPassphrase(""); setConfirmation(""); setSetup(null); setBackupSeed(null); }, []);
   useEffect(() => {
@@ -211,7 +187,7 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
     if (deviceMode === "trusted") {
       try {
         localStorage.removeItem("kabutora-active-uid");
-        clearCompactQuotesCache();
+        clearMarketCache();
       } catch {}
       setActiveUid(null);
     }
@@ -330,7 +306,7 @@ export default function CloudPortfolioApp({ deviceMode, initialServerTimeMs, ini
     </details>}
     {queue.pending === 0 && !state.unsaved && !state.cached && <span className="sr-only" role="status">クラウド同期確認済み</span>}
     {error && <div className="cloud-error" role="alert">{error}<button className="text-button" onClick={() => setError("")}>閉じる</button></div>}
-    <Dashboard key={readyUid} seed={readySeed} initialServerTimeMs={initialServerTimeMs} initialMarketSessions={initialMarketSessions} initialMarketSnapshot={market} persistenceMode="cloud" preferenceNamespace={readyUid} onTransactionsChange={save(saveTransactions)} onAccountsChange={save(saveAccounts)} onSecuritiesChange={save(saveSecurities)} onWatchlistChange={save(saveWatchlist)} onPreferencesChange={schedulePreferenceSave} onEncryptedBackup={setBackupSeed} onRestoreBackup={(file) => void importFile(file)} allowPlaintextExport={true} allowPersistentMarketCache={deviceMode === "trusted"} onLogout={signOut} onStartupReady={() => performance.mark("kabutora:dashboard-interactive")}/>
+    <Dashboard key={readyUid} seed={readySeed} initialServerTimeMs={initialServerTimeMs} persistenceMode="cloud" preferenceNamespace={readyUid} onTransactionsChange={save(saveTransactions)} onAccountsChange={save(saveAccounts)} onSecuritiesChange={save(saveSecurities)} onWatchlistChange={save(saveWatchlist)} onPreferencesChange={schedulePreferenceSave} onEncryptedBackup={setBackupSeed} onRestoreBackup={(file) => void importFile(file)} allowPlaintextExport={true} allowPersistentMarketCache={deviceMode === "trusted"} onLogout={signOut} onStartupReady={() => performance.mark("kabutora:dashboard-interactive")}/>
     {backupSeed && <EncryptedBackupDialog seed={backupSeed} ownerUid={readyUid} onClose={() => setBackupSeed(null)}/>}
   </div>;
 }

@@ -1,16 +1,6 @@
-import type {
-  CorporateAction,
-  DerivedHolding,
-  DistributionEvent,
-  IntradayBar,
-  LedgerTransaction,
-  MarketBar,
-  PortfolioSummary,
-} from "@kabutora/domain";
-import type { PortfolioNotification } from "@/lib/portfolio/portfolio-notifications";
-import type { PackedHistorySeries } from "@/lib/market/market-history";
-import type { DistributionCoverage, ServerBenchmark, ServerMarketSnapshot, ServerRemoteQuote } from "@/lib/market/market-api-types";
-import type { MarketSessionStatus } from "@/lib/market/market-session";
+import type { Benchmark as MarketBenchmark, Session } from "@kabutora/domain/market";
+import type { PortfolioNotification } from "@kabutora/domain/notifications";
+import type { DividendReceipt, HistoryPoint, Holding, Summary } from "@kabutora/domain/portfolio";
 
 export type Seed = {
   portfolio: { id: string; name: string; baseCurrency: string; defaultCostBasisMethod: string };
@@ -42,7 +32,15 @@ export type Seed = {
     priceUnit?: string;
     providerSymbols: { yahoo?: string; monex?: string };
   }>;
-  transactions: Array<LedgerTransaction & {
+  transactions: Array<{
+    id: string;
+    accountId: string;
+    securityId: string | null;
+    type: "BUY" | "SELL" | "TRANSFER_IN" | "DIVIDEND" | "DEPOSIT" | "WITHDRAWAL";
+    tradeDate: string;
+    quantity: string | null;
+    pricePerShare: string | null;
+    grossAmount: string | null;
     portfolioId: string;
     tradeCurrency: string;
     source: string;
@@ -58,36 +56,61 @@ export type Seed = {
   importWarnings: Array<{ row: number; ticker: string; message: string }>;
 };
 
-export type RemoteQuote = ServerRemoteQuote;
 export type MarketStatus = "idle" | "loading" | "ready" | "partial" | "error";
+export type Freshness = "live" | "near_live" | "delayed" | "cached" | "stale" | "manual";
 
-export type Benchmark = ServerBenchmark;
+/** A market quote prepared for display (prices converted to the row's currency where applicable). */
+export type DisplayQuote = {
+  securityId: string;
+  currency: string;
+  exchangeMic?: string;
+  exchangeLabel?: string;
+  shortName?: string;
+  longName?: string;
+  brandName?: string;
+  price: number;
+  previousRegularClose: number | null;
+  dayHigh?: number;
+  dayLow?: number;
+  dayVolume?: number;
+  marketTimestamp: string;
+  fetchedAt: string;
+  freshness: Freshness;
+  session: Session;
+  priceType: "last_trade" | "official_close" | "delayed_last";
+  venueCode: string;
+};
+/** Kept name: views historically called display quotes "remote" quotes. */
+export type RemoteQuote = DisplayQuote;
+
+export type Benchmark = MarketBenchmark;
 export type SearchSecurity = Seed["securities"][number] & { exchangeLabel?: string };
+/** A ledger/searched security with display names and its native-currency quote. */
+export type MarketSecurity = SearchSecurity & {
+  legalName?: string;
+  nativeCurrency?: string;
+  quote?: DisplayQuote;
+};
 export type DashboardSecurity = Omit<SearchSecurity, "providerSymbols"> & {
   providerSymbols?: SearchSecurity["providerSymbols"];
   legalName?: string;
   nativeCurrency?: string;
   symbol?: string;
-  quote?: RemoteQuote;
+  quote?: DisplayQuote;
 };
 export type DashboardTransaction = Seed["transactions"][number] & {
   /** Legacy import fields retained for display compatibility. */
   currency?: string;
   priceUnit?: string | number;
 };
-export type DashboardHolding = DerivedHolding & {
+export type DashboardHolding = Holding & {
   security: DashboardSecurity;
-  quote?: RemoteQuote;
-  /** Value normalized to the active portfolio summary currency. */
-  summaryMarketValue?: string | null;
+  /** Value in the portfolio summary currency (differs from marketValue in NATIVE mode). */
+  summaryMarketValue?: number | null;
 };
-export type DashboardHistoryPoint = {
-  date: string;
-  value: number;
-  dividendAdjustedValue?: number;
-  capital: number;
-};
-export type DashboardSummary = PortfolioSummary;
+export type DashboardHistoryPoint = HistoryPoint;
+export type DashboardSummary = Summary;
+export type DashboardReceipt = DividendReceipt;
 export type SecurityLookup = ReadonlyMap<string, DashboardSecurity>;
 export type DashboardAccount = Seed["accounts"][number];
 export type AccountLookup = ReadonlyMap<string, DashboardAccount>;
@@ -95,42 +118,25 @@ export type View = "overview" | "watchlist" | "security" | "activity" | "perform
 export type RangeKey = "1D" | "1W" | "1M" | "3M" | "YTD" | "ALL" | "CUSTOM";
 export type CustomDateRange = { from: string; to: string };
 export type SecurityChartMode = "position" | "price";
+/** Seconds between automatic price updates while a market is open. */
 export type UpdateFrequency = 10 | 15 | 30 | 60;
 export type AccentTheme = "graphite" | "blue" | "forest" | "plum";
 export type DisplayCurrency = "JPY" | "USD" | "NATIVE";
-export type HistoryCacheMeta = { savedAt: string; checksum: string; integrityMismatch?: boolean };
-export type FetchHealth = { requested: number; returned: number; failedIds: string[]; fallbackIds: string[]; updatedAt: string | null };
-export type PackedIntradaySeries = Record<string, {
-  provider: string;
-  rows: Array<[timestamp: string, price: string, venueCode?: string, session?: IntradayBar["session"]]>;
-}>;
 
-export type MarketCachePayload = {
-  schemaVersion: number;
-  savedAt: string;
-  quotes: Record<string, RemoteQuote>;
-  benchmarks?: Benchmark[];
-  intraday?: IntradayBar[];
-  intradaySeries?: PackedIntradaySeries;
-};
-
-export type HistoryCachePayload = {
-  schemaVersion: number;
-  savedAt?: string;
-  checksum?: string;
-  derivationVersion?: string;
-  bars?: MarketBar[];
-  series?: PackedHistorySeries;
-  corporateActions: CorporateAction[];
-  distributions?: DistributionEvent[];
-  inceptionDates?: Record<string, string>;
-};
-
-export type DistributionCachePayload = {
-  schemaVersion: number;
-  savedAt: string;
-  distributions: DistributionEvent[];
-  coverage: DistributionCoverage[];
+/** Market data health shown in Settings. */
+export type MarketDiagnostics = {
+  quoteStatus: MarketStatus;
+  historyStatus: MarketStatus;
+  pricedCount: number;
+  unpricedCount: number;
+  catalogCount: number;
+  historyCount: number;
+  historyPending: number;
+  splitAdjustedCount: number;
+  ledgerIssues: number;
+  benchmarkCount: number;
+  updatedAt: number | null;
+  currentUsdJpy: number | null;
 };
 
 export type UserPreferences = {
@@ -177,8 +183,6 @@ export type DataSecurityAction = "encrypted-backup" | "export-csv" | "export-jso
 export type DashboardProps = {
   seed: Seed;
   initialServerTimeMs?: number;
-  initialMarketSessions?: MarketSessionStatus[];
-  initialMarketSnapshot?: ServerMarketSnapshot | null;
   persistenceMode?: "local" | "cloud";
   onTransactionsChange?: (transactions: Seed["transactions"]) => Promise<void> | void;
   onAccountsChange?: (accounts: Seed["accounts"]) => Promise<void> | void;

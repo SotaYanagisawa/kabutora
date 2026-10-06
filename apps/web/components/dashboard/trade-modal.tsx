@@ -1,7 +1,6 @@
 "use client";
 
 import type React from "react";
-import type { Decimal } from "@kabutora/domain";
 import { X, Trash2, ShieldCheck } from "lucide-react";
 import SecuritySearchField from "../search/security-search-field";
 import { localDateInputValue } from "@/lib/ui/calendar-time";
@@ -24,7 +23,7 @@ export type TradeModalProps = {
   selectTradeSecurity: (security: SearchSecurity) => void;
   tradeSearchActive: boolean;
   setTradeSearchActive: (active: boolean) => void;
-  handleSearchNetworkRequest: () => void;
+  handleSearchNetworkRequest?: () => void;
   selectedAccountId: string;
   setSelectedAccountId: (id: string) => void;
   selectableAccounts: Seed["accounts"];
@@ -37,7 +36,7 @@ export type TradeModalProps = {
   setTradeQuantity: (qty: string) => void;
   tradePrice: string;
   setTradePrice: (price: string) => void;
-  tradePreview: Decimal | null;
+  tradePreview: number | null;
   persistenceMode?: string;
   onSubmit: (event: React.FormEvent) => void;
   onClose: () => void;
@@ -228,8 +227,8 @@ export function TradeModal({
         <div className="trade-preview">
           <span>概算金額</span>
           <strong>
-            {tradePreview && Number.isFinite(tradePreview.toNumber())
-              ? money(tradePreview.toNumber(), selectedTradeSecurity?.currency)
+            {tradePreview != null && Number.isFinite(tradePreview)
+              ? money(tradePreview, selectedTradeSecurity?.currency)
               : "—"}
           </strong>
         </div>
@@ -240,8 +239,8 @@ export function TradeModal({
           disabled={
             tradeSearchActive ||
             !selectedTradeSecurity ||
-            !tradePreview ||
-            !Number.isFinite(tradePreview.toNumber()) ||
+            tradePreview == null ||
+            !Number.isFinite(tradePreview) ||
             (selectedAccountId === "__custom__" && !customBroker.trim())
           }
         >

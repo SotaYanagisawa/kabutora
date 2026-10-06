@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import { DEFAULT_PRICE_ALERT_PERCENT, PRICE_ALERT_THRESHOLDS, type PortfolioNotification } from "@/lib/portfolio/portfolio-notifications";
+import { DEFAULT_PRICE_ALERT_PERCENT, PRICE_ALERT_THRESHOLDS, type PortfolioNotification } from "@kabutora/domain/notifications";
 import type { PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
 import {
   DIVIDEND_DISPLAY_CURRENCY_KEY,

@@ -1,9 +1,7 @@
 "use client";
 
-import { earliestHistoryDate } from "@/lib/market/market-history";
-import { parseDecimalInput } from "@/lib/portfolio/decimal-input";
+import { decimalText, parseDecimalInput } from "@/lib/portfolio/decimal-input";
 import { localDateInputValue } from "@/lib/ui/calendar-time";
-import type { MarketBar } from "@kabutora/domain";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { securityPriceUnit } from "./helpers";
 import type { DashboardProps, SearchSecurity, Seed, View } from "./types";
@@ -28,8 +26,6 @@ type Options = Pick<DashboardProps, "onTransactionsChange" | "onAccountsChange">
   securityMap: ReadonlyMap<string, SearchSecurity & { priceUnit?: string }>;
   rememberSecurity: (security: SearchSecurity) => void;
   initialSecurityId: string;
-  historyBars: MarketBar[];
-  requestHistoryReload: () => void;
   view: View;
   detailSecurityId: string;
   navigateToView: (view: View) => void;
@@ -39,7 +35,7 @@ type Options = Pick<DashboardProps, "onTransactionsChange" | "onAccountsChange">
 /** Trade entry/edit modal, transaction deletion and account removal. */
 export function useTradeEditor({
   portfolioId, transactions, setTransactions, accounts, setAccounts, accountMap, activeAccounts, securityMap, rememberSecurity, initialSecurityId,
-  historyBars, requestHistoryReload, view, detailSecurityId, navigateToView, showToast, onTransactionsChange, onAccountsChange,
+  view, detailSecurityId, navigateToView, showToast, onTransactionsChange, onAccountsChange,
 }: Options) {
   const [tradeOpen, setTradeOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
@@ -65,8 +61,8 @@ export function useTradeEditor({
   const selectedTradeSecurity = securityMap.get(selectedSecurity);
   const parsedTradeQuantity = parseDecimalInput(tradeQuantity);
   const parsedTradePrice = parseDecimalInput(tradePrice);
-  const validTradeAmounts = Boolean(parsedTradeQuantity?.gt(0) && parsedTradePrice?.gte(0));
-  const tradePreview = validTradeAmounts ? parsedTradeQuantity!.mul(parsedTradePrice!).div(securityPriceUnit(selectedTradeSecurity)) : null;
+  const validTradeAmounts = parsedTradeQuantity != null && parsedTradeQuantity > 0 && parsedTradePrice != null && parsedTradePrice >= 0;
+  const tradePreview = validTradeAmounts ? (parsedTradeQuantity * parsedTradePrice) / securityPriceUnit(selectedTradeSecurity) : null;
 
   const resetDraft = () => {
     setTradeSearchActive(false);
@@ -155,7 +151,7 @@ export function useTradeEditor({
 
   const submitTrade = (event: FormEvent) => {
     event.preventDefault();
-    if (!validTradeAmounts || !parsedTradeQuantity || !parsedTradePrice || !tradePreview || !Number.isFinite(tradePreview.toNumber())) return;
+    if (!validTradeAmounts || parsedTradeQuantity == null || parsedTradePrice == null || tradePreview == null || !Number.isFinite(tradePreview)) return;
     const security = securityMap.get(selectedSecurity);
     if (!security) return;
     let account = selectableAccounts.find((item) => item.id === selectedAccountId);
@@ -172,19 +168,17 @@ export function useTradeEditor({
       }
     }
     if (!account) return;
-    const amount = parsedTradeQuantity.mul(parsedTradePrice).div(securityPriceUnit(security)).toString();
+    const amount = decimalText((parsedTradeQuantity * parsedTradePrice) / securityPriceUnit(security));
     const now = new Date().toISOString();
     const recordedTradeDate = tradeDate || now.slice(0, 10);
     const original = { broker: account.broker, nisa: account.accountType === "nisa" ? "Y" : "N", action: tradeType };
-    const fields = { accountId: account.id, securityId: security.id, type: tradeType, tradeDate: recordedTradeDate, quantity: parsedTradeQuantity.toString(), pricePerShare: parsedTradePrice.toString(), tradeCurrency: security.currency, grossAmount: amount };
+    const fields = { accountId: account.id, securityId: security.id, type: tradeType, tradeDate: recordedTradeDate, quantity: decimalText(parsedTradeQuantity), pricePerShare: decimalText(parsedTradePrice), tradeCurrency: security.currency, grossAmount: amount };
     const transaction = editingTransaction
       ? { ...editingTransaction, ...fields, original: { ...editingTransaction.original, ...original }, updatedAt: now, version: Number(editingTransaction.version ?? 1) + 1 } satisfies Transaction
       : { id: `trade-${crypto.randomUUID()}`, portfolioId, ...fields, source: "manual", original: { ...original, row: 0 }, createdAt: now, updatedAt: now, version: 1 } satisfies Transaction;
     const next = editingTransaction ? transactions.map((item) => item.id === editingTransaction.id ? transaction : item) : [...transactions, transaction];
     setTransactions(next);
     if (editingTransaction?.securityId === detailSecurityId && security.id !== detailSecurityId) leaveEmptyDetail(next);
-    const coveredFrom = earliestHistoryDate(historyBars, security.id);
-    if (!coveredFrom || recordedTradeDate < coveredFrom) requestHistoryReload();
     void onTransactionsChange?.(next);
     closeTradeModal();
     setTradeQuantity("");

@@ -55,7 +55,7 @@ async function marketRoutes(page: Page, snapshot?: Record<string, unknown>) {
     generatedAt: typeof snapshot?.generatedAt === "string" ? snapshot.generatedAt : undefined,
     quotes: (snapshot?.quotes ?? []) as MarketFixture["quotes"],
     benchmarks: (snapshot?.benchmarks ?? []) as MarketFixture["benchmarks"],
-    intraday: (snapshot?.intraday ?? []) as MarketFixture["intraday"],
+    intraday: (snapshot?.intraday ?? {}) as MarketFixture["intraday"],
   });
 }
 async function signIn(page: Page, mode: "個人端末" | "共有端末", snapshot?: Record<string, unknown>) {
@@ -113,22 +113,18 @@ test("cloud US holdings row shows the newest session immediately when its first 
   const previous = new Date(`${currentDate}T12:00:00Z`);
   do previous.setUTCDate(previous.getUTCDate() - 1); while (previous.getUTCDay() === 0 || previous.getUTCDay() === 6);
   const previousDate = previous.toISOString().slice(0, 10);
-  const bars = [
-    { securityId: "sec-us-aapl", timestamp: `${previousDate}T13:30:00.000Z`, price: "220", provider: "fixture" },
-    { securityId: "sec-us-aapl", timestamp: `${previousDate}T16:00:00.000Z`, price: "224", provider: "fixture" },
-    { securityId: "sec-us-aapl", timestamp: `${previousDate}T20:00:00.000Z`, price: "222", provider: "fixture" },
-    { securityId: "sec-us-aapl", timestamp: generatedAt, price: "223", provider: "fixture" },
-  ];
+  const seconds = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+  const intraday = { "sec-us-aapl": {
+    times: [`${previousDate}T13:30:00.000Z`, `${previousDate}T16:00:00.000Z`, `${previousDate}T20:00:00.000Z`, generatedAt].map(seconds),
+    prices: [220, 224, 222, 223],
+  } };
   const quotes = [
-    { securityId: "sec-us-aapl-xnas", symbol: "AAPL", exchangeMic: "XNAS", currency: "USD", price: "223", previousRegularClose: "222", marketTimestamp: generatedAt, fetchedAt: generatedAt, freshness: "near_live", provider: "fixture", session: "pre_market", priceType: "extended_hours", venueCode: "US", validationStatus: "valid" },
-    { securityId: "sec-fx-usdjpy", symbol: "USDJPY=X", exchangeMic: "FX", currency: "JPY", price: "150", previousRegularClose: "150", marketTimestamp: generatedAt, fetchedAt: generatedAt, freshness: "near_live", provider: "fixture", session: "regular", priceType: "indicative", venueCode: "FX", validationStatus: "valid" },
+    { key: "sec-us-aapl", price: 223, previousClose: 222, time: seconds(generatedAt), session: "pre_market", venue: "US", currency: "USD" },
+    { key: "sec-fx-usdjpy", price: 150, previousClose: 150, time: seconds(generatedAt), session: "regular", venue: "FX", currency: "JPY" },
   ];
   const snapshot = {
-    schemaVersion: 1, generatedAt, savedAt: generatedAt, marketSessions: [], quotes,
-    benchmarks: [{ id: "usd-jpy", label: "USD/JPY", symbol: "USDJPY=X", value: 150, changeRatio: 0, marketTimestamp: generatedAt, freshness: "near_live" }],
-    intraday: bars, intradayRevision: generatedAt,
-    coverage: { registered: 2, quoted: 2, fresh: 2, stale: 0, suspect: 0 },
-    refresh: { status: "ready", lastRunAt: generatedAt, queueMessagesToday: 0, providerCallsToday: 0 },
+    generatedAt, quotes, intraday,
+    benchmarks: [{ id: "usd-jpy", label: "USD/JPY", symbol: "JPY=X", value: 150, changeRatio: 0, time: seconds(generatedAt) }],
   };
   try {
     await signIn(page, "個人端末", snapshot);
@@ -149,21 +145,18 @@ test("cloud US holdings row shows the most recently completed trading session be
   do previous.setUTCDate(previous.getUTCDate() - 1); while (previous.getUTCDay() === 0 || previous.getUTCDay() === 6);
   const previousDate = previous.toISOString().slice(0, 10);
   const previousTimestamp = `${previousDate}T20:00:00.000Z`;
-  const bars = [
-    { securityId: "sec-us-aapl", timestamp: `${previousDate}T13:30:00.000Z`, price: "220", provider: "fixture" },
-    { securityId: "sec-us-aapl", timestamp: `${previousDate}T16:00:00.000Z`, price: "224", provider: "fixture" },
-    { securityId: "sec-us-aapl", timestamp: `${previousDate}T20:00:00.000Z`, price: "222", provider: "fixture" },
-  ];
+  const seconds = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+  const intraday = { "sec-us-aapl": {
+    times: [`${previousDate}T13:30:00.000Z`, `${previousDate}T16:00:00.000Z`, `${previousDate}T20:00:00.000Z`].map(seconds),
+    prices: [220, 224, 222],
+  } };
   const quotes = [
-    { securityId: "sec-us-aapl-xnas", symbol: "AAPL", exchangeMic: "XNAS", currency: "USD", price: "222", previousRegularClose: "220", marketTimestamp: previousTimestamp, fetchedAt: previousTimestamp, freshness: "near_live", provider: "fixture", session: "regular", priceType: "regular", venueCode: "US", validationStatus: "valid" },
-    { securityId: "sec-fx-usdjpy", symbol: "USDJPY=X", exchangeMic: "FX", currency: "JPY", price: "150", previousRegularClose: "150", marketTimestamp: previousTimestamp, fetchedAt: previousTimestamp, freshness: "near_live", provider: "fixture", session: "regular", priceType: "indicative", venueCode: "FX", validationStatus: "valid" },
+    { key: "sec-us-aapl", price: 222, previousClose: 220, time: seconds(previousTimestamp), session: "closed", venue: "US", currency: "USD" },
+    { key: "sec-fx-usdjpy", price: 150, previousClose: 150, time: seconds(previousTimestamp), session: "closed", venue: "FX", currency: "JPY" },
   ];
   const snapshot = {
-    schemaVersion: 1, generatedAt: previousTimestamp, savedAt: previousTimestamp, marketSessions: [], quotes,
-    benchmarks: [{ id: "usd-jpy", label: "USD/JPY", symbol: "USDJPY=X", value: 150, changeRatio: 0, marketTimestamp: previousTimestamp, freshness: "near_live" }],
-    intraday: bars, intradayRevision: previousTimestamp,
-    coverage: { registered: 2, quoted: 2, fresh: 2, stale: 0, suspect: 0 },
-    refresh: { status: "ready", lastRunAt: previousTimestamp, queueMessagesToday: 0, providerCallsToday: 0 },
+    generatedAt: previousTimestamp, quotes, intraday,
+    benchmarks: [{ id: "usd-jpy", label: "USD/JPY", symbol: "JPY=X", value: 150, changeRatio: 0, time: seconds(previousTimestamp) }],
   };
   try {
     await signIn(page, "個人端末", snapshot);

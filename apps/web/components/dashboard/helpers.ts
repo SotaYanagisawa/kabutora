@@ -1,13 +1,9 @@
-import type { CorporateAction, DistributionEvent, IntradayBar, MarketQuote } from "@kabutora/domain";
-import type { PortfolioNotification } from "../../lib/portfolio/portfolio-notifications";
+import { mergePortfolioNotifications, type PortfolioNotification } from "@kabutora/domain/notifications";
 import { calendarDateLabelJa } from "../../lib/ui/calendar-time";
 import { compactNumber } from "../../lib/ui/compact-number";
-import { exchangeTimeZone, exchangeTimeZoneCode } from "../../lib/charts/chart-presentation";
-import { mergePortfolioNotifications } from "../../lib/portfolio/portfolio-notifications";
-import { convertAmount, validUsdJpy } from "../../lib/portfolio/money-conversion";
+import { exchangeTimeZone, exchangeTimeZoneCode } from "../../lib/charts/market-time";
 import { notificationTypes } from "./constants";
-import type { CustomDateRange, DisplayCurrency, PackedIntradaySeries, RangeKey, Seed } from "./types";
-export { convertAmount, validUsdJpy };
+import type { CustomDateRange, DisplayCurrency, DisplayQuote, RangeKey, Seed } from "./types";
 
 export function resilientBrowserStorage(kind: "localStorage" | "sessionStorage" | "memory", prefix = ""): Storage {
   const backing = new Map<string, string>();
@@ -268,31 +264,6 @@ export const download = (name: string, content: string, type: string) => {
   URL.revokeObjectURL(url);
 };
 
-export function packIntradayBars(bars: IntradayBar[]): PackedIntradaySeries {
-  const series: PackedIntradaySeries = {};
-  for (const bar of bars) {
-    const current = series[bar.securityId] ?? { provider: bar.provider, rows: [] };
-    current.provider = bar.provider || current.provider;
-    current.rows.push([bar.timestamp, bar.price, bar.venueCode, bar.session]);
-    series[bar.securityId] = current;
-  }
-  return series;
-}
-
-export function unpackIntradayBars(series: PackedIntradaySeries | null | undefined) {
-  if (!series) return [];
-  return Object.entries(series).flatMap(([securityId, value]) =>
-    value.rows.map(([timestamp, price, venueCode, session]) => ({
-      securityId,
-      timestamp,
-      price,
-      provider: value.provider,
-      ...(venueCode ? { venueCode } : {}),
-      ...(session ? { session } : {}),
-    })),
-  );
-}
-
 export function readStoredIds(storage: Storage, key: string) {
   try {
     const value = JSON.parse(storage.getItem(key) ?? "[]") as unknown;
@@ -336,27 +307,7 @@ export function readStoredNotifications(storage: Storage) {
   }
 }
 
-export function mergeActions(...groups: CorporateAction[][]) {
-  return [...new Map(groups.flat().map((action) => [action.id, action])).values()].sort((a, b) =>
-    a.effectiveDate.localeCompare(b.effectiveDate),
-  );
-}
-
-export function mergeDistributionEvents(...groups: DistributionEvent[][]) {
-  const confidenceRank: Record<DistributionEvent["confidence"], number> = { estimated: 1, reported: 2, official: 3, manual: 4 };
-  const merged = new Map<string, DistributionEvent>();
-  for (const event of groups.flat()) {
-    const current = merged.get(event.id);
-    if (!current || confidenceRank[event.confidence] >= confidenceRank[current.confidence]) merged.set(event.id, event);
-  }
-  return [...merged.values()].sort((left, right) => {
-    const leftDate = left.paymentDate ?? left.exDate ?? left.recordDate ?? "";
-    const rightDate = right.paymentDate ?? right.exDate ?? right.recordDate ?? "";
-    return leftDate === rightDate ? left.id.localeCompare(right.id) : leftDate.localeCompare(rightDate);
-  });
-}
-
-export function quoteTradeSourceLabel(quote: MarketQuote) {
+export function quoteTradeSourceLabel(quote: Pick<DisplayQuote, "venueCode" | "priceType" | "session">) {
   return quote.venueCode === "FUND"
     ? "基準価額"
     : quote.venueCode === "INDEX"

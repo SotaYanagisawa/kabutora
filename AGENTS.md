@@ -16,7 +16,8 @@
 
 - Preserve existing features, UI controls, settings, data formats, and public exports unless the user explicitly asks to change them.
 - Plaintext portfolio data—symbols tied to a user, shares, prices, amounts, balances, accounts, and transactions—must never reach Cloudflare or unencrypted Firestore. Only encrypted vault or event payloads may cross the sync boundary.
-- Use `Decimal` from `@kabutora/domain` for financial calculations. Native number conversion is allowed only at display and chart boundaries.
+- Portfolio arithmetic lives in `@kabutora/domain` (`portfolio.ts`) and nowhere else. It uses float64 and rounds only for display; quantities below 1e-9 are zero. Views render engine output and never recompute money.
+- Stock splits are a per-trade multiplier, never a timeline event: every quantity is converted once to today's share units with the split list from the same `DailyHistory` record as the split-adjusted closes. Never merge split or dividend lists from different sources, seed files or browser caches. See [`docs/calculation-rules.md`](docs/calculation-rules.md).
 - React client code must never import edge modules: anything under `apps/web/lib/server/` (type-only imports are allowed).
 - Market requests from cloud clients carry no user symbol lists. Everyone reads the shared catalog snapshot and filters locally; see [`docs/market-backend.md`](docs/market-backend.md).
 - Keep the build ID deterministic across all Next.js build processes. Use the shared build-ID source; never add independent runtime timestamps to `next.config.mjs`.
@@ -25,7 +26,7 @@
 
 | Area | Purpose |
 |---|---|
-| `packages/domain` | Pure accounting and portfolio-history engine |
+| `packages/domain` | Pure portfolio engine (positions, valuation, history, dividends, notifications) and market data types |
 | `apps/web/app` | Next.js routes and application shell |
 | `apps/web/components` | Client UI: `app/` shell, `dashboard/` coordinator + hooks + views, `watchlist/`, `search/`, `charts/` |
 | `apps/web/lib` | Framework-light modules by domain: `charts/ market/ portfolio/ sync/ vault/ ui/`, and edge-only `server/` |

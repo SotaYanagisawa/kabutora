@@ -1,3 +1,5 @@
+import { marketKey } from "@kabutora/domain/market";
+
 export type SearchableSecurity = {
   id: string;
   displaySymbol: string;
@@ -95,8 +97,10 @@ export function mergeSecuritySearchResults<T extends SearchableSecurity>(
   const seen = new Set<string>();
   for (const group of groups) {
     for (const security of group) {
-      if (seen.has(security.id)) continue;
-      seen.add(security.id);
+      // One row per listed security, whatever id spelling each source uses.
+      const key = marketKey(security.id);
+      if (seen.has(key)) continue;
+      seen.add(key);
       results.push(security);
       if (results.length >= limit) return results;
     }

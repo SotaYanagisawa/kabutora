@@ -1,252 +1,128 @@
-import type { CorporateAction, DistributionEvent, IntradayBar, MarketBar, MarketQuote } from "@kabutora/domain";
-import { writeServerSnapshotCache, type PersistedServerSnapshot } from "./client-market-cache";
 import { getMarketAuthHeaders } from "../sync/firebase-client";
-import { mergeIntradayBars } from "./intraday-cache";
-import { MarketApiResponseError } from "./market-api-response";
-import { unpackHistoryBars, type PackedHistorySeries } from "./market-history";
-import { validateMarketPayload } from "./market-payload-validation";
-import { portfolioMarketSessions } from "./market-session";
 import { timeoutSignal } from "../ui/operation-deadline";
-import type { DistributionCoverage, ServerBenchmark, ServerMarketSnapshot, ServerRemoteQuote } from "./market-api-types";
-import { isRecord } from "../portfolio/validation-primitives";
+import { parseHistoryPayload, parseSnapshotPayload, type HistoryPayload, type SnapshotPayload } from "./market-wire";
 
-/**
- * The only market transport. One GET returns quotes, benchmarks and intraday charts for
- * the shared public catalog; the browser filters its private holdings locally.
- */
+/** The only browser transport for /api/market/*. */
 
-type WireSeries = { id: string; v: string; s?: MarketQuote["session"]; x?: string; t: number[]; p: number[] };
-type WireSnapshot = {
-  full: boolean;
-  generatedAt: string;
-  revision: string;
-  catalogKey: string;
-  quotes: ServerRemoteQuote[];
-  benchmarks: ServerBenchmark[];
-  series: WireSeries[];
-  failures: Array<{ securityId: string; message: string }>;
-};
-
-/** Re-request this many seconds before the newest point so a forming bar is updated. */
-const SINCE_OVERLAP_SECONDS = 15 * 60;
-/** The app shell and dashboard both ask at startup; a just-loaded snapshot is reused. */
-const REUSE_MS = 10_000;
-let current: { revision: string; catalogKey: string; lastTime: number; loadedAt: number; snapshot: ServerMarketSnapshot } | null = null;
-let flight: Promise<ServerMarketSnapshot | null> | null = null;
-let restoring: Promise<void> | null = null;
-let persist = false;
-let epoch = 0;
-const catalogListeners = new Set<() => void>();
-
-/** Drop session state when the signed-in account changes. */
-export function resetMarketClient(options: { persist?: boolean } = {}) {
-  current = null;
-  flight = null;
-  restoring = null;
-  persist = options.persist === true;
-  epoch += 1;
+export class MarketRequestError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+    this.name = "MarketRequestError";
+  }
 }
 
-/** Seed from this device's saved snapshot so the first request is a 304 or a small delta. */
-export function restoreMarketClient(saved: Promise<PersistedServerSnapshot | null>) {
-  const session = epoch;
-  restoring = saved.then((entry) => {
-    const [revision, catalogKey, lastTime] = entry?.etag.split("|") ?? [];
-    if (!entry || session !== epoch || current || !revision || !catalogKey || !(Number(lastTime) > 0)) return;
-    current = { revision, catalogKey, lastTime: Number(lastTime), loadedAt: 0, snapshot: entry.snapshot };
-  }).catch(() => undefined);
-}
-
-export function latestMarketSnapshot() {
-  return current?.snapshot ?? null;
+async function request(path: string, init: RequestInit = {}, timeoutMs = 15_000) {
+  let headers: Record<string, string>;
+  try {
+    headers = await getMarketAuthHeaders();
+  } catch {
+    throw new MarketRequestError("認証を確認できませんでした");
+  }
+  try {
+    return await fetch(path, { cache: "no-store", ...init, headers: { ...headers, ...init.headers as Record<string, string> }, signal: init.signal ?? timeoutSignal(timeoutMs) });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError" && init.signal?.aborted) throw error;
+    throw new MarketRequestError(typeof navigator !== "undefined" && !navigator.onLine ? "オフラインです" : "市場データサーバーに接続できませんでした");
+  }
 }
 
 function failure(response: Response, fallback: string) {
-  return new MarketApiResponseError(fallback, response.status);
+  if (response.status === 401 || response.status === 403) return new MarketRequestError("市場データの認証に失敗しました。再サインインしてください", response.status);
+  if (response.status === 429) return new MarketRequestError("市場データの取得が混み合っています", response.status);
+  return new MarketRequestError(fallback, response.status);
 }
 
-function decodeSeries(series: WireSeries[]): IntradayBar[] {
-  const bars: IntradayBar[] = [];
-  for (const item of series) {
-    let time = 0;
-    for (let index = 0; index < Math.min(item.t.length, item.p.length); index += 1) {
-      time += item.t[index];
-      bars.push({
-        securityId: item.id,
-        timestamp: new Date(time * 1000).toISOString(),
-        price: String(item.p[index]),
-        provider: item.v,
-        ...(item.s ? { session: item.s } : {}),
-        ...(item.x ? { venueCode: item.x } : {}),
-      });
-    }
-  }
-  return bars;
-}
+export type Fetched<T> = { status: 304 } | { status: 200; payload: T; etag: string | null };
 
-function parseWire(value: unknown): WireSnapshot {
-  if (!isRecord(value) || value.schemaVersion !== 2 || typeof value.revision !== "string" || typeof value.catalogKey !== "string"
-    || typeof value.generatedAt !== "string" || !Array.isArray(value.series) || !Array.isArray(value.failures)) {
-    throw new Error("market_snapshot_invalid");
-  }
-  for (const item of value.series) {
-    if (!isRecord(item) || typeof item.id !== "string" || typeof item.v !== "string" || !Array.isArray(item.t) || !Array.isArray(item.p)
-      || !item.t.every(Number.isFinite) || !item.p.every((price) => typeof price === "number" && price > 0)) {
-      throw new Error("market_series_invalid");
-    }
-  }
-  validateMarketPayload({ quotes: value.quotes, benchmarks: value.benchmarks });
-  return value as unknown as WireSnapshot;
-}
-
-function toSnapshot(wire: WireSnapshot, intraday: IntradayBar[], serverTime: string, stale: boolean): ServerMarketSnapshot {
-  const { quotes } = wire;
-  return {
-    schemaVersion: 1,
-    generatedAt: serverTime,
-    savedAt: wire.generatedAt,
-    marketSessions: portfolioMarketSessions("ALL", new Date(serverTime)),
-    quotes,
-    benchmarks: wire.benchmarks,
-    intraday,
-    coverage: {
-      registered: quotes.length + wire.failures.filter((item) => !quotes.some((quote) => quote.securityId === item.securityId)).length,
-      quoted: quotes.length,
-      fresh: quotes.filter((quote) => quote.freshness === "live" || quote.freshness === "near_live").length,
-      stale: quotes.filter((quote) => quote.freshness === "stale").length,
-      suspect: quotes.filter((quote) => quote.validationStatus === "suspect").length,
-    },
-    refresh: { status: !quotes.length ? "empty" : stale ? "partial" : "ready", lastRunAt: wire.generatedAt },
-  };
-}
-
-async function loadSnapshot(force: boolean) {
-  const session = epoch;
-  if (restoring) await Promise.race([restoring, new Promise((resolve) => setTimeout(resolve, 300))]);
-  const previous = current;
-  const params = new URLSearchParams();
-  if (force) params.set("refresh", "1");
-  if (previous?.lastTime) {
-    params.set("since", String(previous.lastTime - SINCE_OVERLAP_SECONDS));
-    params.set("catalog", previous.catalogKey);
-  }
-  const query = params.toString();
-  const response = await fetch(`/api/market/snapshot${query ? `?${query}` : ""}`, {
-    cache: "no-store",
-    headers: { ...await getMarketAuthHeaders(), ...(previous ? { "If-None-Match": `"${previous.revision}"` } : {}) },
-    signal: timeoutSignal(12_000),
-  });
-  if (session !== epoch) return null;
-  const serverTime = response.headers.get("X-Market-Server-Time") ?? new Date().toISOString();
-  if (response.status === 304 && previous) {
-    // Unchanged prices were re-verified upstream at X-Market-Generated-At.
-    const verifiedAt = response.headers.get("X-Market-Generated-At") ?? serverTime;
-    previous.snapshot = {
-      ...previous.snapshot,
-      generatedAt: serverTime,
-      marketSessions: portfolioMarketSessions("ALL", new Date(serverTime)),
-      quotes: previous.snapshot.quotes.map((quote) => quote.fetchedAt < verifiedAt ? { ...quote, fetchedAt: verifiedAt } : quote),
-    };
-    previous.loadedAt = Date.now();
-    return previous.snapshot;
-  }
+export async function fetchSnapshot(options: { force?: boolean; intradayRevision?: string; etag?: string } = {}): Promise<Fetched<SnapshotPayload>> {
+  const query = new URLSearchParams();
+  if (options.force) query.set("refresh", "1");
+  if (options.intradayRevision) query.set("intraday", options.intradayRevision);
+  const response = await request(`/api/market/snapshot${query.size ? `?${query}` : ""}`, options.etag ? { headers: { "If-None-Match": options.etag } } : {});
+  if (response.status === 304) return { status: 304 };
   if (!response.ok) throw failure(response, "市場価格を取得できませんでした");
-  const wire = parseWire(await response.json());
-  const incoming = decodeSeries(wire.series);
-  const intraday = wire.full || !previous ? mergeIntradayBars([], incoming) : mergeIntradayBars(previous.snapshot.intraday, incoming);
-  const lastTime = Math.max(previous?.lastTime ?? 0, ...wire.series.map((item) => item.t.reduce((sum, delta) => sum + delta, 0)));
-  const snapshot = toSnapshot(wire, intraday, serverTime, response.headers.get("X-Market-Stale") === "1");
-  current = { revision: wire.revision, catalogKey: wire.catalogKey, lastTime, loadedAt: Date.now(), snapshot };
-  if (persist) void writeServerSnapshotCache("full", snapshot, `${wire.revision}|${wire.catalogKey}|${lastTime}`);
-  return snapshot;
+  const payload = parseSnapshotPayload(await response.json().catch(() => null));
+  if (!payload) throw new MarketRequestError("市場価格の応答を確認できませんでした");
+  return { status: 200, payload, etag: response.headers.get("ETag") };
 }
 
-/** Concurrent callers (app shell, dashboard, timers) share one request. */
-export function fetchMarketSnapshot(options: { force?: boolean } = {}) {
-  if (!options.force && current && Date.now() - current.loadedAt < REUSE_MS) return Promise.resolve(current.snapshot);
-  if (flight && !options.force) return flight;
-  const task = loadSnapshot(options.force === true).finally(() => { if (flight === task) flight = null; });
-  flight = task;
-  return task;
+/** `from` is a year start: only the earliest needed year leaves the device. */
+export async function fetchHistory(from: string, etag?: string): Promise<Fetched<HistoryPayload>> {
+  const response = await request(`/api/market/history?from=${from}`, etag ? { headers: { "If-None-Match": etag } } : {}, 30_000);
+  if (response.status === 304) return { status: 304 };
+  if (!response.ok) throw failure(response, "価格履歴を取得できませんでした");
+  const payload = parseHistoryPayload(await response.json().catch(() => null));
+  if (!payload) throw new MarketRequestError("価格履歴の応答を確認できませんでした");
+  return { status: 200, payload, etag: response.headers.get("ETag") };
 }
 
-export type MarketHistoryResult = {
-  generatedAt: string;
-  bars: MarketBar[];
-  corporateActions: CorporateAction[];
-  inceptionDates: Record<string, string>;
-  pending: string[];
-};
-
-/** Catalog-wide daily closes from the start of `from`'s year. */
-export async function fetchMarketHistory(from: string): Promise<MarketHistoryResult> {
-  const response = await fetch(`/api/market/history?from=${encodeURIComponent(`${from.slice(0, 4)}-01-01`)}`, {
-    cache: "no-store",
-    headers: await getMarketAuthHeaders(),
-    signal: timeoutSignal(60_000),
-  });
-  if (!response.ok) throw failure(response, "履歴を取得できませんでした");
-  const payload: unknown = await response.json();
-  if (!isRecord(payload) || !isRecord(payload.series) || !Array.isArray(payload.corporateActions) || !isRecord(payload.inceptionDates) || !Array.isArray(payload.pending)) {
-    throw failure(response, "履歴を取得できませんでした");
-  }
-  for (const item of Object.values(payload.series)) {
-    if (!isRecord(item) || typeof item.provider !== "string" || !Array.isArray(item.rows)) throw failure(response, "履歴を取得できませんでした");
-  }
-  const bars = unpackHistoryBars(payload.series as PackedHistorySeries);
-  validateMarketPayload({ bars, corporateActions: payload.corporateActions });
-  return {
-    generatedAt: typeof payload.generatedAt === "string" ? payload.generatedAt : new Date().toISOString(),
-    bars,
-    corporateActions: payload.corporateActions as CorporateAction[],
-    inceptionDates: Object.fromEntries(Object.entries(payload.inceptionDates).filter((entry): entry is [string, string] => typeof entry[1] === "string")),
-    pending: payload.pending.filter((id): id is string => typeof id === "string"),
-  };
-}
-
-export type MarketDistributionResult = {
-  generatedAt: string;
-  distributions: DistributionEvent[];
-  corporateActions: CorporateAction[];
-  coverage: DistributionCoverage[];
-};
-
-export async function fetchMarketDistributions(): Promise<MarketDistributionResult> {
-  const response = await fetch("/api/market/distributions", { cache: "no-store", headers: await getMarketAuthHeaders(), signal: timeoutSignal(60_000) });
-  if (!response.ok) throw failure(response, "配当データを取得できませんでした");
-  const payload: unknown = await response.json();
-  if (!isRecord(payload) || !Array.isArray(payload.coverage)) throw failure(response, "配当データを取得できませんでした");
-  validateMarketPayload({ distributions: payload.distributions, corporateActions: payload.corporateActions });
-  return {
-    generatedAt: typeof payload.generatedAt === "string" ? payload.generatedAt : new Date().toISOString(),
-    distributions: (payload.distributions ?? []) as DistributionEvent[],
-    corporateActions: (payload.corporateActions ?? []) as CorporateAction[],
-    coverage: payload.coverage.filter((item): item is DistributionCoverage => isRecord(item) && typeof item.securityId === "string" && typeof item.status === "string"),
-  };
-}
-
-/**
- * Adds public securities to the shared catalog. Cloud clients call this only for an
- * explicit search selection (one id); the local Mac app may register its whole list.
- */
-export async function registerMarketSecurities(securityIds: string[], options: { notify?: boolean } = {}) {
-  if (!securityIds.length) return false;
-  const response = await fetch("/api/market/registry", {
-    method: "POST",
-    cache: "no-store",
-    headers: { ...await getMarketAuthHeaders(), "Content-Type": "application/json" },
-    body: JSON.stringify({ securityIds }),
-    signal: timeoutSignal(8_000),
-  });
-  if (!response.ok) return false;
-  const payload: unknown = await response.json().catch(() => null);
-  if (options.notify !== false && isRecord(payload) && Array.isArray(payload.added) && payload.added.length) {
-    for (const listener of catalogListeners) listener();
-  }
-  return true;
-}
+const catalogListeners = new Set<() => void>();
 
 export function onMarketCatalogChange(listener: () => void) {
   catalogListeners.add(listener);
   return () => { catalogListeners.delete(listener); };
+}
+
+/** Adds explicitly selected securities to the shared catalog (cloud: one per request). */
+export async function registerMarketSecurities(securityIds: string[]) {
+  const ids = [...new Set(securityIds.filter(Boolean))];
+  if (!ids.length) return false;
+  const response = await request("/api/market/registry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ securityIds: ids }) });
+  if (!response.ok) return false;
+  const result = await response.json().catch(() => null) as { added?: unknown } | null;
+  if (Array.isArray(result?.added) && result.added.length) for (const listener of catalogListeners) listener();
+  return true;
+}
+
+const searchCache = new Map<string, { expiresAt: number; results: unknown[] }>();
+
+export async function searchMarketSecurities<T>(query: string, options: { signal?: AbortSignal; onNetworkRequest?: () => void } = {}): Promise<T[]> {
+  const normalized = query.trim().toLocaleLowerCase("ja");
+  if (!normalized) return [];
+  const cached = searchCache.get(normalized);
+  if (cached && cached.expiresAt > Date.now()) return cached.results as T[];
+  options.onNetworkRequest?.();
+  const response = await request("/api/market/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ q: query.trim() }),
+    ...(options.signal ? { signal: options.signal } : {}),
+  }, 4_000);
+  if (!response.ok) throw failure(response, "銘柄を検索できませんでした");
+  const payload = await response.json().catch(() => null) as { results?: unknown } | null;
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  if (searchCache.size >= 100) searchCache.delete(searchCache.keys().next().value!);
+  searchCache.set(normalized, { expiresAt: Date.now() + 15 * 60_000, results });
+  return results as T[];
+}
+
+// ---- Startup prefetch ---------------------------------------------------------------------------
+
+let prefetched: { at: number; task: Promise<Fetched<SnapshotPayload>> } | null = null;
+
+/** Starts the first snapshot request before the dashboard mounts (e.g. while the vault unlocks). */
+export function prefetchMarketSnapshot(intradayRevision?: string) {
+  if (prefetched && Date.now() - prefetched.at < 10_000) return;
+  const task = fetchSnapshot({ intradayRevision });
+  task.catch(() => undefined);
+  prefetched = { at: Date.now(), task };
+}
+
+/** Returns a prefetched snapshot request started within the last 10 seconds, once. */
+export function takePrefetchedSnapshot() {
+  const current = prefetched;
+  prefetched = null;
+  return current && Date.now() - current.at < 10_000 ? current.task : null;
+}
+
+// ---- Browser cache keys ------------------------------------------------------------------------
+
+export const MARKET_SNAPSHOT_KEY = "kabutora-market-v4-snapshot";
+export const MARKET_HISTORY_KEY = "kabutora-market-v4-history";
+
+/** Removes saved market responses (sign-out). Portfolio data is never stored under these keys. */
+export function clearMarketCache() {
+  try {
+    for (const key of [MARKET_SNAPSHOT_KEY, MARKET_HISTORY_KEY]) window.localStorage.removeItem(key);
+  } catch { /* Storage is optional. */ }
 }

@@ -10,7 +10,7 @@ import {
   useTransition,
 } from "react";
 import { searchKnownJapanFunds } from "@/lib/market/japan-fund-catalog";
-import { searchMarketSecurities } from "@/lib/market/market-search-client";
+import { searchMarketSecurities } from "@/lib/market/market-client";
 import {
   buildSecuritySearchIndex,
   isCurrentSearchRequest,

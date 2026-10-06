@@ -12,7 +12,7 @@ flowchart TB
         direction TB
         UI["React 19 UI\n(Dashboard, Charts, Watchlist)"]
         State["Client State & View Controllers"]
-        Domain["@kabutora/domain\n(FIFO Accounting & Split Engine)"]
+        Domain["@kabutora/domain\n(Portfolio engine: moving average,\nsplit-normalized units)"]
         Crypto["Vault Crypto (WebCrypto)\n(AES-256-GCM + PBKDF2)"]
         IDB[("Local Storage / IndexedDB\n(Encrypted Blobs & Fast Cache)")]
         
@@ -52,7 +52,7 @@ flowchart TB
 | Package / Directory | Role | Description |
 |---|---|---|
 | [`apps/web`](../apps/web) | **Web App & API** | Next.js 15 App Router application, responsive UI components, Lightweight Charts, and Cloudflare OpenNext entrypoint. |
-| [`packages/domain`](../packages/domain) | **Domain Logic** | Pure TypeScript accounting engine. Calculates FIFO cost basis, average cost lots, corporate actions (splits/reverse splits), and multi-currency values with `Decimal.js`. |
+| [`packages/domain`](../packages/domain) | **Portfolio Engine** | Pure TypeScript, no dependencies. Converts every trade once into today's share units (split-normalized), keeps moving-average cost per account group, and derives valuation, history, dividends and notifications. See [calculation rules](calculation-rules.md). |
 | [`firebase`](../firebase) | **Security Rules** | Firestore security rules enforcing user ownership and rejecting unauthenticated or malformed writes. |
 | [`scripts`](../scripts) | **Tooling** | Native macOS wrapper and iPhone preview packagers, privacy boundary verification scripts. |
 
@@ -76,16 +76,17 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-    Client["Client UI"] -->|"One GET (ETag + since)"| Edge["Worker router (auth)"]
-    Edge --> Hub["Market object\n15 s snapshot"]
-    Hub -->|"stale: 10 parallel batches"| Yahoo["Yahoo spark"]
-    Hub --> Pages["Fund NAV / TOPIX / Japannext\n(background)"]
-    Cron["1-minute Cron"] --> Hub
+    Client["Client UI"] -->|"snapshot (ETag + intraday revision)"| Edge["Worker router (auth)"]
+    Client -->|"history?from=YYYY-01-01 (ETag)"| Edge
+    Edge --> Service["Market object\n15 s quotes · history records"]
+    Service --> Yahoo["Yahoo spark / chart"]
+    Service --> Pages["Fund NAV / TOPIX / Japannext\n(background)"]
+    Cron["1-minute Cron"] --> Service
 ```
 
-- **One request for prices**: quotes, benchmarks and five days of intraday bars for the whole shared catalog (max 200 symbols) arrive in one response, refreshed on read when older than 15 seconds.
-- **Historical Daily Bars**: Stored per symbol and year in the market object; the client requests the catalog from its earliest needed year and filters locally.
-- **Caching**: The object keeps the snapshot in memory and SQLite; the client keeps the last snapshot in IndexedDB so a reopened app renders instantly and revalidates with an ETag.
-- **Privacy Split**: Market requests carry no holdings; Firestore portfolio documents remain ciphertext and are decrypted only in the client.
+- **Prices:** quotes, benchmarks and 15-minute series for the whole shared catalog (max 200 symbols) in one response, refreshed on read when older than 15 seconds. Unchanged intraday series are not resent.
+- **History:** one record per security with split-adjusted closes, splits and dividends from one upstream response. The client refetches only when the snapshot reports a new history revision.
+- **Engine:** the browser computes everything synchronously from the ledger and these records (a few milliseconds), so filters and currencies switch instantly without requests.
+- **Caching:** the object keeps data in memory and SQLite; the browser keeps the last snapshot and history in localStorage so a reopened app renders prices on the first frame.
+- **Privacy split:** market requests carry no holdings; Firestore portfolio documents remain ciphertext and are decrypted only in the client.
 - See [Market backend](market-backend.md) for budgets and checks.
-- **Search isolation**: Search keystrokes stay inside a small component, local matches render immediately, obsolete provider requests are aborted, and the server applies a bounded provider deadline.

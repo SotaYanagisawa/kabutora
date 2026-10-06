@@ -1,11 +1,5 @@
 import { memo, useMemo, useState } from "react";
-import {
-  Decimal,
-  deriveSplitAdjustedTransactions,
-  deriveTransactionPositionSnapshots,
-  type CorporateAction,
-  type TransactionPositionSnapshot,
-} from "@kabutora/domain";
+import type { TradeRow } from "@kabutora/domain/portfolio";
 import { BarChart3, CalendarDays, List, Pencil, Plus, Trash2 } from "lucide-react";
 import { HIDDEN_AMOUNT } from "./constants";
 import {
@@ -27,6 +21,25 @@ import type {
 } from "./types";
 
 type LedgerTypeTone = "buy" | "sell" | "neutral";
+
+/** Rows recorded before a split show today's share units; the note keeps the entered values visible. */
+function SplitNote({ transaction, position, unit }: { transaction: DashboardTransaction; position?: TradeRow; unit: string }) {
+  if (position && transaction.type === "SELL" && position.quantity > position.before + 1e-9) {
+    return (
+      <span className="ledger-split-note warning" title={`売却時点の保有数 ${number.format(position.before)}${unit} を超えています。買付の記録漏れがないか確認してください。`}>
+        保有数超過
+      </span>
+    );
+  }
+  if (!position || position.splitFactor === 1) return null;
+  const factor = position.splitFactor;
+  const label = factor > 1 ? `分割 ×${number.format(factor)}` : `併合 ×${number.format(factor)}`;
+  return (
+    <span className="ledger-split-note" title={`入力値: ${number.format(Math.abs(Number(transaction.quantity)))}${unit} @ ${transaction.pricePerShare ?? "—"}（株式分割を反映して表示）`}>
+      {label}
+    </span>
+  );
+}
 
 function ledgerTransactionPresentation(transaction: DashboardTransaction): {
   isBuy: boolean;
@@ -52,7 +65,7 @@ export function Ledger({
   rows,
   securityMap,
   accountMap,
-  corporateActions = [],
+  tradeRows,
   onEdit,
   onDelete,
   onOpenTrade,
@@ -61,18 +74,17 @@ export function Ledger({
   rows: DashboardTransaction[];
   securityMap: SecurityLookup;
   accountMap: AccountLookup;
-  corporateActions?: CorporateAction[];
+  /** Split-normalized quantity, price and holding before/after per transaction. */
+  tradeRows?: ReadonlyMap<string, TradeRow>;
   onEdit?: (transactionId: string) => void;
   onDelete?: (transactionId: string) => void;
   onOpenTrade?: () => void;
   amountsVisible?: boolean;
 }) {
-  const adjustedRows = useMemo(() => deriveSplitAdjustedTransactions(rows, corporateActions), [corporateActions, rows]);
   const ordered = useMemo(
-    () => [...adjustedRows].sort((a, b) => b.tradeDate.localeCompare(a.tradeDate) || b.id.localeCompare(a.id)),
-    [adjustedRows],
+    () => [...rows].sort((a, b) => b.tradeDate.localeCompare(a.tradeDate) || b.id.localeCompare(a.id)),
+    [rows],
   );
-  const positionSnapshots = useMemo(() => deriveTransactionPositionSnapshots(rows, corporateActions), [corporateActions, rows]);
 
   if (!ordered.length) {
     return (
@@ -99,7 +111,7 @@ export function Ledger({
             transaction={transaction}
             security={transaction.securityId ? securityMap.get(transaction.securityId) : null}
             account={accountMap.get(transaction.accountId)}
-            position={positionSnapshots.get(transaction.id)}
+            position={tradeRows?.get(transaction.id)}
             onEdit={onEdit}
             onDelete={onDelete}
             amountsVisible={amountsVisible}
@@ -128,7 +140,7 @@ export function Ledger({
               transaction={transaction}
               security={transaction.securityId ? securityMap.get(transaction.securityId) : null}
               account={accountMap.get(transaction.accountId)}
-              position={positionSnapshots.get(transaction.id)}
+              position={tradeRows?.get(transaction.id)}
               onEdit={onEdit}
               onDelete={onDelete}
               amountsVisible={amountsVisible}
@@ -185,7 +197,7 @@ export function CalendarActivity({ transactions }: { transactions: DashboardTran
         {Array.from({ length: daysInMonth }, (_, index) => {
           const day = index + 1;
           const rows = byDay.get(day) ?? [];
-          const volume = rows.reduce((sum, row) => sum.plus(new Decimal(row.grossAmount ?? 0).abs()), new Decimal(0)).toNumber();
+          const volume = rows.reduce((sum, row) => sum + Math.abs(Number(row.grossAmount ?? 0)), 0);
           const currencies = [...new Set(rows.map((row) => row.tradeCurrency ?? "JPY"))];
           return (
             <div className={rows.length ? "active" : ""} key={day}>
@@ -205,12 +217,12 @@ export function CalendarActivity({ transactions }: { transactions: DashboardTran
 }
 
 export function ActivityHistogram({ transactions }: { transactions: DashboardTransaction[] }) {
-  const grouped = new Map<string, { count: number; volume: Decimal; currencies: Set<string> }>();
+  const grouped = new Map<string, { count: number; volume: number; currencies: Set<string> }>();
   for (const row of transactions) {
     const month = row.tradeDate.slice(0, 7);
-    const current = grouped.get(month) ?? { count: 0, volume: new Decimal(0), currencies: new Set<string>() };
+    const current = grouped.get(month) ?? { count: 0, volume: 0, currencies: new Set<string>() };
     current.count += 1;
-    current.volume = current.volume.plus(new Decimal(row.grossAmount ?? 0).abs());
+    current.volume += Math.abs(Number(row.grossAmount ?? 0));
     current.currencies.add(row.tradeCurrency ?? "JPY");
     grouped.set(month, current);
   }
@@ -227,7 +239,7 @@ export function ActivityHistogram({ transactions }: { transactions: DashboardTra
             <i style={{ width: `${Math.max(5, (value.count / maxCount) * 100)}%` }} />
           </div>
           <strong>{value.count}件</strong>
-          <span>{value.currencies.size === 1 ? compactMoney(value.volume.toNumber(), [...value.currencies][0] as DisplayCurrency) : "複数通貨"}</span>
+          <span>{value.currencies.size === 1 ? compactMoney(value.volume, [...value.currencies][0] as DisplayCurrency) : "複数通貨"}</span>
         </div>
       ))}
     </section>
@@ -240,19 +252,19 @@ export function ActivityTradeSummary({ transactions }: { transactions: Dashboard
     const buyRows = tradeRows.filter((transaction) => transaction.type === "BUY");
     const sellRows = tradeRows.filter((transaction) => transaction.type === "SELL");
 
-    const buyGrossByCurrency: Record<string, Decimal> = {};
-    const sellGrossByCurrency: Record<string, Decimal> = {};
-    const netGrossByCurrency: Record<string, Decimal> = {};
+    const buyGrossByCurrency: Record<string, number> = {};
+    const sellGrossByCurrency: Record<string, number> = {};
+    const netGrossByCurrency: Record<string, number> = {};
 
     for (const t of tradeRows) {
       const c = (t.tradeCurrency || t.currency || "JPY") as string;
-      const gross = new Decimal(t.grossAmount ?? new Decimal(t.quantity ?? 0).mul(t.pricePerShare ?? 0).div(t.priceUnit ?? 1)).abs();
+      const gross = Math.abs(t.grossAmount != null ? Number(t.grossAmount) : (Number(t.quantity ?? 0) * Number(t.pricePerShare ?? 0)) / Number(t.priceUnit ?? 1));
       if (t.type === "BUY") {
-        buyGrossByCurrency[c] = (buyGrossByCurrency[c] ?? new Decimal(0)).plus(gross);
-        netGrossByCurrency[c] = (netGrossByCurrency[c] ?? new Decimal(0)).plus(gross);
+        buyGrossByCurrency[c] = (buyGrossByCurrency[c] ?? 0) + gross;
+        netGrossByCurrency[c] = (netGrossByCurrency[c] ?? 0) + gross;
       } else if (t.type === "SELL") {
-        sellGrossByCurrency[c] = (sellGrossByCurrency[c] ?? new Decimal(0)).plus(gross);
-        netGrossByCurrency[c] = (netGrossByCurrency[c] ?? new Decimal(0)).minus(gross);
+        sellGrossByCurrency[c] = (sellGrossByCurrency[c] ?? 0) + gross;
+        netGrossByCurrency[c] = (netGrossByCurrency[c] ?? 0) - gross;
       }
     }
 
@@ -268,10 +280,10 @@ export function ActivityTradeSummary({ transactions }: { transactions: Dashboard
 
   if (!transactions.length) return null;
 
-  const formatCurrencyMap = (map: Record<string, Decimal>, fallbackZero = true) => {
-    const entries = Object.entries(map).filter(([_, val]) => !val.isZero() || fallbackZero);
+  const formatCurrencyMap = (map: Record<string, number>, fallbackZero = true) => {
+    const entries = Object.entries(map).filter(([, val]) => val !== 0 || fallbackZero);
     if (!entries.length) return fallbackZero ? "¥0" : "—";
-    return entries.map(([curr, val]) => compactMoney(val.toNumber(), curr as DisplayCurrency, true)).join(" / ");
+    return entries.map(([curr, val]) => compactMoney(val, curr as DisplayCurrency, true)).join(" / ");
   };
 
   return (
@@ -303,7 +315,7 @@ export function ActivityView({
   transactions,
   securityMap,
   accountMap,
-  corporateActions,
+  tradeRows,
   brokerOptions = [],
   onEdit,
   onDelete,
@@ -312,7 +324,7 @@ export function ActivityView({
   transactions: DashboardTransaction[];
   securityMap: SecurityLookup;
   accountMap: AccountLookup;
-  corporateActions?: CorporateAction[];
+  tradeRows?: ReadonlyMap<string, TradeRow>;
   brokerOptions?: string[];
   onEdit?: (transactionId: string) => void;
   onDelete?: (transactionId: string) => void;
@@ -346,7 +358,7 @@ export function ActivityView({
           rows={filteredTransactions}
           securityMap={securityMap}
           accountMap={accountMap}
-          corporateActions={corporateActions}
+          tradeRows={tradeRows}
           onEdit={onEdit}
           onDelete={onDelete}
           onOpenTrade={onOpenTrade}
@@ -450,7 +462,7 @@ const FastLedgerCard = memo(function LedgerCard({
   transaction: DashboardTransaction;
   security?: DashboardSecurity | null;
   account?: DashboardAccount;
-  position?: TransactionPositionSnapshot;
+  position?: TradeRow;
   onEdit?: (transactionId: string) => void;
   onDelete?: (transactionId: string) => void;
   amountsVisible: boolean;
@@ -487,11 +499,12 @@ const FastLedgerCard = memo(function LedgerCard({
           {amountsVisible ? (
             <>
               <span className="ledger-card-qty">
-                {transaction.quantity ? `${number.format(Math.abs(Number(transaction.quantity)))}${unit}` : "—"}
+                {transaction.quantity ? `${number.format(position?.quantity ?? Math.abs(Number(transaction.quantity)))}${unit}` : "—"}
               </span>
+              <SplitNote transaction={transaction} position={position} unit={unit} />
               {transaction.pricePerShare != null && (
                 <span className="ledger-card-at">
-                  @ {maybeMoney(transaction.pricePerShare, transactionCurrency)}
+                  @ {maybeMoney(position?.price ?? transaction.pricePerShare, transactionCurrency)}
                   {isFundSecurity(security) ? ` / ${securityPriceBasis(security)}` : ""}
                 </span>
               )}
@@ -502,14 +515,14 @@ const FastLedgerCard = memo(function LedgerCard({
         </div>
       </div>
 
-      {(position?.afterQuantity != null || editable || onDelete) && (
+      {(position || editable || onDelete) && (
         <div className="ledger-card-footer">
           <div className="ledger-card-pos">
-            {amountsVisible && position?.beforeQuantity != null && position?.afterQuantity != null && (
+            {amountsVisible && position && (
               <span className="ledger-card-pos-text">
-                保有推移: {number.format(Number(position.beforeQuantity))} →{" "}
+                保有推移: {number.format(position.before)} →{" "}
                 <strong>
-                  {number.format(Number(position.afterQuantity))}
+                  {number.format(position.after)}
                   {unit}
                 </strong>
               </span>
@@ -563,7 +576,7 @@ const FastLedgerTableRow = memo(function LedgerTableRow({
   transaction: DashboardTransaction;
   security?: DashboardSecurity | null;
   account?: DashboardAccount;
-  position?: TransactionPositionSnapshot;
+  position?: TradeRow;
   onEdit?: (transactionId: string) => void;
   onDelete?: (transactionId: string) => void;
   amountsVisible: boolean;
@@ -594,20 +607,21 @@ const FastLedgerTableRow = memo(function LedgerTableRow({
       </td>
       <td className="ledger-quantity-col">
         <span className="ledger-num" aria-label={amountsVisible ? undefined : "数量非表示"}>
-          {amountsVisible ? (transaction.quantity ? `${number.format(Math.abs(Number(transaction.quantity)))}${unit}` : "—") : HIDDEN_AMOUNT}
+          {amountsVisible ? (transaction.quantity ? `${number.format(position?.quantity ?? Math.abs(Number(transaction.quantity)))}${unit}` : "—") : HIDDEN_AMOUNT}
+          {amountsVisible && <SplitNote transaction={transaction} position={position} unit={unit} />}
         </span>
       </td>
       <td className="ledger-position-col">
         <span className="ledger-position-shift" aria-label={amountsVisible ? undefined : "保有数非表示"}>
           {amountsVisible ? (
-            position?.beforeQuantity == null || position.afterQuantity == null ? (
+            !position ? (
               "—"
             ) : (
               <>
-                <span className="ledger-pos-before">{number.format(Number(position.beforeQuantity))}</span>
+                <span className="ledger-pos-before">{number.format(position.before)}</span>
                 <i className="ledger-arrow">→</i>
                 <strong className="ledger-pos-after">
-                  {number.format(Number(position.afterQuantity))}
+                  {number.format(position.after)}
                   {unit}
                 </strong>
               </>
@@ -622,7 +636,7 @@ const FastLedgerTableRow = memo(function LedgerTableRow({
           {amountsVisible ? (
             transaction.pricePerShare != null ? (
               <>
-                {maybeMoney(transaction.pricePerShare, transactionCurrency)}
+                {maybeMoney(position?.price ?? transaction.pricePerShare, transactionCurrency)}
                 {isFundSecurity(security) ? ` / ${securityPriceBasis(security)}` : ""}
               </>
             ) : (

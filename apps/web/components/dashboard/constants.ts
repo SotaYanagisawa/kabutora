@@ -1,7 +1,4 @@
-import corporateActionSeed from "../../data/corporate-actions.json";
-import marketNoticeSeed from "../../data/market-notices.json";
-import type { CorporateAction, MarketQuote } from "@kabutora/domain";
-import type { ExternalMarketNotice, PortfolioNotification } from "../../lib/portfolio/portfolio-notifications";
+import type { PortfolioNotification } from "@kabutora/domain/notifications";
 import {
   Bell,
   Coins,
@@ -10,7 +7,7 @@ import {
   Search,
   Settings,
 } from "lucide-react";
-import type { AccentTheme, RangeKey, UpdateFrequency, View } from "./types";
+import type { AccentTheme, Freshness, RangeKey, UpdateFrequency, View } from "./types";
 
 export const NAV_ITEMS: Array<{ id: View; label: string; shortLabel: string; icon: typeof LayoutDashboard }> = [
   { id: "activity", label: "取引履歴", shortLabel: "取引", icon: FileClock },
@@ -33,21 +30,14 @@ export const MOBILE_VIEW_INDEX: Record<string, number> = {
 };
 
 export const PORTFOLIO_RANGES: RangeKey[] = ["1D", "1W", "1M", "3M", "YTD", "ALL"];
+/** Seconds between automatic price updates. */
 export const UPDATE_FREQUENCIES: UpdateFrequency[] = [10, 15, 30, 60];
 /** Returning to a visible app refreshes prices when the last load is older than this. */
 export const RESUME_REFRESH_MS = 30 * 1000;
-export const HISTORY_NETWORK_REVALIDATE_MS = 6 * 60 * 60 * 1000;
-export const HISTORY_INTEGRITY_CHECK_MS = 15 * 60 * 1000;
 export const PULL_REFRESH_THRESHOLD = 64;
 export const PULL_REFRESH_MAX = 100;
 export const TOUCH_NAVIGATION_LOCK_PX = 12;
 export const MOBILE_LAYOUT_QUERY = "(max-width: 840px), (max-height: 500px) and (orientation: landscape)";
-export const PERFORMANCE_DERIVATION_VERSION = "market-value-v5-separated-dividends";
-export const FX_SECURITY_ID = "sec-fx-usdjpy";
-export const MARKET_CACHE_KEY = "market-v8";
-export const HISTORY_CACHE_KEY = "history-v11";
-export const DISTRIBUTION_CACHE_KEY = "distributions-v1";
-export const DISTRIBUTION_NETWORK_REVALIDATE_MS = 24 * 60 * 60 * 1000;
 export const SUMMARY_AMOUNTS_VISIBLE_KEY = "kabutora-summary-amounts-visible";
 export const HIDE_SCROLLBAR_KEY = "kabutora-hide-scrollbar";
 export const PRICE_ALERT_THRESHOLD_KEY = "kabutora-price-alert-threshold";
@@ -63,22 +53,9 @@ export const DIVIDEND_TAX_MODE_KEY = "kabutora-dividend-tax-mode";
 export const DIVIDEND_TAB_KEY = "kabutora-dividend-tab";
 
 export const HIDDEN_AMOUNT = "••••••";
-export const LEGACY_MARKET_CACHE_KEYS = ["kabutora-market-cache-v5", "kabutora-market-cache-v4", "kabutora-market-cache-v3"];
-export const LEGACY_HISTORY_CACHE_KEYS = [
-  "history-v10",
-  "history-v9",
-  "kabutora-history-cache-v8",
-  "kabutora-history-cache-v7",
-  "kabutora-history-cache-v6",
-  "kabutora-history-cache-v5",
-  "kabutora-history-cache-v4",
-  "kabutora-history-cache-v3",
-  "kabutora-history-cache-v2",
-];
-
 export const rangeLabel = (range: RangeKey) => range;
 
-export const freshnessLabel: Record<MarketQuote["freshness"], string> = {
+export const freshnessLabel: Record<Freshness, string> = {
   live: "LIVE",
   near_live: "NEAR LIVE",
   delayed: "DELAYED",
@@ -87,8 +64,6 @@ export const freshnessLabel: Record<MarketQuote["freshness"], string> = {
   manual: "MANUAL",
 };
 
-export const seededActions = corporateActionSeed.actions as CorporateAction[];
-export const seededMarketNotices = marketNoticeSeed.notices as ExternalMarketNotice[];
 export const notificationTypes = new Set<PortfolioNotification["type"]>([
   "SPLIT",
   "REVERSE_SPLIT",
@@ -109,5 +84,5 @@ export const ACCENT_THEMES: Array<{ id: AccentTheme; label: string }> = [
   { id: "plum", label: "プラム" },
 ];
 
-export const APP_VERSION = "0.1.0";
-export const APP_RELEASE_DATE = "2026年9月4日";
+export const APP_VERSION = "0.2.0";
+export const APP_RELEASE_DATE = "2026年10月6日";

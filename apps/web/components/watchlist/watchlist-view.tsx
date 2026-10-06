@@ -3,11 +3,10 @@ import { useBrowserPreferences } from "../app/browser-preferences";
 
 
 import { useState, useMemo, useEffect, useCallback, memo } from "react";
-import { canonicalDomainSecurityId } from "@kabutora/domain";
 import { marketDisplayName } from "@/lib/market/market-label";
 import { Check, Pencil, Search, Trash2 } from "lucide-react";
-import type { RemoteQuote, SearchSecurity } from "../dashboard/types";
-import { marketTimeWithZoneLabel } from "@/lib/charts/chart-presentation";
+import type { RemoteQuote, SearchSecurity, SecurityLookup } from "../dashboard/types";
+import { marketTimeWithZoneLabel } from "@/lib/charts/market-time";
 import WatchlistSearchOverlay from "./watchlist-search-overlay";
 
 type WatchlistCategory = "ALL" | "JP" | "US" | "FUNDS_INDEXES";
@@ -42,7 +41,7 @@ export type WatchlistViewProps = {
   watchlist: SearchSecurity[];
   onAddSecurity: (security: SearchSecurity) => void;
   onRemoveSecurity: (securityId: string) => void;
-  quotes: Record<string, RemoteQuote>;
+  securityMap: SecurityLookup;
   onSelectSecurity: (security: SearchSecurity | string) => void;
   allSecurities: SearchSecurity[];
 };
@@ -149,7 +148,7 @@ export default function WatchlistView({
   watchlist,
   onAddSecurity,
   onRemoveSecurity,
-  quotes,
+  securityMap,
   onSelectSecurity,
   allSecurities,
 }: WatchlistViewProps) {
@@ -191,10 +190,7 @@ export default function WatchlistView({
       return true;
     });
 
-    const resolveItemQuote = (id: string) => {
-      const canonical = canonicalDomainSecurityId(id);
-      return quotes[id] ?? quotes[canonical] ?? quotes[`${canonical}-xtks`];
-    };
+    const resolveItemQuote = (id: string) => securityMap.get(id)?.quote;
 
     if (sortBy === "DAY_GAIN_DESC") {
       items = [...items].sort((a, b) => {
@@ -225,7 +221,7 @@ export default function WatchlistView({
     }
 
     return items;
-  }, [quotes, selectedCategory, sortBy, watchlist]);
+  }, [securityMap, selectedCategory, sortBy, watchlist]);
 
   const [isEditing, setIsEditing] = useState(false);
 
@@ -288,12 +284,11 @@ export default function WatchlistView({
               </thead>
               <tbody>
                 {filteredWatchlist.map((item) => {
-                  const canonical = canonicalDomainSecurityId(item.id);
                   return (
                     <WatchlistTableRow
                       key={item.id}
                       item={item}
-                      quote={quotes[item.id] ?? quotes[canonical] ?? quotes[`${canonical}-xtks`]}
+                      quote={securityMap.get(item.id)?.quote}
                       isEditing={isEditing}
                       onSelectSecurity={onSelectSecurity}
                       onRemoveSecurity={onRemoveSecurity}

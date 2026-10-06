@@ -6,14 +6,13 @@
 
 | Folder | Runtime | Contents |
 |---|---|---|
-| `charts/` | client + edge | `chart-domain`, `chart-geometry`, `chart-presentation` (market-date keys, session bars), `numeric-extent` |
-| `market/` | client + edge | `market-client` (the only market transport), `client-market-cache`, intraday/history helpers, catalogs, sessions and clock, security search, `market-api-types` (wire types) |
-| `portfolio/` | client | domain worker + client, history calculation inputs, filters, notifications, consistency, FX history, Decimal input/money helpers, validation |
+| `charts/` | client + edge | `chart-domain`, `chart-geometry`, `market-time` (exchange time zones and labels), `numeric-extent` |
+| `market/` | client + edge | `market-client` (the only market transport), `market-wire` (wire format, validation; shared with edge), catalogs, sessions, labels, security ID normalization, search ranking |
+| `portfolio/` | client | portfolio filters, ledger validation, trade-input parsing (accounting itself is in `@kabutora/domain`) |
 | `sync/` | client | encrypted Firestore store, session, offline queue, event merges, preference save scheduler, Firebase client/config, IndexedDB |
 | `vault/` | client | vault crypto, KDF + worker, Argon2 key, trusted-device and verified-vault stores |
 | `ui/` | client | touch navigation, page visibility, operation deadlines, client recovery, updating status, display formatting (`compact-number`, `company-name`, `calendar-time`) |
-| `server/` | **edge only** | market hub, Durable Object, Worker router, sources, search, auth, bounded cache |
-| `server/providers/` | **edge only** | Yahoo, Yahoo Japan funds, Monex, Japannext PTS, global/US search parsing |
+| `server/` | **edge only** | `market-service` (catalog, snapshot, history records, refresh policy), `market-object` (Durable Object), `market-router`, `market-upstream` (Yahoo, Yahoo! ファイナンス funds, Monex, Japannext, TOPIX), `market-search`, `server-auth` |
 
 ## Rules
 
