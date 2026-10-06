@@ -158,12 +158,7 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
     </section>
   );
 }export function Overview({
-  totalValue,
-  dayGain,
-  dayReturn,
   summary,
-  totalGain,
-  totalReturn,
   holdings,
   history,
   historyStatus,
@@ -171,10 +166,7 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
   marketSessions,
   marketError,
   historyError,
-  dataReconciled,
   benchmarks,
-  benchmarkStatus,
-  fxEstimated = false,
   range,
   setRange,
   customRange,
@@ -190,16 +182,10 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
   onSelectSecurity,
   currency,
   summaryCurrency,
-  fxReady,
   amountsVisible,
   setAmountsVisible,
 }: {
-  totalValue: number | null;
-  dayGain: number | null;
-  dayReturn: number | null;
   summary: DashboardSummary;
-  totalGain: number | null;
-  totalReturn: number | null;
   holdings: DashboardHolding[];
   history: DashboardHistoryPoint[];
   historyStatus: MarketStatus;
@@ -207,10 +193,7 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
   marketSessions: MarketSessionStatus[];
   marketError: string | null;
   historyError: string | null;
-  dataReconciled: boolean;
   benchmarks: Benchmark[];
-  benchmarkStatus: MarketStatus;
-  fxEstimated?: boolean;
   range: RangeKey;
   setRange: (range: RangeKey) => void;
   customRange: CustomDateRange | null;
@@ -225,29 +208,26 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
   refreshMarket: (force?: boolean) => Promise<void>;
   onSelectSecurity?: (securityId: string) => void;
   currency: DisplayCurrency;
-  summaryCurrency?: DisplayCurrency;
-  fxReady: boolean;
+  summaryCurrency: "JPY" | "USD";
   amountsVisible: boolean;
   setAmountsVisible: (visible: boolean) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [chartValueMode, setChartValueMode] = useState<"market" | "dividendAdjusted">("market");
-  const dataError = !dataReconciled ? "日米の集計が一致しないため数値を非表示にしました" : historyError || marketError;
-  const activeSummaryCurrency = summaryCurrency ?? (currency === "NATIVE" ? "JPY" : currency);
-  const allocationCash = Number(summary?.cashValue ?? 0);
-  const unpricedCount = Number(summary?.unpricedSecurityCount ?? 0);
-
-  const showCriticalAlert = quoteStatus !== "loading" && (!fxReady || Boolean(dataError) || unpricedCount > 0);
-
-  const effectiveTotalValue = totalValue ?? (summary?.totalValue != null ? Number(summary.totalValue) : null);
-  const effectiveDayGain = dayGain ?? (summary?.dayGain != null ? Number(summary.dayGain) : null);
-  const effectivePrevValue = effectiveTotalValue != null && effectiveDayGain != null ? effectiveTotalValue - effectiveDayGain : null;
-  const effectiveDayReturn = dayReturn ?? (effectivePrevValue && effectivePrevValue !== 0 && effectiveDayGain != null ? effectiveDayGain / effectivePrevValue : null);
-  const effectiveUnrealized = summary?.unrealizedGain != null ? Number(summary.unrealizedGain) : null;
-  const effectiveCostBasis = Number(summary?.costBasis ?? 0);
-  const effectiveRealized = summary?.realizedGain != null ? Number(summary.realizedGain) : null;
-  const effectiveTotalGain = totalGain ?? (summary?.totalGain != null ? Number(summary.totalGain) : null);
-  const effectiveTotalReturn = totalReturn ?? (effectiveCostBasis > 0 && effectiveTotalGain != null ? effectiveTotalGain / effectiveCostBasis : null);
+  const benchmarkStatus = quoteStatus;
+  const activeSummaryCurrency = summaryCurrency;
+  const dataError = historyError || marketError;
+  const unpricedCount = summary.unpricedCount;
+  const showCriticalAlert = quoteStatus !== "loading" && (summary.fxMissing || Boolean(dataError) || unpricedCount > 0);
+  const priced = summary.pricedCount > 0 || !holdings.length;
+  const effectiveTotalValue = priced ? summary.totalValue : null;
+  const effectiveDayGain = priced ? summary.dayGain : null;
+  const effectiveDayReturn = priced ? summary.dayReturn : null;
+  const effectiveUnrealized = priced ? summary.unrealizedGain : null;
+  const effectiveCostBasis = summary.costBasis;
+  const effectiveRealized = summary.realizedGain + summary.dividendIncome;
+  const effectiveTotalGain = priced ? summary.totalGain : null;
+  const effectiveTotalReturn = priced ? summary.totalReturn : null;
 
   return (
     <div className={`overview-page ${isExpanded ? "chart-expanded" : ""}`}>
@@ -312,7 +292,7 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
               </strong>
               <small className="daily-stat-detail" aria-label={amountsVisible ? undefined : "金額非表示"}>
                 {amountsVisible
-                  ? `売却 ${compactMoney(Number(summary?.capitalRealizedGain ?? 0), activeSummaryCurrency, true)} · 配当 ${compactMoney(Number(summary?.distributionIncome ?? 0), activeSummaryCurrency, true)}`
+                  ? `売却 ${compactMoney(summary.realizedGain, activeSummaryCurrency, true)} · 配当 ${compactMoney(summary.dividendIncome, activeSummaryCurrency, true)}`
                   : HIDDEN_AMOUNT}
               </small>
             </div>
@@ -394,7 +374,7 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
               <div className="daily-allocation-divider" />
               <AllocationChart
                 holdings={holdings}
-                cashValue={allocationCash}
+                cashValue={0}
                 currency={activeSummaryCurrency}
                 amountsVisible={amountsVisible}
               />
@@ -449,7 +429,7 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
         {showCriticalAlert && (
           <div className="market-alert overview-critical-alert" role="status">
             <AlertTriangle size={15} />
-            <span>{!fxReady ? "為替レートを確認できないため、換算合計は未確定です" : dataError || `${unpricedCount}銘柄が未評価`}</span>
+            <span>{summary.fxMissing ? "為替レートを確認できないため、一部の換算を合計に含めていません" : dataError || `${unpricedCount}銘柄が未評価`}</span>
             <button
               type="button"
               onClick={() => {
@@ -461,9 +441,6 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
           </div>
         )}
 
-        {fxReady && fxEstimated && marketFilter !== "JP" && (
-          <div className="market-alert info overview-fx-note" role="status">一部の換算に取得済みの為替レートを使用しています（推計）。</div>
-        )}
       </section>
 
       {/* Floating Bottom Controls Dock matching search/watchlist and notifications */}

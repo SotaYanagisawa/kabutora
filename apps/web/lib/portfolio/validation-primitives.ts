@@ -1,5 +1,3 @@
-import { Decimal } from "@kabutora/domain";
-
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -12,12 +10,12 @@ export function isDateValue(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
 }
 
+const DECIMAL_TEXT = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
+
+/** A finite decimal string (also as a float64). `positive` is decided on the digits, so tiny values stay positive. */
 export function finiteDecimal(value: unknown, positive = false): value is string {
-  if (!isText(value, 1, 100) || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu.test(value)) return false;
-  try {
-    const number = new Decimal(value);
-    return number.isFinite() && Number.isFinite(number.toNumber()) && (!positive || number.gt(0));
-  } catch {
-    return false;
-  }
+  if (!isText(value, 1, 100) || !DECIMAL_TEXT.test(value) || !Number.isFinite(Number(value))) return false;
+  if (!positive) return true;
+  const mantissa = value.replace(/e.*$/iu, "");
+  return !mantissa.startsWith("-") && /[1-9]/u.test(mantissa);
 }

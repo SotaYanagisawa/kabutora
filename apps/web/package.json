@@ -14,7 +14,6 @@
   "dependencies": {
     "@kabutora/domain": "workspace:*",
     "@noble/hashes": "^2.3.0",
-    "decimal.js": "^10.6.0",
     "firebase": "^12.17.1",
     "jose": "^6.2.8",
     "lucide-react": "^0.536.0",

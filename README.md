@@ -28,7 +28,7 @@ Spreadsheets get clumsy as your portfolio grows, and most commercial portfolio t
 flowchart TD
     subgraph Client["📱 Your Device (Browser / Mac App)"]
         UI["React 19 + Next.js UI"]
-        Calc["@kabutora/domain\n(FIFO & Average Cost Engine)"]
+        Calc["@kabutora/domain\n(Portfolio engine)"]
         Crypto["Client-Side AES-256-GCM\n(Encryption & Decryption)"]
         Plaintext[("🔑 Unencrypted Data\n(Lives ONLY on your device)")]
         
@@ -86,8 +86,9 @@ sequenceDiagram
 
 ### 🧮 Precise Financial Math
 - **Tax-Aware Accounts**: Track NISA (成長投資枠・つみたて投資枠), 特定口座, and 一般口座 in one clean dashboard.
-- **Corporate Action Handling**: Automatically adjusts holding history and cost basis for stock splits and reverse splits.
-- **Time-Weighted & Money-Weighted Performance**: Accurate 1-Day, 1-Week, 1-Month, 3-Month, YTD, and All-Time return curves.
+- **Stock Splits Done Right**: Every trade is converted once into today's share units using the split list that came with the split-adjusted prices, so a split can never be applied twice. The ledger marks adjusted rows (`分割 ×3`).
+- **Moving-Average Cost (移動平均法)**: Per broker and account type, like Japanese brokerage statements.
+- **Fast Charts**: 1D, 1W, 1M, 3M, YTD and All-Time portfolio curves computed on the device in milliseconds.
 
 ### 📱 Built for Mobile & Desktop
 - **Fast & Responsive**: Feels like a native iOS/Android app with gesture navigation and pull-to-refresh.
@@ -108,7 +109,7 @@ Kabutora is organized as a clean TypeScript monorepo using `pnpm`:
 │       ├── components/        # UI by feature: app/, dashboard/ (coordinator + hooks + views), watchlist/, search/, charts/
 │       └── lib/               # charts/ market/ portfolio/ sync/ vault/ ui/ — and edge-only server/
 ├── packages/
-│   └── domain/                # Pure TypeScript accounting engine (FIFO, cost basis, splits)
+│   └── domain/                # Pure TypeScript portfolio engine (positions, splits, history, dividends)
 ├── firebase/                  # Security rules and database index definitions
 ├── docs/                      # Architecture map, specifications, and security model
 └── scripts/                   # Native app builders (macOS / iOS Preview) & privacy verifiers
@@ -186,7 +187,7 @@ For complete cloud configuration details, including Firebase authentication and 
 
 - 🧭 [Codebase Path Map](docs/path-and-nodes.md) — Fast routing from a change to its owning module and test
 - 📐 [Architecture & Data Flow](docs/architecture.md) — System design and data flow
-- 🧮 [Calculation Rules](docs/calculation-rules.md) — Exact formulas for FIFO, cost basis, and splits
+- 🧮 [Calculation Rules](docs/calculation-rules.md) — Exact formulas for splits, moving-average cost, FX, dividends and history
 - ☁️ [Cloud Deployment Guide](docs/cloud-deployment.md) — Firebase and Cloudflare step-by-step setup
 - 📡 [Market Backend](docs/market-backend.md) — How prices are fetched, cached, kept private and tested
 - 🔒 [Threat Model & Security](docs/threat-model.md) — Security boundaries and encryption specifications

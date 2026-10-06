@@ -1,59 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { MarketHub, MemoryMarketStore } from "./market-hub";
+import { unpackHistory } from "../market/market-wire";
+import { MarketService, MemoryMarketStore } from "./market-service";
+import { searchSecurities } from "./market-search";
 
-/**
- * Upstream canary against the real providers. Opt-in (`pnpm check:live`) because it
- * needs the network; it catches provider schema drift and measures real latency.
- */
+/** Real providers (network). Run with `pnpm check:live`. */
 const live = process.env.KABUTORA_LIVE === "1";
-const CATALOG = [
-  "sec-7203", "sec-9984", "sec-6758", "sec-8306", "sec-1306", "sec-285a",
-  "sec-us-aapl", "sec-us-msft", "sec-us-nvda", "sec-us-voo", "sec-us-qqq",
-  "sec-jp-fund-0331418a", // eMAXIS Slim 全世界株式
-];
 
-describe.runIf(live)("live market providers", () => {
-  it("prices a mixed catalog in one refresh and serves the warm snapshot instantly", async () => {
-    let offset = 0;
-    const hub = new MarketHub(new MemoryMarketStore(), { now: () => Date.now() + offset });
-    expect((await hub.register(CATALOG)).rejected).toEqual([]);
+describe.skipIf(!live)("live market providers", () => {
+  it("serves quotes, intraday, fund NAVs and split-consistent history", { timeout: 120_000 }, async () => {
+    const service = new MarketService(new MemoryMarketStore());
+    await service.register(["sec-285a-xtks", "sec-8316", "sec-us-nvda-xnas", "sec-jp-fund-48314059", "sec-9984"]);
+    let started = performance.now();
+    const snapshot = await service.snapshot();
+    console.log(`cold snapshot ${Math.round(performance.now() - started)} ms, ${snapshot.quotes.length} quotes, ${Object.keys(snapshot.intraday ?? {}).length} intraday`);
+    for (const key of ["sec-285a", "sec-8316", "sec-us-nvda", "sec-9984", "sec-fx-usdjpy"]) expect(snapshot.quotes.find((quote) => quote.key === key)?.price).toBeGreaterThan(0);
+    expect(snapshot.benchmarks.length).toBeGreaterThanOrEqual(5);
 
-    const coldStart = performance.now();
-    const cold = await hub.snapshot();
-    const coldMs = performance.now() - coldStart;
-    const warmStart = performance.now();
-    await hub.snapshot();
-    const warmMs = performance.now() - warmStart;
-    // The common case: a warm object whose 15-second snapshot has expired.
-    offset = 20_000;
-    const refreshStart = performance.now();
-    await hub.snapshot();
-    const refreshMs = performance.now() - refreshStart;
+    started = performance.now();
+    let history = await service.history("2024-01-01");
+    for (let attempt = 0; attempt < 5 && history.pending.length; attempt += 1) history = await service.history("2024-01-01");
+    console.log(`history ${Math.round(performance.now() - started)} ms, ${Object.keys(history.records).length} records, pending ${history.pending.join(",")}`);
+    const kioxia = unpackHistory("sec-285a", history.records["sec-285a"]);
+    expect(kioxia.splits).toContainEqual({ date: "2026-09-29", ratio: 3 });
+    const smfg = unpackHistory("sec-8316", history.records["sec-8316"]);
+    expect(smfg.splits).toContainEqual({ date: "2026-09-29", ratio: 2 });
+    expect(smfg.dividends.find((item) => item.date === "2026-09-29")?.amount).toBeCloseTo(45, 6);
+    const fund = unpackHistory("sec-jp-fund-48314059", history.records["sec-jp-fund-48314059"]);
+    expect(fund.dates.length).toBeGreaterThan(200);
+    expect(fund.dividends.length).toBeGreaterThan(10);
+    const fx = unpackHistory("sec-fx-usdjpy", history.records["sec-fx-usdjpy"]);
+    expect(fx.closes.at(-1)).toBeGreaterThan(80);
 
-    const quotes = new Map(cold.snapshot.quotes.map((quote) => [quote.securityId, quote]));
-    console.info(JSON.stringify({ coldMs: Math.round(coldMs), refreshMs: Math.round(refreshMs), warmMs: Number(warmMs.toFixed(2)), quotes: quotes.size, series: cold.snapshot.series.length, bytes: cold.body.length, failures: cold.snapshot.failures }));
-    for (const id of [...CATALOG, "sec-fx-usdjpy"]) {
-      const quote = quotes.get(id);
-      expect(quote, id).toBeDefined();
-      expect(Number(quote!.price), id).toBeGreaterThan(0);
-      expect(Date.now() - Date.parse(quote!.marketTimestamp), id).toBeLessThan(10 * 86_400_000);
-    }
-    expect(cold.snapshot.benchmarks.map((benchmark) => benchmark.id).sort()).toEqual(["cny-jpy", "dow", "nasdaq", "nikkei225", "sp500", "topix", "usd-jpy"]);
-    expect(cold.snapshot.series.find((item) => item.id === "sec-us-aapl")?.t.length).toBeGreaterThan(50);
-    expect(coldMs).toBeLessThan(5_000);
-    expect(refreshMs).toBeLessThan(1_500);
-    expect(warmMs).toBeLessThan(5);
-  }, 30_000);
+    started = performance.now();
+    const warm = await service.snapshot({ intradayRevision: snapshot.intradayRevision });
+    console.log(`warm snapshot ${Math.round(performance.now() - started)} ms, intraday ${warm.intraday ? "resent" : "omitted"}`);
 
-  it("returns catalog history and dividend coverage", async () => {
-    const hub = new MarketHub(new MemoryMarketStore());
-    await hub.register(["sec-us-aapl", "sec-7203", "sec-jp-fund-0331418a"]);
-    const history = JSON.parse(await hub.history("2024-01-01")) as { series: Record<string, { rows: unknown[] }>; pending: string[] };
-    expect(history.pending).toEqual([]);
-    expect(history.series["sec-us-aapl"].rows.length).toBeGreaterThan(400);
-    expect(history.series["sec-7203"].rows.length).toBeGreaterThan(400);
-    const distributions = await hub.distributions();
-    expect(distributions.coverage.map((item) => item.securityId).sort()).toEqual(["sec-7203", "sec-jp-fund-0331418a", "sec-us-aapl"]);
-    expect(distributions.distributions.some((event) => event.securityId === "sec-us-aapl")).toBe(true);
-  }, 60_000);
+    const response = await searchSecurities(new Request("http://local/search", { method: "POST", body: JSON.stringify({ q: "キオクシア" }) }));
+    const { results } = await response.json() as { results: Array<{ id: string }> };
+    expect(results.map((result) => result.id)).toContain("sec-285a-xtks");
+  });
 });

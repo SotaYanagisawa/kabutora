@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from "react";
-import type { PortfolioNotification } from "@/lib/portfolio/portfolio-notifications";
+import type { PortfolioNotification } from "@kabutora/domain/notifications";
 import { Bell, Check, ChevronRight } from "lucide-react";
 import { dateJa, money, number, signedPercent } from "./helpers";
 

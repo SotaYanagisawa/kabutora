@@ -1292,6 +1292,26 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
   line-height: 1.2;
 }
 
+.ledger-split-note {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.5;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.ledger-split-note.warning {
+  color: var(--down);
+  border-color: color-mix(in srgb, var(--down) 45%, transparent);
+}
+
 .ledger-security-meta {
   display: flex;
   align-items: center;

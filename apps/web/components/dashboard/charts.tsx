@@ -267,7 +267,7 @@ export function StockPriceChart({
         name: holding.security?.name ?? holding.securityId,
         legalName: holding.security?.legalName ?? holding.security?.name ?? holding.securityId,
         symbol: holding.security?.displaySymbol ?? "",
-        value: Math.max(0, Number(holding.marketValue ?? 0)),
+        value: Math.max(0, holding.summaryMarketValue ?? holding.marketValue ?? 0),
       }))
       .filter((item) => item.value > 0)
       .sort((a, b) => b.value - a.value);

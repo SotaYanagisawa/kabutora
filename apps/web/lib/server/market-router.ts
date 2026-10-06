@@ -5,7 +5,6 @@ import { marketStub, type MarketWorkerEnv } from "./market-object";
 const ROUTES: Record<string, "GET" | "POST"> = {
   snapshot: "GET",
   history: "GET",
-  distributions: "GET",
   registry: "POST",
   search: "POST",
   health: "GET",
@@ -39,7 +38,7 @@ async function dispatch(request: Request, env: MarketWorkerEnv, name: string): P
   }
 }
 
-/** Native Worker routing for /api/market/*: auth, then the market object. No Next.js, no D1. */
+/** Native Worker routing for /api/market/*: authentication, then the market object (or search). */
 export async function routeMarketRequest(request: Request, env: MarketWorkerEnv): Promise<Response | null> {
   const { pathname } = new URL(request.url);
   if (!pathname.startsWith("/api/market/")) return null;

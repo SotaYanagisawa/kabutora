@@ -1,62 +1,42 @@
 import { MarketCoordinator as ProductionCoordinator, marketStub, type MarketWorkerEnv } from "../lib/server/market-object";
 import { routeMarketRequest } from "../lib/server/market-router";
+import { createFakeUpstream, weekdays } from "./fake-upstream";
 
 /**
- * Local-only harness for `pnpm test:worker`: the production router and Durable Object
- * in workerd, with upstream providers replaced by a fake that adds real latency.
- * Production worker-entry.ts never imports this module.
+ * Local-only harness for `pnpm test:worker`: the production router and Durable Object in workerd,
+ * with upstream providers replaced by a fake that adds real latency. worker-entry.ts never imports it.
  */
-const upstream = { calls: 0, fail: false, latencyMs: 80 };
-const HOSTS = new Set(["query1.finance.yahoo.com", "query2.finance.yahoo.com", "finance.yahoo.co.jp", "www.japannext.co.jp"]);
+const days = weekdays("2025-01-06", new Date(Date.now() - 86_400_000).toISOString().slice(0, 10));
+const upstream = createFakeUpstream({
+  now: () => Date.now(),
+  latencyMs: 80,
+  securities: {
+    "7203.T": { currency: "JPY", zone: "Asia/Tokyo", closes: days.map((date) => [date, 3_000]), price: 3_050, previousClose: 3_000, name: "TOYOTA MOTOR CORP" },
+    "285A.T": { currency: "JPY", zone: "Asia/Tokyo", closes: days.map((date) => [date, date < "2026-09-29" ? 17_000 : 18_000]), splits: [["2026-09-29", 3, 1]], dividends: [["2026-03-30", 15]], price: 18_735, previousClose: 19_120 },
+    "AAPL": { currency: "USD", zone: "America/New_York", closes: days.map((date) => [date, 250]), price: 255, previousClose: 250 },
+    "JPY=X": { currency: "JPY", zone: "Asia/Tokyo", closes: days.map((date) => [date, 150]), price: 151, previousClose: 150 },
+    "^N225": { currency: "JPY", zone: "Asia/Tokyo", closes: [], price: 70_000, previousClose: 69_000 },
+  },
+  pts: { "7203": 3_060 },
+});
 const realFetch = globalThis.fetch.bind(globalThis);
-
-function spark(symbols: string[], days: number) {
-  const now = Math.floor(Date.now() / 1000);
-  const step = days === 1 ? 300 : 900;
-  const count = days === 1 ? 78 : 130;
-  return {
-    spark: {
-      result: symbols.map((symbol) => {
-        const timestamp = Array.from({ length: count }, (_, index) => now - 60 - (count - 1 - index) * step);
-        return {
-          symbol,
-          response: [{
-            meta: { regularMarketPrice: 100.125, regularMarketTime: now - 60, previousClose: 99, shortName: symbol, currentTradingPeriod: { regular: { start: now - 20_000, end: now + 3_600 } } },
-            timestamp,
-            indicators: { quote: [{ close: timestamp.map((_, index) => 100 + (index % 5) / 8) }] },
-          }],
-        };
-      }),
-    },
-  };
-}
-
-function chart() {
-  const start = Date.UTC(2018, 0, 2) / 1000;
-  const timestamp = Array.from({ length: 100 }, (_, index) => start + index * 30 * 86_400);
-  return { chart: { result: [{ meta: { currency: "USD", firstTradeDate: start }, timestamp, indicators: { quote: [{ close: timestamp.map(() => 100) }], adjclose: [{ adjclose: timestamp.map(() => 99) }] }, events: {} }] } };
-}
-
 globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
-  if (!HOSTS.has(url.hostname)) return realFetch(input, init);
-  upstream.calls += 1;
-  await new Promise((resolve) => setTimeout(resolve, upstream.latencyMs));
-  if (upstream.fail) throw new Error("synthetic_upstream_outage");
-  if (url.pathname === "/v7/finance/spark") return Response.json(spark(url.searchParams.get("symbols")!.split(","), url.searchParams.get("range") === "5d" ? 5 : 1));
-  if (url.pathname.startsWith("/v8/finance/chart/")) return Response.json(chart());
-  if (url.hostname === "finance.yahoo.co.jp") return new Response('"mainDomesticIndexPriceBoard":{"price":"3,000.5","changePriceRate":"+0.10","japanUpdateTime":"15:30"}');
-  return new Response('mdata[ 1 ] = [ "7203", "", "", "", "100", "101", "99", "100.5", "10.0" ];', { headers: { "Last-Modified": new Date(Date.now() - 30_000).toUTCString() } });
+  return upstream.hosts.has(url.hostname) ? upstream.fetch(input, init) : realFetch(input, init);
 };
 
 export class MarketCoordinator extends ProductionCoordinator {
   async fetch(request: Request) {
     const url = new URL(request.url);
     if (url.pathname !== "/__upstream") return super.fetch(request);
-    if (url.searchParams.has("fail")) upstream.fail = url.searchParams.get("fail") === "1";
-    const calls = upstream.calls;
-    if (url.searchParams.has("reset")) upstream.calls = 0;
-    return Response.json({ calls });
+    if (url.searchParams.has("fail")) upstream.state.fail = url.searchParams.get("fail") === "1";
+    const calls = upstream.state.calls;
+    const paths = Object.fromEntries(upstream.state.byPath);
+    if (url.searchParams.has("reset")) {
+      upstream.state.calls = 0;
+      upstream.state.byPath.clear();
+    }
+    return Response.json({ calls, paths });
   }
 }
 

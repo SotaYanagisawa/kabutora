@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatWidgetFetchedTime, quoteTradeSourceLabel } from "./helpers";
-import type { MarketQuote } from "@kabutora/domain";
+import type { DisplayQuote } from "./types";
 
 describe("dashboard helpers", () => {
   describe("formatWidgetFetchedTime", () => {
@@ -80,16 +80,10 @@ describe("dashboard helpers", () => {
   });
 
   describe("quoteTradeSourceLabel", () => {
-    const baseQuote: MarketQuote = {
-      price: "100",
+    const baseQuote: Pick<DisplayQuote, "venueCode" | "session" | "priceType"> = {
       venueCode: "US",
       session: "regular",
       priceType: "last_trade",
-      freshness: "live",
-      provider: "test",
-      marketTimestamp: "2026-09-15T09:44:00.000Z",
-      fetchedAt: "2026-09-15T09:45:00.000Z",
-      validationStatus: "valid",
     };
 
     it("labels pre-market trades correctly", () => {

@@ -5,25 +5,23 @@
  *
  *   use-dashboard-preferences  user settings, persistence and cloud reconciliation
  *   use-view-navigation        active/retained views, scroll memory, security detail page
- *   use-market-state/-loaders  market data state + network loading (quotes, history, distributions)
- *   use-portfolio-view-model   valuation, FX, dividends, holdings and chart series
+ *   use-market-data            market snapshot polling, history, browser cache
+ *   use-portfolio              the engine: valuation, history, dividends, notifications
  *   use-touch-gestures         swipe navigation and pull-to-refresh
  *   use-trade-editor           trade modal, transaction deletion, account removal
  */
-import { calculateAverageCostPortfolio, canonicalDomainSecurityId } from "@kabutora/domain";
+import { marketKey } from "@kabutora/domain/market";
 import { ArrowLeft, Eye, EyeOff, Moon, Plus, RefreshCw, Sun } from "lucide-react";
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { BrowserPreferences, useBrowserPreferences } from "@/components/app/browser-preferences";
 import WatchlistView from "@/components/watchlist/watchlist-view";
-import { marketDateKey } from "@/lib/charts/chart-presentation";
 import { normalizeRequestedSecurity } from "@/lib/market/market-security";
 import { getEmbeddedCatalogSecurities } from "@/lib/market/stock-catalog";
-import { isUsSecurity, type PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
+import type { PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
 import { MOBILE_NAV_ITEMS, NAV_ITEMS } from "./constants";
 import { DeleteTransactionDialog } from "./delete-transaction-dialog";
 import { FastDividendsView } from "./dividends-view";
-import { costBasisGroupForAccount, csvEscape, download } from "./helpers";
-import { distributionSecurityIdList, historyCoverageRequirements, historySecurityIdList, quoteSecurityIdList } from "./market-requirements";
+import { csvEscape, download } from "./helpers";
 import { FastNotificationsView } from "./notifications-view";
 import { FastOverview } from "./overview-view";
 import { RemoveAccountDialog } from "./remove-account-dialog";
@@ -35,9 +33,8 @@ import { TradeModal } from "./trade-modal";
 import type { DashboardProps, DisplayCurrency, SearchSecurity, Seed, UserPreferences } from "./types";
 import { UpdatingBanner } from "./updating-banner";
 import { useDashboardPreferences } from "./use-dashboard-preferences";
-import { useMarketLoaders } from "./use-market-loaders";
-import { useMarketState } from "./use-market-state";
-import { usePortfolioViewModel } from "./use-portfolio-view-model";
+import { useMarketData } from "./use-market-data";
+import { usePortfolio } from "./use-portfolio";
 import { useTouchGestures } from "./use-touch-gestures";
 import { useTradeEditor } from "./use-trade-editor";
 import { useViewNavigation } from "./use-view-navigation";
@@ -60,9 +57,9 @@ function collectSecurities(seedSecurities: SearchSecurity[], customSecurities: S
   const catalog = getEmbeddedCatalogSecurities();
   for (const transaction of transactions) {
     if (!transaction.securityId || map.has(transaction.securityId)) continue;
-    const canonical = canonicalDomainSecurityId(transaction.securityId);
+    const canonical = marketKey(transaction.securityId);
     const symbol = canonical.replace(/^sec-(?:us-)?/i, "").toLowerCase();
-    const match = catalog.find((item) => canonicalDomainSecurityId(item.id) === canonical || item.displaySymbol.toLowerCase() === symbol);
+    const match = catalog.find((item) => marketKey(item.id) === canonical || item.displaySymbol.toLowerCase() === symbol);
     if (match) {
       map.set(transaction.securityId, {
         id: transaction.securityId, displaySymbol: match.displaySymbol, name: match.name, assetType: match.assetType, country: match.country,
@@ -101,12 +98,11 @@ function DashboardContents(props: DashboardProps) {
   const storage = useBrowserPreferences();
   const prefs = useDashboardPreferences({ seed, storage, onPreferencesChange: props.onPreferencesChange, onWatchlistChange });
   const { watchlist, setWatchlist, displayCurrency, set } = prefs;
-  // Filter changes re-run worker calculations; deferring keeps the select controls responsive.
+  // Filter changes re-run the engine; deferring keeps the select controls responsive.
   const calculationBrokerFilter = useDeferredValue(prefs.summaryBrokerFilter);
   const calculationMarketFilter = useDeferredValue(prefs.summaryMarketFilter);
   const nav = useViewNavigation(seed.securities[0]?.id ?? "");
   const { view, navigateToView, detailSecurityId } = nav;
-  const market = useMarketState(props);
   const [transactions, setTransactions] = useState<Seed["transactions"]>(seed.transactions);
   const [accounts, setAccounts] = useState<Seed["accounts"]>(seed.accounts);
   const [customSecurities, setCustomSecurities] = useState<SearchSecurity[]>([]);
@@ -127,53 +123,51 @@ function DashboardContents(props: DashboardProps) {
   const allSecurities = useMemo(() => collectSecurities(seed.securities as SearchSecurity[], customSecurities, watchlist, transactions), [customSecurities, seed.securities, transactions, watchlist]);
   const accountMap = useMemo(() => new Map(accounts.map((account) => [account.id, account])), [accounts]);
   const activeAccounts = useMemo(() => accounts.filter((account) => !account.archivedAt), [accounts]);
-  const calculationTransactions = useMemo(() => transactions.map((transaction) => ({
-    ...transaction,
-    costBasisGroup: costBasisGroupForAccount(accountMap.get(transaction.accountId), transaction.accountId),
-  })), [accountMap, transactions]);
-  /** Changes whenever any transaction's accounting-relevant fields change. */
-  const transactionRevision = useMemo(() => transactions.map((transaction) => [
-    transaction.id, transaction.version, transaction.updatedAt, transaction.accountId, transaction.securityId, transaction.tradeDate,
-    transaction.type, transaction.quantity, transaction.pricePerShare, transaction.grossAmount,
-  ].join(":")).sort().join("|"), [transactions]);
-  const todayKey = marketDateKey(new Date(market.sessionClock ?? Date.now()).toISOString(), "XTKS");
-  const applicableCorporateActions = useMemo(() => market.corporateActions.filter((action) => action.effectiveDate.slice(0, 10) <= todayKey), [market.corporateActions, todayKey]);
-  const positionSeed = useMemo(() => calculateAverageCostPortfolio(calculationTransactions, allSecurities, applicableCorporateActions), [allSecurities, applicableCorporateActions, calculationTransactions]);
 
-  // ---- What the market loaders must fetch ---------------------------------------------
-  const detailSecurityScope = view === "security" ? detailSecurityId : "";
-  const hasForeignExposure = useMemo(() => (
-    positionSeed.holdings.some((holding) => {
-      const security = allSecurities.find((item) => item.id === holding.securityId);
-      return security?.currency === "USD" || security?.country === "US" || isUsSecurity(security, holding.securityId);
-    })
-    || watchlist.some((item) => item.currency === "USD" || item.country === "US" || isUsSecurity(item, item.id))
-    || transactions.some((transaction) => transaction.tradeCurrency !== "JPY")
-  ), [allSecurities, positionSeed.holdings, transactions, watchlist]);
-  const needsFxHistory = displayCurrency === "USD" ? transactions.some((transaction) => transaction.tradeCurrency !== "USD") : hasForeignExposure;
-  const quoteSecurityIds = useMemo(() => quoteSecurityIdList(positionSeed.holdings.map((holding) => holding.securityId), watchlist, detailSecurityScope), [detailSecurityScope, positionSeed.holdings, watchlist]);
-  const historySecurityIds = useMemo(() => historySecurityIdList(transactions, watchlist, needsFxHistory, detailSecurityScope), [detailSecurityScope, needsFxHistory, transactions, watchlist]);
-  const distributionSecurityIds = useMemo(() => distributionSecurityIdList(transactions), [transactions]);
-  const historyCoverageRequired = useMemo(() => historyCoverageRequirements(transactions, watchlist, detailSecurityScope, needsFxHistory, todayKey), [detailSecurityScope, needsFxHistory, transactions, watchlist]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const { refreshMarket, isManualRefreshing, effectiveUpdateMinutes } = useMarketLoaders({
-    market, quoteSecurityIds, historySecurityIds, distributionSecurityIds, historyCoverageRequired, todayKey, transactionRevision, allSecurities,
-    view, autoRefresh: prefs.autoRefresh, updateFrequency: prefs.updateFrequency, activeViewRef: nav.activeViewRef, showToast,
-    persistenceMode, allowPersistentMarketCache,
+  // ---- Market data ----------------------------------------------------------------------
+  // Only the earliest needed year leaves the device; the response covers the whole catalog.
+  const historyFrom = useMemo(() => {
+    const dates = transactions.map((transaction) => transaction.tradeDate.slice(0, 10)).filter(Boolean).sort();
+    const year = Math.min(Number((dates[0] ?? new Date().toISOString()).slice(0, 4)), watchlist.length ? new Date().getUTCFullYear() - 1 : 9999);
+    return `${year}-01-01`;
+  }, [transactions, watchlist.length]);
+  const registerIds = useMemo(() => persistenceMode === "local"
+    ? [...new Set([...transactions.map((transaction) => transaction.securityId), ...watchlist.map((item) => item.id)].filter((id): id is string => Boolean(id)).map(marketKey))]
+    : undefined, [persistenceMode, transactions, watchlist]);
+  const market = useMarketData({
+    historyFrom,
+    autoRefresh: prefs.autoRefresh,
+    updateSeconds: prefs.updateFrequency,
+    persist: allowPersistentMarketCache,
+    registerIds,
   });
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => { setClock(Date.now()); }, [market.updatedAt]);
+  const now = clock + market.clockOffset;
+
+  const vm = usePortfolio({
+    seed, transactions, accountMap, allSecurities, watchlist, market, now,
+    displayCurrency, brokerFilter: calculationBrokerFilter, marketFilter: calculationMarketFilter,
+    dividendDisplayCurrency: prefs.dividendDisplayCurrency, dividendMarketFilter: prefs.dividendMarketFilter,
+    range: prefs.range, customRange: prefs.customRange,
+    priceAlertThreshold: prefs.priceAlertThreshold, notificationHistory: prefs.notificationHistory, setNotificationHistory: prefs.setNotificationHistory,
+    readNotificationIds: prefs.readNotificationIds, view, detailSecurityId,
+  });
+  const { rawSecurityMap } = vm;
+
+  const { refresh: refreshMarketData, isRefreshing: isManualRefreshing } = market;
+  const refreshMarket = useCallback(async (force = true) => {
+    const result = await refreshMarketData(force);
+    showToast(result === "updated" ? "市場データを更新しました"
+      : result === "partial" ? "一部の市場データを取得できませんでした。保存済み価格を表示しています"
+      : "更新に失敗しました");
+  }, [refreshMarketData, showToast]);
 
   const gestures = useTouchGestures({ view, navigateToView, closeSecurity: nav.closeSecurity, refreshMarket, isManualRefreshing });
-
-  const vm = usePortfolioViewModel({
-    seed, storage, transactions, calculationTransactions, allSecurities, customSecurities, watchlist, accountMap, applicableCorporateActions, todayKey,
-    sessionClock: market.sessionClock, quotes: market.quotes, benchmarks: market.benchmarks, historyBars: market.historyBars, intradayBars: market.intradayBars,
-    distributions: market.distributions, serverMarketSessions: market.serverMarketSessions,
-    displayCurrency, dividendDisplayCurrency: prefs.dividendDisplayCurrency, dividendMarketFilter: prefs.dividendMarketFilter,
-    brokerFilter: calculationBrokerFilter, marketFilter: calculationMarketFilter, range: prefs.range, customRange: prefs.customRange,
-    priceAlertThreshold: prefs.priceAlertThreshold, notificationHistory: prefs.notificationHistory, setNotificationHistory: prefs.setNotificationHistory,
-    readNotificationIds: prefs.readNotificationIds, view, detailSecurityId, workspaceRef: gestures.workspaceRef,
-  });
-  const { rawSecurityMap, historyCalculation } = vm;
 
   // ---- Securities, watchlist and navigation actions ----------------------------------------
   /** Adds a searched security to the user's custom securities if it is not already known. */
@@ -218,13 +212,12 @@ function DashboardContents(props: DashboardProps) {
 
   const trade = useTradeEditor({
     portfolioId: seed.portfolio.id, transactions, setTransactions, accounts, setAccounts, accountMap, activeAccounts, securityMap: rawSecurityMap,
-    rememberSecurity, initialSecurityId: seed.securities[0]?.id ?? "", historyBars: market.historyBars, requestHistoryReload: () => market.setHistoryRequested(false),
+    rememberSecurity, initialSecurityId: seed.securities[0]?.id ?? "",
     view, detailSecurityId, navigateToView, showToast, onTransactionsChange, onAccountsChange,
   });
 
   // ---- Notifications, exports, diagnostics ---------------------------------------------------
   const { setReadNotificationIds } = prefs;
-  const { setApiUsage } = market;
   const markNotificationsRead = useCallback((ids: string[]) => {
     setReadNotificationIds((current) => {
       const known = new Set(current);
@@ -233,13 +226,10 @@ function DashboardContents(props: DashboardProps) {
     });
   }, [setReadNotificationIds]);
   const markNotificationRead = useCallback((id: string) => markNotificationsRead([id]), [markNotificationsRead]);
-  const { portfolioNotifications } = vm;
+  const { notifications: portfolioNotifications } = vm;
   const markAllNotificationsRead = useCallback((targetIds?: string[]) => {
     markNotificationsRead(Array.isArray(targetIds) && targetIds.length ? targetIds : portfolioNotifications.map((notice) => notice.id));
   }, [markNotificationsRead, portfolioNotifications]);
-  const handleSearchNetworkRequest = useCallback(() => {
-    setApiUsage((current) => ({ ...current, searchRequests: current.searchRequests + 1, lastSearchRequest: new Date().toISOString() }));
-  }, [setApiUsage]);
 
   const currentPreferences = useMemo<UserPreferences>(() => ({ ...prefs.preferences, lastUsdJpy: vm.currentUsdJpy ?? undefined }), [prefs.preferences, vm.currentUsdJpy]);
   const exportCsv = useCallback(() => {
@@ -263,9 +253,9 @@ function DashboardContents(props: DashboardProps) {
 
   // ---- Layout ---------------------------------------------------------------------------
   const { dark, summaryAmountsVisible, autoRefresh } = prefs;
-  const { quoteStatus, quoteHealth, historyStatus, benchmarkStatus } = market;
-  const { activeSummary, unreadNotificationCount } = vm;
-  const diagnostics = historyCalculation.diagnostics();
+  const { quoteStatus, historyStatus } = market;
+  const { summary, unreadNotificationCount } = vm;
+  const detailNotifications = useMemo(() => portfolioNotifications.filter((notice) => notice.securityId === detailSecurityId), [detailSecurityId, portfolioNotifications]);
   const notificationBadge = unreadNotificationCount > 0 && <b className="notification-badge">{Math.min(99, unreadNotificationCount)}</b>;
   return (
     <div ref={gestures.appShellRef} className={`app-shell ${dark ? "theme-dark" : "theme-light"}`} {...gestures.touchHandlers}>
@@ -280,7 +270,7 @@ function DashboardContents(props: DashboardProps) {
           ))}
         </nav>
         <div className="header-actions">
-          <span className={`market-health ${quoteStatus}`} title={autoRefresh ? `自動価格更新 ${effectiveUpdateMinutes}分間隔` : "自動価格更新オフ"}><i />{quoteStatus === "loading" ? "取得中" : `${quoteHealth.returned || activeSummary.pricedSecurityCount}/${quoteHealth.requested || activeSummary.pricedSecurityCount + activeSummary.unpricedSecurityCount}`}</span>
+          <span className={`market-health ${quoteStatus}`} title={autoRefresh ? `自動価格更新 ${prefs.updateFrequency}秒間隔` : "自動価格更新オフ"}><i />{quoteStatus === "loading" ? "取得中" : `${summary.pricedCount}/${summary.pricedCount + summary.unpricedCount}`}</span>
           <div className="header-filters" role="group" aria-label="ポートフォリオ表示フィルター">
             <label className="broker-filter" title="証券会社で保有銘柄と取引履歴を絞り込み"><span>証券会社</span><select aria-label="証券会社で絞り込み" value={prefs.summaryBrokerFilter} onChange={(event) => set.summaryBrokerFilter(event.target.value)}><option value="ALL">全口座</option>{vm.brokerOptions.map((broker) => <option key={broker} value={broker}>{broker.replace("証券", "")}</option>)}</select></label>
             <label className="market-filter" title="資産区分と個別株の国でポートフォリオを絞り込み"><span>資産区分</span><select aria-label="資産区分と国で絞り込み" value={prefs.summaryMarketFilter} onChange={(event) => set.summaryMarketFilter(event.target.value as PortfolioFilter)}><option value="ALL">全資産</option><option value="JP">日本株</option><option value="US">米国株</option><option value="FUNDS_INDEXES">投信・指数</option></select></label>
@@ -288,7 +278,7 @@ function DashboardContents(props: DashboardProps) {
           </div>
           <div className="header-tools">
             <button className="icon-button" onClick={() => set.summaryAmountsVisible((visible) => !visible)} aria-label={summaryAmountsVisible ? "金額を非表示" : "金額を表示"} title={summaryAmountsVisible ? "金額を非表示" : "金額を表示"}>{summaryAmountsVisible ? <Eye size={17} /> : <EyeOff size={17} />}</button>
-            <button className="icon-button" onClick={() => refreshMarket()} aria-label="市場データを更新"><RefreshCw size={17} /></button>
+            <button className="icon-button" onClick={() => void refreshMarket()} aria-label="市場データを更新"><RefreshCw size={17} /></button>
             <button className="icon-button" onClick={() => set.dark((value) => !value)} aria-label="テーマを切り替え">{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
             <button className="trade-button" aria-label="取引を記録" onClick={trade.openNewTrade}><Plus size={16} /><span>取引</span></button>
           </div>
@@ -298,23 +288,16 @@ function DashboardContents(props: DashboardProps) {
       <main
         ref={gestures.workspaceRef}
         className="workspace"
-        data-calculation-pending={!historyCalculation.activeResult}
-        data-history-pending={diagnostics.pending}
-        data-history-max-pending={diagnostics.maxPending}
-        data-history-bar-copies={diagnostics.barCopies}
-        data-market-views-preloaded={historyCalculation.preloadedRef.current}
+        data-history-status={historyStatus}
         data-navigation-views-preloaded={NAV_ITEMS.every((item) => nav.mountedViews.has(item.id))}
       >
-        {historyCalculation.failed && <div className="cloud-error" role="status">履歴の計算を完了できませんでした。<button className="text-button" onClick={historyCalculation.retry}>計算を再試行</button></div>}
         {nav.mountedViews.has("activity") && <RetainedView active={view === "activity"}>
-          <FastActivityView transactions={calculationTransactions} securityMap={rawSecurityMap} accountMap={accountMap} corporateActions={applicableCorporateActions} brokerOptions={vm.brokerOptions} onEdit={trade.requestTransactionEdit} onDelete={trade.requestTransactionDelete} onOpenTrade={trade.openNewTrade} />
+          <FastActivityView transactions={transactions} securityMap={rawSecurityMap} accountMap={accountMap} tradeRows={vm.tradeRows} brokerOptions={vm.brokerOptions} onEdit={trade.requestTransactionEdit} onDelete={trade.requestTransactionDelete} onOpenTrade={trade.openNewTrade} />
         </RetainedView>}
         {nav.mountedViews.has("dividends") && <RetainedView active={view === "dividends"}>
           <FastDividendsView
-            receipts={vm.allConvertedDividendReceipts}
+            receipts={vm.receipts}
             fxUnavailable={vm.dividendFxUnavailable}
-            distributions={vm.allRecognizedDistributions}
-            nativeDistributions={vm.allRecognizedDistributions}
             securityMap={rawSecurityMap}
             accountMap={accountMap}
             currency={vm.effectiveDividendCurrency}
@@ -328,22 +311,21 @@ function DashboardContents(props: DashboardProps) {
             onTaxModeChange={set.dividendTaxMode}
             activeTab={prefs.dividendActiveTab}
             onActiveTabChange={set.dividendActiveTab}
-            distributionStatus={market.distributionStatus}
-            distributionError={market.distributionError}
-            todayKey={todayKey}
+            distributionStatus={historyStatus}
+            distributionError={market.historyError}
+            todayKey={new Date(now + 9 * 3_600_000).toISOString().slice(0, 10)}
             amountsVisible={summaryAmountsVisible}
             onSelectSecurity={openDividendSecurity}
           />
         </RetainedView>}
         {nav.mountedViews.has("overview") && <RetainedView active={view === "overview"}>
           <FastOverview
-            totalValue={vm.totalValue} dayGain={vm.dayGain} dayReturn={vm.dayReturn}
-            summary={activeSummary} totalGain={vm.totalGain} totalReturn={vm.totalReturn} holdings={vm.holdings} history={vm.verifiedPortfolioHistory} historyStatus={historyStatus}
-            quoteStatus={quoteStatus} marketSessions={vm.marketSessions} marketError={market.marketError} historyError={market.historyError} dataReconciled={vm.reconciliation.valid} benchmarks={market.benchmarks} benchmarkStatus={benchmarkStatus}
-            fxEstimated={vm.fxEstimated} range={prefs.range} setRange={set.range} refreshMarket={refreshMarket}
+            summary={summary} holdings={vm.holdings} history={vm.history} historyStatus={historyStatus}
+            quoteStatus={quoteStatus} marketSessions={vm.marketSessions} marketError={market.marketError} historyError={market.historyError} benchmarks={market.benchmarks}
+            range={prefs.range} setRange={set.range} refreshMarket={refreshMarket}
             marketFilter={prefs.summaryMarketFilter} setMarketFilter={set.summaryMarketFilter} brokerFilter={prefs.summaryBrokerFilter} setBrokerFilter={set.summaryBrokerFilter} brokerOptions={vm.brokerOptions} setDisplayCurrency={set.displayCurrency} amountsVisible={summaryAmountsVisible} setAmountsVisible={set.summaryAmountsVisible}
             customRange={prefs.customRange} setCustomRange={set.customRange} dateBounds={vm.portfolioDateBounds}
-            onSelectSecurity={openOverviewSecurity} currency={displayCurrency} summaryCurrency={vm.summaryCurrency} fxReady={vm.fxConversionReady}
+            onSelectSecurity={openOverviewSecurity} currency={displayCurrency} summaryCurrency={vm.summaryCurrency}
           />
         </RetainedView>}
         {nav.mountedViews.has("watchlist") && <RetainedView active={view === "watchlist"}>
@@ -351,21 +333,21 @@ function DashboardContents(props: DashboardProps) {
             watchlist={watchlist}
             onAddSecurity={handleAddWatchlist}
             onRemoveSecurity={handleRemoveWatchlist}
-            quotes={market.quotes}
+            securityMap={rawSecurityMap}
             onSelectSecurity={openWatchlistSecurity}
             allSecurities={allSecurities}
           />
         </RetainedView>}
         {nav.mountedViews.has("notifications") && <RetainedView active={view === "notifications"}>
-          <FastNotificationsView notifications={portfolioNotifications} securityMap={rawSecurityMap} detailSecurityIds={vm.allTransactionSecurityIds} readNotificationIds={prefs.readNotificationIds} onRead={markNotificationRead} onReadAll={markAllNotificationsRead} onOpenSecurity={openNotificationSecurity}/>
+          <FastNotificationsView notifications={portfolioNotifications} securityMap={rawSecurityMap} detailSecurityIds={vm.tradedSecurityIds} readNotificationIds={prefs.readNotificationIds} onRead={markNotificationRead} onReadAll={markAllNotificationsRead} onOpenSecurity={openNotificationSecurity}/>
         </RetainedView>}
         {nav.mountedViews.has("settings") && <RetainedView active={view === "settings"}>
-          <FastSettingsView seed={settingsSeed} exportCsv={exportCsv} exportJson={exportJson} onEncryptedBackup={onEncryptedBackup} onRestoreBackup={onRestoreBackup} allowPlaintextExport={allowPlaintextExport} onLogout={onLogout} dark={dark} setDark={set.dark} accentTheme={prefs.accentTheme} setAccentTheme={set.accentTheme} quoteStatus={quoteStatus} benchmarkStatus={benchmarkStatus} historyStatus={historyStatus} historyQuality={market.historyQuality} historyCacheMeta={market.historyCacheMeta} quoteHealth={quoteHealth} historyHealth={market.historyHealth} dataReconciled={vm.reconciliation.valid} corporateActionCount={applicableCorporateActions.length} latestQuoteAt={vm.latestQuoteAt} apiUsage={market.apiUsage} benchmarkCount={market.benchmarks.length} quoteCount={Object.keys(market.quotes).length} intradayCount={market.intradayBars.length} historyCount={market.historyBars.length} persistenceMode={persistenceMode} allowPersistentMarketCache={allowPersistentMarketCache} serverOrigin={window.location.origin} autoRefresh={autoRefresh} setAutoRefresh={set.autoRefresh} updateFrequency={prefs.updateFrequency} setUpdateFrequency={set.updateFrequency} hideScrollbar={prefs.hideScrollbar} setHideScrollbar={set.hideScrollbar} displayCurrency={displayCurrency} setDisplayCurrency={set.displayCurrency} marketFilter={prefs.summaryMarketFilter} dividendMarketFilter={prefs.dividendMarketFilter} dividendDisplayCurrency={prefs.dividendDisplayCurrency} dividendPeriod={prefs.dividendPeriod} dividendTaxMode={prefs.dividendTaxMode} currentUsdJpy={vm.currentUsdJpy} notificationCount={portfolioNotifications.length} priceAlertThreshold={prefs.priceAlertThreshold} setPriceAlertThreshold={set.priceAlertThreshold} />
+          <FastSettingsView seed={settingsSeed} exportCsv={exportCsv} exportJson={exportJson} onEncryptedBackup={onEncryptedBackup} onRestoreBackup={onRestoreBackup} allowPlaintextExport={allowPlaintextExport} onLogout={onLogout} dark={dark} setDark={set.dark} accentTheme={prefs.accentTheme} setAccentTheme={set.accentTheme} diagnostics={vm.diagnostics} persistenceMode={persistenceMode} allowPersistentMarketCache={allowPersistentMarketCache} serverOrigin={window.location.origin} autoRefresh={autoRefresh} setAutoRefresh={set.autoRefresh} updateFrequency={prefs.updateFrequency} setUpdateFrequency={set.updateFrequency} hideScrollbar={prefs.hideScrollbar} setHideScrollbar={set.hideScrollbar} displayCurrency={displayCurrency} setDisplayCurrency={set.displayCurrency} marketFilter={prefs.summaryMarketFilter} dividendMarketFilter={prefs.dividendMarketFilter} dividendDisplayCurrency={prefs.dividendDisplayCurrency} dividendPeriod={prefs.dividendPeriod} dividendTaxMode={prefs.dividendTaxMode} notificationCount={portfolioNotifications.length} priceAlertThreshold={prefs.priceAlertThreshold} setPriceAlertThreshold={set.priceAlertThreshold} />
         </RetainedView>}
         {view === "security" && (
           <div className="view-cache active" style={{ display: "block" }}>
-            {vm.selectedHolding ? (
-              <SecurityDetailView holding={vm.selectedHolding} transactions={vm.detailTransactions} accountMap={accountMap} historyBars={displayCurrency === "NATIVE" ? market.historyBars : vm.convertedHistoryBars} corporateActions={applicableCorporateActions} historyStatus={historyStatus} onBack={nav.closeSecurity} returnView={nav.detailReturnView} currency={displayCurrency} notifications={portfolioNotifications.filter((notice) => notice.securityId === detailSecurityId)} readNotificationIds={prefs.readNotificationIds} onReadNotification={markNotificationRead} onEditTransaction={trade.requestTransactionEdit} onDeleteTransaction={trade.requestTransactionDelete} amountsVisible={summaryAmountsVisible}/>
+            {vm.detail ? (
+              <SecurityDetailView detail={vm.detail} transactions={vm.detailTransactions} tradeRows={vm.tradeRows} accountMap={accountMap} historyStatus={historyStatus} onBack={nav.closeSecurity} returnView={nav.detailReturnView} currency={displayCurrency} notifications={detailNotifications} readNotificationIds={prefs.readNotificationIds} onReadNotification={markNotificationRead} onEditTransaction={trade.requestTransactionEdit} onDeleteTransaction={trade.requestTransactionDelete} amountsVisible={summaryAmountsVisible}/>
             ) : (
               <div className="security-detail-page">
                 <section className="security-detail-header">
@@ -398,7 +380,7 @@ function DashboardContents(props: DashboardProps) {
         })}
       </nav>
 
-      <TradeModal {...trade.tradeModalProps} nativeMarketSecurities={vm.nativeMarketSecurities} handleSearchNetworkRequest={handleSearchNetworkRequest} accountMap={accountMap} persistenceMode={persistenceMode} />
+      <TradeModal {...trade.tradeModalProps} nativeMarketSecurities={vm.nativeMarketSecurities} accountMap={accountMap} persistenceMode={persistenceMode} />
       <DeleteTransactionDialog {...trade.deleteDialogProps} rawSecurityMap={rawSecurityMap} accountMap={accountMap} />
       <RemoveAccountDialog {...trade.removeAccountDialogProps} accountMap={accountMap} transactions={transactions} />
       {toast && <div className="toast" role="status">{toast}</div>}
@@ -406,10 +388,10 @@ function DashboardContents(props: DashboardProps) {
         isManualRefreshing={isManualRefreshing}
         quoteStatus={quoteStatus}
         historyStatus={historyStatus}
-        distributionStatus={market.distributionStatus}
-        benchmarkStatus={benchmarkStatus}
-        historyBarsCount={market.historyBars.length}
-        quotesCount={Object.keys(market.quotes).length}
+        distributionStatus={historyStatus}
+        benchmarkStatus={quoteStatus}
+        historyBarsCount={market.data.history.size}
+        quotesCount={market.data.quotes.size}
       />
     </div>
   );

@@ -60,29 +60,17 @@ export function HoldingsTable({
   const sortedHoldings = useMemo(() => {
     const list = [...holdings];
     return list.sort((a, b) => {
-      const aVal = a.marketValue == null ? -Infinity : Number(a.marketValue);
-      const bVal = b.marketValue == null ? -Infinity : Number(b.marketValue);
+      const aVal = a.summaryMarketValue ?? a.marketValue ?? -Infinity;
+      const bVal = b.summaryMarketValue ?? b.marketValue ?? -Infinity;
 
-      const aQuote = a.security?.quote as RemoteQuote | undefined;
-      const bQuote = b.security?.quote as RemoteQuote | undefined;
-
-      const aPrice = a.currentPrice == null ? null : Number(a.currentPrice);
-      const bPrice = b.currentPrice == null ? null : Number(b.currentPrice);
-
-      const aPrev = aQuote?.previousRegularClose == null ? null : Number(aQuote.previousRegularClose);
-      const bPrev = bQuote?.previousRegularClose == null ? null : Number(bQuote.previousRegularClose);
-
-      const aDayPct = aPrice != null && aPrev ? aPrice / aPrev - 1 : a.dayGain == null ? -Infinity : Number(a.dayGain);
-      const bDayPct = bPrice != null && bPrev ? bPrice / bPrev - 1 : b.dayGain == null ? -Infinity : Number(b.dayGain);
-
-      const aDayGain = a.dayGain == null ? -Infinity : Number(a.dayGain);
-      const bDayGain = b.dayGain == null ? -Infinity : Number(b.dayGain);
-
-      const aCost = Number(a.totalCost || 0);
-      const bCost = Number(b.totalCost || 0);
-
-      const aGainPct = a.unrealizedGain != null && aCost ? Number(a.unrealizedGain) / aCost : -Infinity;
-      const bGainPct = b.unrealizedGain != null && bCost ? Number(b.unrealizedGain) / bCost : -Infinity;
+      const aPrice = a.price;
+      const bPrice = b.price;
+      const aDayPct = a.dayChangeRatio ?? -Infinity;
+      const bDayPct = b.dayChangeRatio ?? -Infinity;
+      const aDayGain = a.dayGain ?? -Infinity;
+      const bDayGain = b.dayGain ?? -Infinity;
+      const aGainPct = a.unrealizedGain != null && a.costBasis ? a.unrealizedGain / a.costBasis : -Infinity;
+      const bGainPct = b.unrealizedGain != null && b.costBasis ? b.unrealizedGain / b.costBasis : -Infinity;
 
       switch (sortBy) {
         case "VALUE_DESC":
@@ -180,18 +168,12 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
   const sec = holding.security;
   const isUs = isUsSecurity(sec, holding.securityId);
   const isFund = isFundSecurity(sec, holding.securityId);
-  const rowCurrency = (
-    currency === "NATIVE"
-      ? sec?.currency ?? sec?.nativeCurrency ?? (isUs ? "USD" : "JPY")
-      : currency
-  ) as DisplayCurrency;
+  const rowCurrency = (currency === "NATIVE" ? holding.currency : currency) as DisplayCurrency;
   const quote = (sec?.quote ?? holding.quote) as RemoteQuote | undefined;
-  const price = holding.currentPrice == null ? null : Number(holding.currentPrice);
-  const previous = quote?.previousRegularClose == null ? null : Number(quote.previousRegularClose);
-  const day = holding.dayGain == null ? null : Number(holding.dayGain);
-  const dayPercent = price != null && previous ? price / previous - 1 : null;
-  const gain = holding.unrealizedGain == null ? null : Number(holding.unrealizedGain);
-  const gainPercent = gain != null && Number(holding.totalCost) ? gain / Number(holding.totalCost) : null;
+  const day = holding.dayGain;
+  const dayPercent = holding.dayChangeRatio;
+  const gain = holding.unrealizedGain;
+  const gainPercent = gain != null && holding.costBasis ? gain / holding.costBasis : null;
   const stockMic = quote?.exchangeMic || sec?.exchangeMic || (isUs ? "XNAS" : "XTKS");
   const stockTz = sec?.timezone || (isUs ? "America/New_York" : "Asia/Tokyo");
   const stockCurrency = sec?.nativeCurrency ?? quote?.currency ?? sec?.currency ?? rowCurrency;
@@ -268,8 +250,8 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
         {/* Row 3: Current Stock Price (left, smaller) + Daily Change % (right, HERO metric, bold) */}
         <div className="widget-card-row widget-row-price">
           <div className="price-col widget-price">
-            <strong title={maybeMoney(holding.currentPrice, rowCurrency)}>
-              {compactPrice(holding.currentPrice, rowCurrency)}
+            <strong title={maybeMoney(holding.price, rowCurrency)}>
+              {compactPrice(holding.price, rowCurrency)}
             </strong>
           </div>
           <div className={`day-col widget-day-val ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
@@ -291,7 +273,7 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
               aria-label={amountsVisible ? undefined : "金額非表示"}
               title={amountsVisible ? (gain == null ? undefined : maybeSignedMoney(gain, rowCurrency)) : undefined}
             >
-              {amountsVisible ? (gain == null ? "" : compactMoney(Number(gain), rowCurrency, true)) : HIDDEN_AMOUNT}
+              {amountsVisible ? (gain == null ? "" : compactMoney(gain, rowCurrency, true)) : HIDDEN_AMOUNT}
             </small>
           </div>
         </div>

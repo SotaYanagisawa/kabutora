@@ -1,13 +1,12 @@
 import { memo, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { portfolioFilterLabel, type PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
-import { PRICE_ALERT_THRESHOLDS } from "@/lib/portfolio/portfolio-notifications";
-import type { HistoryQuality } from "@/lib/market/market-history";
+import { PRICE_ALERT_THRESHOLDS } from "@kabutora/domain/notifications";
 import { Download, LogOut, ShieldCheck } from "lucide-react";
 import { ACCENT_THEMES, APP_RELEASE_DATE, APP_VERSION, UPDATE_FREQUENCIES } from "./constants";
 import { CLIENT_BUILD_ID } from "@/lib/ui/client-recovery";
-import { benchmarkNumber, shortDateTimeJa, timeJa } from "./helpers";
-import type { AccentTheme, DataSecurityAction, DisplayCurrency, FetchHealth, HistoryCacheMeta, MarketStatus, Seed, UpdateFrequency } from "./types";
+import { benchmarkNumber, shortDateTimeJa } from "./helpers";
+import type { AccentTheme, DataSecurityAction, DisplayCurrency, MarketDiagnostics, Seed, UpdateFrequency } from "./types";
 
 export function SettingsView({
   seed,
@@ -21,21 +20,7 @@ export function SettingsView({
   setDark,
   accentTheme,
   setAccentTheme,
-  quoteStatus,
-  benchmarkStatus,
-  historyStatus,
-  historyQuality,
-  historyCacheMeta,
-  quoteHealth,
-  historyHealth,
-  dataReconciled,
-  corporateActionCount,
-  latestQuoteAt,
-  apiUsage,
-  benchmarkCount,
-  quoteCount,
-  intradayCount,
-  historyCount,
+  diagnostics,
   persistenceMode,
   allowPersistentMarketCache,
   serverOrigin,
@@ -52,7 +37,6 @@ export function SettingsView({
   dividendDisplayCurrency,
   dividendPeriod,
   dividendTaxMode,
-  currentUsdJpy,
   notificationCount,
   priceAlertThreshold,
   setPriceAlertThreshold,
@@ -68,32 +52,7 @@ export function SettingsView({
   setDark: (dark: boolean) => void;
   accentTheme: AccentTheme;
   setAccentTheme: (theme: AccentTheme) => void;
-  quoteStatus: MarketStatus;
-  benchmarkStatus: MarketStatus;
-  historyStatus: MarketStatus;
-  historyQuality?: HistoryQuality | null;
-  historyCacheMeta?: HistoryCacheMeta | null;
-  quoteHealth: FetchHealth;
-  historyHealth: FetchHealth;
-  dataReconciled: boolean;
-  corporateActionCount: number;
-  latestQuoteAt: string | null;
-  apiUsage: {
-    quoteRequests: number;
-    benchmarkRequests: number;
-    historyRequests: number;
-    searchRequests: number;
-    historyCacheHits?: number;
-    integrityChecks?: number;
-    lastQuoteRequest?: string | null;
-    lastBenchmarkRequest?: string | null;
-    lastHistoryRequest?: string | null;
-    lastSearchRequest?: string | null;
-  };
-  benchmarkCount: number;
-  quoteCount: number;
-  intradayCount: number;
-  historyCount: number;
+  diagnostics: MarketDiagnostics;
   persistenceMode?: "local" | "cloud";
   allowPersistentMarketCache?: boolean;
   serverOrigin: string;
@@ -110,19 +69,14 @@ export function SettingsView({
   dividendDisplayCurrency?: DisplayCurrency;
   dividendPeriod?: string;
   dividendTaxMode?: "gross" | "net";
-  currentUsdJpy?: number | null;
   notificationCount: number;
   priceAlertThreshold: number;
   setPriceAlertThreshold: (threshold: number) => void;
 }) {
   const [pendingAction, setPendingAction] = useState<DataSecurityAction | null>(null);
-  const latestRequest = [apiUsage.lastQuoteRequest, apiUsage.lastBenchmarkRequest, apiUsage.lastHistoryRequest, apiUsage.lastSearchRequest]
-    .filter(Boolean)
-    .sort()
-    .at(-1) as string | undefined;
   const marketScope = portfolioFilterLabel(marketFilter);
-  const historyIntegrity = historyQuality?.status === "valid" ? "正常" : historyQuality ? "要確認" : "未検査";
-  const systemHealthy = dataReconciled && (historyQuality?.status as string) !== "invalid" && quoteHealth.failedIds.length === 0;
+  const { currentUsdJpy } = diagnostics;
+  const systemHealthy = diagnostics.unpricedCount === 0 && diagnostics.ledgerIssues === 0 && diagnostics.historyPending === 0 && diagnostics.quoteStatus !== "error";
   const confirmation = pendingAction
     ? {
         "encrypted-backup": {
@@ -292,9 +246,9 @@ export function SettingsView({
                 disabled={!autoRefresh}
                 aria-label="価格の更新間隔"
               >
-                {UPDATE_FREQUENCIES.map((minutes) => (
-                  <option key={minutes} value={minutes}>
-                    {minutes}分
+                {UPDATE_FREQUENCIES.map((seconds) => (
+                  <option key={seconds} value={seconds}>
+                    {seconds}秒
                   </option>
                 ))}
               </select>
@@ -381,30 +335,30 @@ export function SettingsView({
           </summary>
           <div className="system-status-grid">
             <div>
-              <span>集計</span>
-              <strong className={dataReconciled ? "" : "down"}>{dataReconciled ? "正常" : "不一致"}</strong>
-            </div>
-            <div>
               <span>価格</span>
-              <strong>
-                {quoteHealth.returned || quoteCount}/{quoteHealth.requested || seed.securities.length}銘柄
+              <strong className={diagnostics.unpricedCount ? "down" : ""}>
+                {diagnostics.pricedCount}/{diagnostics.pricedCount + diagnostics.unpricedCount}銘柄
               </strong>
             </div>
             <div>
-              <span>日足</span>
-              <strong>{historyCount.toLocaleString("ja-JP")}本</strong>
+              <span>価格履歴</span>
+              <strong>{diagnostics.historyCount}銘柄{diagnostics.historyPending ? ` (準備中${diagnostics.historyPending})` : ""}</strong>
             </div>
             <div>
               <span>市場指標</span>
-              <strong>{benchmarkCount}/5件</strong>
+              <strong>{diagnostics.benchmarkCount}件</strong>
             </div>
             <div>
-              <span>履歴検査</span>
-              <strong>{historyIntegrity}</strong>
+              <span>共有カタログ</span>
+              <strong>{diagnostics.catalogCount}銘柄</strong>
             </div>
             <div>
-              <span>株式分割</span>
-              <strong>{corporateActionCount}件</strong>
+              <span>分割調整</span>
+              <strong>{diagnostics.splitAdjustedCount}件の取引</strong>
+            </div>
+            <div>
+              <span>取引データ</span>
+              <strong className={diagnostics.ledgerIssues ? "down" : ""}>{diagnostics.ledgerIssues ? `${diagnostics.ledgerIssues}件要確認` : "正常"}</strong>
             </div>
           </div>
           <dl className="system-details">
@@ -417,36 +371,14 @@ export function SettingsView({
               </dd>
             </div>
             <div>
-              <dt>最終価格</dt>
+              <dt>最終更新</dt>
               <dd>
-                {latestQuoteAt ? shortDateTimeJa(latestQuoteAt) : "未取得"} · {quoteStatus}
-              </dd>
-            </div>
-            <div>
-              <dt>データ状態</dt>
-              <dd>
-                指標 {benchmarkStatus} · 履歴 {historyStatus} · 日中足 {intradayCount.toLocaleString("ja-JP")}本
-              </dd>
-            </div>
-            <div>
-              <dt>フォールバック</dt>
-              <dd>
-                価格 {quoteHealth.fallbackIds.length}件 · 履歴 {historyHealth.fallbackIds.length}件 · 未取得 {quoteHealth.failedIds.length}件
+                {diagnostics.updatedAt ? shortDateTimeJa(new Date(diagnostics.updatedAt).toISOString()) : "未取得"} · 価格 {diagnostics.quoteStatus} · 履歴 {diagnostics.historyStatus}
               </dd>
             </div>
             <div>
               <dt>保存</dt>
-              <dd>
-                {allowPersistentMarketCache ? "端末キャッシュ有効" : "メモリのみ"}
-                {historyCacheMeta?.savedAt ? ` · ${shortDateTimeJa(historyCacheMeta.savedAt)}` : ""}
-              </dd>
-            </div>
-            <div>
-              <dt>通信</dt>
-              <dd>
-                価格 {apiUsage.quoteRequests} · 指標 {apiUsage.benchmarkRequests} · 履歴 {apiUsage.historyRequests} · 検索 {apiUsage.searchRequests}
-                {latestRequest ? ` · 最終 ${timeJa(latestRequest)}` : ""}
-              </dd>
+              <dd>{allowPersistentMarketCache ? "端末キャッシュ有効" : "メモリのみ"}</dd>
             </div>
             <div>
               <dt>接続先</dt>

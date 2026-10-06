@@ -113,7 +113,6 @@ export default function AppBootstrap({ initialServerTimeMs, initialMarketSession
     <Dashboard
       seed={localSeed}
       initialServerTimeMs={initialServerTimeMs}
-      initialMarketSessions={initialMarketSessions}
       allowPersistentMarketCache={true}
       onTransactionsChange={(transactions) => persistLocalPatch({ transactions })}
       onAccountsChange={(accounts) => persistLocalPatch({ accounts })}
