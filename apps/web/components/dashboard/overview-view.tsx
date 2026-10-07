@@ -7,6 +7,7 @@ import { AllocationChart, PortfolioChart } from "./charts";
 import { HIDDEN_AMOUNT, PORTFOLIO_RANGES, rangeLabel } from "./constants";
 import { benchmarkNumber, compactMoney, formatDayGainMoney, fxNumber, maybeMoney, signedPercent } from "./helpers";
 import { HoldingsTable } from "./holdings-table";
+import { useModalFocus } from "./use-modal-focus";
 import { MarketSessionIndicator } from "./market-session-indicator";
 import type {
   Benchmark,
@@ -35,6 +36,7 @@ export function DateRangeControl({
   const [open, setOpen] = useState(false);
   const [from, setFrom] = useState(value?.from ?? min);
   const [to, setTo] = useState(value?.to ?? max);
+  const dialogRef = useModalFocus<HTMLFormElement>(open, () => setOpen(false));
   const openDialog = () => {
     const suggestedTo = value?.to ?? max;
     const suggestedFrom = shiftCalendarMonths(suggestedTo, -3);
@@ -63,6 +65,8 @@ export function DateRangeControl({
           onMouseDown={(event) => event.target === event.currentTarget && setOpen(false)}
         >
           <form
+            ref={dialogRef}
+            tabIndex={-1}
             className="date-range-dialog"
             role="dialog"
             aria-modal="true"
@@ -113,6 +117,33 @@ export function DateRangeControl({
   );
 }
 
+const toneOf = (value: number | null | undefined) => (value == null || value === 0 ? "" : value > 0 ? "up" : "down");
+
+/**
+ * One cell of the summary breakdown: the label line carries the return rate, the value sits below.
+ * 含み + 売却 + 配当 = 通算, so the realized total is not repeated as its own cell.
+ */
+function SummaryCell({ label, value, rate, currency, amountsVisible, total = false }: {
+  label: string;
+  value: number | null | undefined;
+  rate?: number | null;
+  currency: "JPY" | "USD";
+  amountsVisible: boolean;
+  total?: boolean;
+}) {
+  return (
+    <div className={`daily-stat-item summary-cell${total ? " total" : ""}`}>
+      <span className="summary-cell-head">
+        <span className="daily-stat-label">{label}</span>
+        {rate != null && <small className={`summary-cell-rate ${toneOf(rate)}`}>{signedPercent(rate, 1)}</small>}
+      </span>
+      <strong className={`daily-stat-val ${toneOf(value)}`} aria-label={amountsVisible ? undefined : "金額非表示"}>
+        {amountsVisible ? (value == null ? "—" : compactMoney(value, currency, true)) : HIDDEN_AMOUNT}
+      </strong>
+    </div>
+  );
+}
+
 export function FxRates({ benchmarks, status }: { benchmarks: Benchmark[]; status: MarketStatus }) {
   const ordered = ["usd-jpy", "cny-jpy"].map((id) => benchmarks.find((item) => item.id === id)).filter(Boolean) as Benchmark[];
   return (
@@ -157,7 +188,9 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
       <div className="market-tape-track">{[0, 1, 2, 3].map(tapeSet)}</div>
     </section>
   );
-}export function Overview({
+}
+
+export function Overview({
   summary,
   holdings,
   history,
@@ -225,7 +258,6 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
   const effectiveDayReturn = priced ? summary.dayReturn : null;
   const effectiveUnrealized = priced ? summary.unrealizedGain : null;
   const effectiveCostBasis = summary.costBasis;
-  const effectiveRealized = summary.realizedGain + summary.dividendIncome;
   const effectiveTotalGain = priced ? summary.totalGain : null;
   const effectiveTotalReturn = priced ? summary.totalReturn : null;
 
@@ -247,7 +279,7 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
                 {amountsVisible ? maybeMoney(effectiveTotalValue, activeSummaryCurrency) : HIDDEN_AMOUNT}
               </strong>
             </div>
-            <div className="daily-stat-item">
+            <div className="daily-stat-item day">
               <span className="daily-stat-label">本日</span>
               <div className="daily-stat-inline">
                 <strong className={`daily-stat-val ${Number(effectiveDayGain ?? 0) >= 0 ? "up" : "down"}`}>{signedPercent(effectiveDayReturn)}</strong>
@@ -261,53 +293,11 @@ export function MarketTape({ benchmarks, status }: { benchmarks: Benchmark[]; st
             </div>
           </div>
           <div className="daily-summary-divider" aria-hidden="true" />
-          <div className="daily-summary-metrics">
-            <div className="daily-stat-item">
-              <span className="daily-stat-label">含み損益</span>
-              <div className="daily-stat-inline">
-                <strong
-                  className={`daily-stat-val ${Number(effectiveUnrealized ?? 0) >= 0 ? "up" : "down"}`}
-                  aria-label={amountsVisible ? undefined : "金額非表示"}
-                >
-                  {amountsVisible
-                    ? (effectiveUnrealized != null
-                      ? compactMoney(effectiveUnrealized, activeSummaryCurrency, true)
-                      : "—")
-                    : HIDDEN_AMOUNT}
-                </strong>
-                {effectiveCostBasis > 0 && effectiveUnrealized != null && (
-                  <small className={`daily-stat-sub ${effectiveUnrealized >= 0 ? "up" : "down"}`}>
-                    ({signedPercent(effectiveUnrealized / effectiveCostBasis)})
-                  </small>
-                )}
-              </div>
-            </div>
-            <div className="daily-stat-item">
-              <span className="daily-stat-label">確定損益</span>
-              <strong
-                className={`daily-stat-val ${Number(effectiveRealized ?? 0) >= 0 ? "up" : "down"}`}
-                aria-label={amountsVisible ? undefined : "金額非表示"}
-              >
-                {amountsVisible ? (effectiveRealized != null ? compactMoney(effectiveRealized, activeSummaryCurrency, true) : "—") : HIDDEN_AMOUNT}
-              </strong>
-              <small className="daily-stat-detail" aria-label={amountsVisible ? undefined : "金額非表示"}>
-                {amountsVisible
-                  ? `売却 ${compactMoney(summary.realizedGain, activeSummaryCurrency, true)} · 配当 ${compactMoney(summary.dividendIncome, activeSummaryCurrency, true)}`
-                  : HIDDEN_AMOUNT}
-              </small>
-            </div>
-            <div className="daily-stat-item">
-              <span className="daily-stat-label">通算損益</span>
-              <div className="daily-stat-inline">
-                <strong
-                  className={`daily-stat-val ${Number(effectiveTotalGain ?? 0) >= 0 ? "up" : "down"}`}
-                  aria-label={amountsVisible ? undefined : "金額非表示"}
-                >
-                  {amountsVisible ? (effectiveTotalGain != null ? compactMoney(effectiveTotalGain, activeSummaryCurrency, true) : "—") : HIDDEN_AMOUNT}
-                </strong>
-                <small className={`daily-stat-sub ${Number(effectiveTotalReturn ?? 0) >= 0 ? "up" : "down"}`}>({signedPercent(effectiveTotalReturn)})</small>
-              </div>
-            </div>
+          <div className="daily-summary-metrics summary-breakdown">
+            <SummaryCell label="含み損益" value={effectiveUnrealized} rate={effectiveCostBasis > 0 && effectiveUnrealized != null ? effectiveUnrealized / effectiveCostBasis : null} currency={activeSummaryCurrency} amountsVisible={amountsVisible} />
+            <SummaryCell label="売却損益" value={summary.realizedGain} currency={activeSummaryCurrency} amountsVisible={amountsVisible} />
+            <SummaryCell label="配当金" value={summary.dividendIncome} currency={activeSummaryCurrency} amountsVisible={amountsVisible} />
+            <SummaryCell label="通算損益" value={effectiveTotalGain} rate={effectiveTotalReturn} currency={activeSummaryCurrency} amountsVisible={amountsVisible} total />
           </div>
         </div>
 

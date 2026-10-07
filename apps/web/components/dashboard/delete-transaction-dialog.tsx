@@ -7,6 +7,7 @@ import {
   number,
   securityQuantityUnit,
 } from "./helpers";
+import { useModalFocus } from "./use-modal-focus";
 import type { SearchSecurity, Seed } from "./types";
 
 export type DeleteTransactionDialogProps = {
@@ -24,6 +25,7 @@ export function DeleteTransactionDialog({
   onConfirm,
   onCancel,
 }: DeleteTransactionDialogProps) {
+  const dialogRef = useModalFocus<HTMLElement>(Boolean(transaction), onCancel);
   if (!transaction) return null;
 
   const security = transaction.securityId
@@ -39,6 +41,8 @@ export function DeleteTransactionDialog({
     >
       <section
         className="delete-confirm"
+        ref={dialogRef}
+        tabIndex={-1}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="delete-transaction-title"

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { DEFAULT_PRICE_ALERT_PERCENT, PRICE_ALERT_THRESHOLDS, type PortfolioNotification } from "@kabutora/domain/notifications";
 import type { PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
+import { applyThemeColor } from "@/lib/ui/theme-color";
 import {
   DIVIDEND_DISPLAY_CURRENCY_KEY,
   DIVIDEND_MARKET_FILTER_KEY,
@@ -248,6 +249,7 @@ export function useDashboardPreferences({ seed, storage, onPreferencesChange, on
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
+    applyThemeColor(dark ? "dark" : "light");
     document.documentElement.dataset.accent = accentTheme;
     document.documentElement.dataset.hideScrollbar = hideScrollbar ? "true" : "false";
   }, [accentTheme, dark, hideScrollbar]);

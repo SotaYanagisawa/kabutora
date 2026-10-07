@@ -186,7 +186,7 @@ export function MonthlyDividendLineChart({
       yValue={(item) => (taxMode === "net" ? item.net : item.gross)}
       yTickFormatter={(val) => (amountsVisible ? formatDividendAxisTick(val, currency) : "")}
       tickCount={5}
-      yAxisWidth={amountsVisible ? (currency === "JPY" ? 54 : 46) : 12}
+      yAxisWidth={amountsVisible ? (currency === "JPY" ? 64 : 52) : 12}
       xAxisHeight={38}
       top={16}
       right={14}
@@ -499,11 +499,8 @@ export function DividendsView({
       const entry = monthMap.get(m)!;
       const monthNum = Number(m.slice(5, 7));
       const yearShort = m.slice(2, 4);
-      const monthLabel = isMultiYear
-        ? monthNum === 1 || uniqueMonths.length <= 24
-          ? `'${yearShort}/${monthNum}`
-          : `${monthNum}月`
-        : `${monthNum}月`;
+      // The axis shows a handful of evenly spaced months, so multi-year labels always carry the year.
+      const monthLabel = isMultiYear ? `'${yearShort}/${monthNum}` : `${monthNum}月`;
 
       return {
         monthKey: m,
@@ -669,6 +666,10 @@ export function DividendsView({
                 <Search size={13} style={{ color: "var(--muted)", flexShrink: 0 }} />
                 <input
                   type="search"
+                  enterKeyHint="search"
+                  autoCorrect="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
                   placeholder="銘柄・口座で検索…"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}

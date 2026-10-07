@@ -383,9 +383,10 @@ function DashboardContents(props: DashboardProps) {
           return (
             <button key={item.id} aria-label={item.shortLabel} aria-current={active ? "page" : undefined} className={active ? "active" : ""} onClick={() => navigateToView(item.id)}>
               <span className="mobile-nav-icon">
-                <Icon size={25} />
+                <Icon size={22} />
                 {item.id === "notifications" && notificationBadge}
               </span>
+              <span className="mobile-nav-label" aria-hidden="true">{item.shortLabel}</span>
             </button>
           );
         })}

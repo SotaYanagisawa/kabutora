@@ -13,8 +13,8 @@ function dividendMarket(large = false) {
 test("dividends: units held before each ex-date, per account, in the summary, chart and ledger", async ({ page }) => {
   await installDemo(page, dividendMarket());
   await page.goto("/");
-  // Overview: realized includes dividends (¥3,000 + $2.60 × 150 = ¥390).
-  await expect(page.locator(".overview-page .daily-summary")).toContainText(/配当 \+[¥￥]3,390/u);
+  // Overview: the dividend cell (¥3,000 + $2.60 × 150 = ¥390).
+  await expect(page.locator(".overview-page .summary-cell").filter({ hasText: "配当金" })).toContainText(/\+[¥￥]3,390/u);
   await openView(page, "配当");
   const dividendPage = page.locator(".dividends-page");
   await expect(dividendPage.locator(".dividend-summary-total")).toHaveText(yen("3,390"));

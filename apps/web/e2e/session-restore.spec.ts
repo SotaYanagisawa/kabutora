@@ -1,11 +1,11 @@
 import { expect, test, type Page } from "./strict-fixture";
-import { installSyntheticPortfolio, syntheticPortfolio } from "./reliability-fixture";
+import { installDemo } from "./demo-portfolio";
 
 const marketFilter = (page: Page) => page.getByRole("combobox", { name: /資産区分(?:と国)?で絞り込み/u }).locator("visible=true").first();
 const navButton = (page: Page, name: RegExp) => page.getByRole("button", { name }).locator("visible=true").first();
 
 test("reopening the app restores the last main menu page and its filter selections", async ({ page }) => {
-  await installSyntheticPortfolio(page, syntheticPortfolio(6, 40, 200));
+  await installDemo(page);
   await page.goto("/");
   await expect(page.locator("main.workspace")).toBeVisible({ timeout: 20_000 });
 

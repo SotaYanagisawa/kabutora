@@ -1,8 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
+import { THEME_COLORS } from "@/lib/ui/theme-color";
 import "./globals.css";
 
-const initialAppearanceScript = `(()=>{try{const root=document.documentElement;const theme=localStorage.getItem("kabutora-theme");const accent=localStorage.getItem("kabutora-accent");const hideScrollbar=localStorage.getItem("kabutora-hide-scrollbar");root.dataset.theme=theme==="dark"?"dark":"light";if(["graphite","blue","forest","plum"].includes(accent))root.dataset.accent=accent;root.dataset.hideScrollbar=hideScrollbar==="false"?"false":"true";}catch{}window.addEventListener("error",event=>{try{const message=String(event.message||event.error?.message||"");if(!/ChunkLoadError|Loading chunk|dynamically imported module/i.test(message)||location.search.includes("chunk-repaired")||sessionStorage.getItem("kabutora-chunk-repair"))return;sessionStorage.setItem("kabutora-chunk-repair","1");Promise.all([navigator.serviceWorker?.getRegistrations?.().then(items=>Promise.all(items.map(item=>item.unregister()))).catch(()=>{}),window.caches?.keys?.().then(keys=>Promise.all(keys.filter(key=>key.startsWith("kabutora-shell-")).map(key=>caches.delete(key)))).catch(()=>{})]).finally(()=>location.replace("/?chunk-repaired="+Date.now()));}catch{}},true);})();`;
+const initialAppearanceScript = `(()=>{try{const root=document.documentElement;const theme=localStorage.getItem("kabutora-theme");const accent=localStorage.getItem("kabutora-accent");const hideScrollbar=localStorage.getItem("kabutora-hide-scrollbar");root.dataset.theme=theme==="dark"?"dark":"light";const color=document.createElement("meta");color.name="theme-color";color.content=theme==="dark"?"${THEME_COLORS.dark}":"${THEME_COLORS.light}";document.head.append(color);if(["graphite","blue","forest","plum"].includes(accent))root.dataset.accent=accent;root.dataset.hideScrollbar=hideScrollbar==="false"?"false":"true";}catch{}window.addEventListener("error",event=>{try{const message=String(event.message||event.error?.message||"");if(!/ChunkLoadError|Loading chunk|dynamically imported module/i.test(message)||location.search.includes("chunk-repaired")||sessionStorage.getItem("kabutora-chunk-repair"))return;sessionStorage.setItem("kabutora-chunk-repair","1");Promise.all([navigator.serviceWorker?.getRegistrations?.().then(items=>Promise.all(items.map(item=>item.unregister()))).catch(()=>{}),window.caches?.keys?.().then(keys=>Promise.all(keys.filter(key=>key.startsWith("kabutora-shell-")).map(key=>caches.delete(key)))).catch(()=>{})]).finally(()=>location.replace("/?chunk-repaired="+Date.now()));}catch{}},true);})();`;
 
 export const metadata: Metadata = {
   title: "株トラ — ポートフォリオトラッカー",
@@ -11,6 +12,9 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: "株トラ",
+    // The page runs under the status bar so content scrolls beneath the Dynamic Island. iOS 26 lays
+    // its Liquid Glass edge blur over the top of such a page; no CSS or meta setting turns that off.
+    // "default" avoids the glass but keeps content below an opaque status-bar band instead.
     statusBarStyle: "black-translucent",
   },
   icons: {
@@ -23,7 +27,6 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#000000",
   colorScheme: "light dark",
   width: "device-width",
   initialScale: 1,

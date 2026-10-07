@@ -19,7 +19,7 @@ import {
   type Target,
   type Trade,
 } from "@kabutora/domain/portfolio";
-import { useEffect, useMemo, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from "react";
 import { portfolioMarketSessions } from "@/lib/market/market-session";
 import { securityMatchesPortfolioFilter, type PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
 import { companyDisplayName, companyLegalName } from "@/lib/ui/company-name";
@@ -67,6 +67,20 @@ export function displayQuote(quote: Quote, security: { exchangeMic?: string } | 
   };
 }
 
+/** Field-wise equality for a security entry; the quote is compared one level deep. */
+function sameSecurity(left: MarketSecurity, right: MarketSecurity) {
+  const keys = Object.keys(right) as (keyof MarketSecurity)[];
+  if (Object.keys(left).length !== keys.length) return false;
+  return keys.every((key) => {
+    if (key !== "quote") return Object.is(left[key], right[key]);
+    const a = left.quote as Record<string, unknown> | undefined;
+    const b = right.quote as Record<string, unknown> | undefined;
+    if (!a || !b) return a === b;
+    const fields = Object.keys(b);
+    return Object.keys(a).length === fields.length && fields.every((field) => Object.is(a[field], b[field]));
+  });
+}
+
 type Options = {
   seed: Seed;
   transactions: Transaction[];
@@ -99,21 +113,32 @@ export function usePortfolio(o: Options) {
   const quotes = market.data.quotes;
 
   // ---- Securities ------------------------------------------------------------------------------
+  // Entries keep their identity while their content is unchanged, so the clock tick and quote polls
+  // do not re-render every memoized row that looks a security up.
+  const previousSecurityMap = useRef<Map<string, MarketSecurity>>(new Map());
   const rawSecurityMap = useMemo(() => {
+    const previous = previousSecurityMap.current;
     const map = new Map<string, MarketSecurity>();
+    let changed = previous.size !== allSecurities.length;
     for (const security of allSecurities) {
       const quote = quotes.get(marketKey(security.id));
       const nameSource = { ...security, shortName: quote?.name ?? security.shortName, longName: quote?.longName ?? security.longName };
-      map.set(security.id, {
+      const next: MarketSecurity = {
         ...security,
         name: companyDisplayName(nameSource),
         legalName: companyLegalName(nameSource),
         nativeCurrency: security.currency,
         ...(quote ? { quote: displayQuote(quote, security, nowSeconds) } : {}),
-      });
+      };
+      const before = previous.get(security.id);
+      const entry = before && sameSecurity(before, next) ? before : next;
+      if (entry !== before) changed = true;
+      map.set(security.id, entry);
     }
-    return map;
+    return changed ? (previousSecurityMap.current = map) : previous;
   }, [allSecurities, nowSeconds, quotes]);
+  // Filters read only static security fields (country, asset type, exchange), never quotes.
+  const filterSecurityMap = useMemo(() => new Map(allSecurities.map((security) => [security.id, security])), [allSecurities]);
   const nativeMarketSecurities = useMemo(() => [...rawSecurityMap.values()], [rawSecurityMap]);
   const ledgerSecurities = useMemo(() => new Map<string, LedgerSecurity>(allSecurities.map((security) => [security.id, { id: security.id, currency: security.currency, priceUnit: security.priceUnit }])), [allSecurities]);
   const brokerOptions = useMemo(() => [...new Set([...accountMap.values()].filter((account) => !account.archivedAt).map((account) => account.broker).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ja")), [accountMap]);
@@ -126,8 +151,8 @@ export function usePortfolio(o: Options) {
   const rows = useMemo(() => tradeRows(book), [book]);
   const include = useMemo(() => (trade: Trade<Transaction>) => {
     if (brokerFilter !== "ALL" && accountMap.get(trade.accountId)?.broker !== brokerFilter && trade.transaction.original?.broker !== brokerFilter) return false;
-    return marketFilter === "ALL" || securityMatchesPortfolioFilter(rawSecurityMap.get(trade.securityId) ?? null, marketFilter, trade.securityId);
-  }, [accountMap, brokerFilter, marketFilter, rawSecurityMap]);
+    return marketFilter === "ALL" || securityMatchesPortfolioFilter(filterSecurityMap.get(trade.securityId) ?? null, marketFilter, trade.securityId);
+  }, [accountMap, brokerFilter, filterSecurityMap, marketFilter]);
 
   // ---- Valuation -----------------------------------------------------------------------------------
   const native = useMemo(() => valuePortfolio(book, { target: "NATIVE", fx, today, include }), [book, fx, include, today]);
@@ -169,12 +194,12 @@ export function usePortfolio(o: Options) {
   const effectiveDividendCurrency: Currency = useMemo(() => {
     if (o.dividendDisplayCurrency === "JPY" || o.dividendDisplayCurrency === "USD") return o.dividendDisplayCurrency;
     const currencies = new Set(dividendReceipts(book, { target: "NATIVE", fx, today }).filter((receipt) => o.dividendMarketFilter === "ALL"
-      || securityMatchesPortfolioFilter(rawSecurityMap.get(receipt.securityId) ?? null, o.dividendMarketFilter, receipt.securityId)).map((receipt) => receipt.currency));
+      || securityMatchesPortfolioFilter(filterSecurityMap.get(receipt.securityId) ?? null, o.dividendMarketFilter, receipt.securityId)).map((receipt) => receipt.currency));
     const sole = currencies.size === 1 ? [...currencies][0] : null;
     if (sole === "USD" || sole === "JPY") return sole;
     if (currencies.size > 1) return "JPY";
     return o.dividendMarketFilter === "US" ? "USD" : o.seed.portfolio.baseCurrency === "USD" ? "USD" : "JPY";
-  }, [book, fx, o.dividendDisplayCurrency, o.dividendMarketFilter, o.seed.portfolio.baseCurrency, rawSecurityMap, today]);
+  }, [book, filterSecurityMap, fx, o.dividendDisplayCurrency, o.dividendMarketFilter, o.seed.portfolio.baseCurrency, today]);
   const receipts = useMemo(() => dividendReceipts(book, { target: effectiveDividendCurrency, fx, today }), [book, effectiveDividendCurrency, fx, today]);
   const dividendFxUnavailable = receipts.some((receipt) => receipt.amount == null);
 
