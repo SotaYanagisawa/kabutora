@@ -65,6 +65,9 @@ export default memo(function SecuritySearchField({
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing) return;
     if (event.key === "Escape") {
+      // A typed query is cleared first; an empty field lets Escape close the surrounding dialog.
+      if (!inputValue) return;
+      event.stopPropagation();
       clear();
       setSelectedIndex(0);
       return;
@@ -101,6 +104,10 @@ export default memo(function SecuritySearchField({
           aria-activedescendant={queryActive && results.length ? `security-option-${selectedIndex}` : undefined}
           aria-busy={status === "loading"}
           autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          enterKeyHint="search"
           value={inputValue}
           onChange={(event) => setInputValue(event.target.value)}
           onCompositionStart={beginComposition}

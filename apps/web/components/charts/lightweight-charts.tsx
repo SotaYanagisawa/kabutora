@@ -205,6 +205,21 @@ function LightweightAreaChartView<T>({
 
 export type LightweightDonutItem = { name: string; value: number; color: string };
 
+const DONUT_LABEL_ROOM = 96;
+const DONUT_LABEL_GAP = 34;
+
+/** Shortens a label to an approximate pixel width: full-width glyphs ≈ 1em, others ≈ 0.6em. */
+function fitLabel(text: string, maxWidth: number, fontSize: number) {
+  const glyph = (char: string) => (/[\u3000-\u9fff\uff00-\uffef]/u.test(char) ? fontSize : fontSize * 0.6);
+  let width = 0;
+  const chars = [...text];
+  for (let index = 0; index < chars.length; index += 1) {
+    width += glyph(chars[index]);
+    if (width > maxWidth) return `${chars.slice(0, Math.max(1, index - 1)).join("")}…`;
+  }
+  return text;
+}
+
 export function LightweightDonutChart(props: { items: LightweightDonutItem[]; height?: number }) {
   return <ChartErrorBoundary resetKey={props.items}><LightweightDonutChartView {...props}/></ChartErrorBoundary>;
 }
@@ -215,8 +230,9 @@ function LightweightDonutChartView({ items, height = 340 }: { items: Lightweight
     const cx = size.width / 2;
     const cy = size.height / 2;
     const maximumRadius = Math.max(1, Math.min(size.width - 16, size.height - 48) / 2);
-    const outerRadius = maximumRadius * 0.58;
-    const innerRadius = maximumRadius * 0.38;
+    // Narrow screens give the callout labels room by shrinking the ring, never below 56px.
+    const outerRadius = Math.max(Math.min(56, maximumRadius * 0.58), Math.min(maximumRadius * 0.58, size.width / 2 - 23 - DONUT_LABEL_ROOM));
+    const innerRadius = outerRadius * (0.38 / 0.58);
     const padding = Math.PI / 180;
     let currentAngle = 0;
     const slices = items.map((item, index) => {
@@ -236,18 +252,29 @@ function LightweightDonutChartView({ items, height = 340 }: { items: Lightweight
       const start = { x: cx + (outerRadius + 3) * Math.cos(slice.midAngle), y: cy + (outerRadius + 3) * Math.sin(slice.midAngle) };
       groups[isRight ? 0 : 1].push({ ...slice, isRight, sx: start.x, sy: start.y, relY: (outerRadius + 14) * Math.sin(slice.midAngle) });
     }
+    // Each side holds as many labels as fit vertically; the smallest slices give way (the legend lists all).
+    const capacity = Math.max(1, Math.floor((size.height - 24) / DONUT_LABEL_GAP));
+    for (const [side, group] of groups.entries()) {
+      if (group.length > capacity) groups[side] = group.sort((a, b) => b.percent - a.percent).slice(0, capacity);
+    }
+    const limit = cy - 18;
     for (const group of groups) {
       group.sort((a, b) => a.relY - b.relY);
       for (let iteration = 0; iteration < 8; iteration += 1) {
-        for (let index = 1; index < group.length; index += 1) group[index].relY = Math.max(group[index].relY, group[index - 1].relY + 34);
-        for (let index = group.length - 2; index >= 0; index -= 1) group[index].relY = Math.min(group[index].relY, group[index + 1].relY - 34);
+        for (let index = 1; index < group.length; index += 1) group[index].relY = Math.max(group[index].relY, group[index - 1].relY + DONUT_LABEL_GAP);
+        for (let index = group.length - 2; index >= 0; index -= 1) group[index].relY = Math.min(group[index].relY, group[index + 1].relY - DONUT_LABEL_GAP);
       }
+      // Keep the stack inside the chart: shift it down if it starts above the top, up if it ends below the bottom.
+      const shift = Math.max(0, -limit - (group[0]?.relY ?? 0)) - Math.max(0, (group.at(-1)?.relY ?? 0) - limit);
+      for (const item of group) item.relY += shift;
     }
     const callouts = groups.flat().map((item) => {
       const y = cy + item.relY;
       const middleX = item.isRight ? cx + outerRadius + 8 : cx - outerRadius - 8;
       const endX = item.isRight ? middleX + 10 : middleX - 10;
-      return { ...item, y, middleX, endX, labelX: endX + (item.isRight ? 5 : -5), anchor: item.isRight ? "start" as const : "end" as const };
+      const labelX = endX + (item.isRight ? 5 : -5);
+      const room = (item.isRight ? size.width - labelX : labelX) - 4;
+      return { ...item, y, middleX, endX, labelX, label: fitLabel(item.name, room, 12.5), anchor: item.isRight ? "start" as const : "end" as const };
     });
     return { cx, cy, innerRadius, outerRadius, slices, callouts };
   }, [items, size.height, size.width]);
@@ -260,7 +287,7 @@ function LightweightDonutChartView({ items, height = 340 }: { items: Lightweight
           <path d={`M${item.sx},${item.sy} L${item.middleX},${item.y} L${item.endX},${item.y}`} stroke={item.color} strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
           <circle cx={item.endX} cy={item.y} r="2.5" fill={item.color}/>
           <text x={item.labelX} y={item.y} textAnchor={item.anchor} style={{ pointerEvents: "none", userSelect: "none" }}>
-            <tspan x={item.labelX} dy="-0.25em" fill="var(--text)" fontSize="12.5px" fontWeight="750">{item.name.length > 13 ? `${item.name.slice(0, 12)}…` : item.name}</tspan>
+            <tspan x={item.labelX} dy="-0.25em" fill="var(--text)" fontSize="12.5px" fontWeight="750">{item.label}</tspan>
             <tspan x={item.labelX} dy="1.25em" fill="var(--muted)" fontSize="11px" fontWeight="700">{(item.percent * 100).toFixed(1)}%</tspan>
           </text>
         </g>)}

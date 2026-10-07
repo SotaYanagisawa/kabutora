@@ -3,6 +3,7 @@
 import type React from "react";
 import { X, Trash2, ShieldCheck } from "lucide-react";
 import SecuritySearchField from "../search/security-search-field";
+import { useModalFocus } from "./use-modal-focus";
 import { localDateInputValue } from "@/lib/ui/calendar-time";
 import {
   isFundSecurity,
@@ -72,6 +73,7 @@ export function TradeModal({
   onClose,
   onOpenRemoveAccount,
 }: TradeModalProps) {
+  const dialogRef = useModalFocus<HTMLFormElement>(isOpen, onClose);
   if (!isOpen) return null;
 
   const currentAccount = accountMap.get(selectedAccountId);
@@ -87,11 +89,11 @@ export function TradeModal({
       role="presentation"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <form className="trade-modal" onSubmit={onSubmit}>
+      <form ref={dialogRef} className="trade-modal" role="dialog" aria-modal="true" aria-labelledby="trade-modal-title" tabIndex={-1} onSubmit={onSubmit}>
         <div className="modal-head">
           <div>
             <span>{editingTransaction ? "EDIT TRADE" : "NEW TRADE"}</span>
-            <h2>{editingTransaction ? "取引を編集" : "取引を記録"}</h2>
+            <h2 id="trade-modal-title">{editingTransaction ? "取引を編集" : "取引を記録"}</h2>
           </div>
           <button
             type="button"
@@ -186,6 +188,8 @@ export function TradeModal({
             {isFundSecurity(selectedTradeSecurity) ? "口数" : "数量"}
             <input
               inputMode="decimal"
+              enterKeyHint="next"
+              autoComplete="off"
               value={tradeQuantity}
               onChange={(event) => setTradeQuantity(event.target.value)}
               placeholder={
@@ -208,6 +212,8 @@ export function TradeModal({
                 : `価格（${selectedTradeSecurity?.currency ?? "JPY"}）`}
             <input
               inputMode="decimal"
+              enterKeyHint="done"
+              autoComplete="off"
               value={tradePrice}
               onChange={(event) => setTradePrice(event.target.value)}
               placeholder={

@@ -31,3 +31,36 @@ test("chart ranges switch and persist, and every view renders without page overf
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
   }
 });
+
+test("the home-screen status bar follows the app theme", async ({ page }) => {
+  await installDemo(page);
+  await page.goto("/");
+  await expect(page.locator(".overview-page")).toBeVisible();
+  await expect(page.locator('meta[name="apple-mobile-web-app-status-bar-style"]')).toHaveAttribute("content", "black-translucent");
+  const themeColor = page.locator('meta[name="theme-color"]');
+  await expect(themeColor).toHaveCount(1);
+  await expect(themeColor).toHaveAttribute("content", "#f4f4f3");
+  await openView(page, "設定");
+  await page.locator(".view-cache.active").getByRole("button", { name: "ダークモード", exact: true }).click();
+  await expect(themeColor).toHaveAttribute("content", "#000000");
+});
+
+test("content starts just below the Dynamic Island and scrolls up under it", async ({ page, isMobile }) => {
+  test.skip(!isMobile, "The phone layout runs under the iOS status bar; desktop has its own header.");
+  await installDemo(page);
+  // Emulate an iPhone home-screen app: 59px top inset (status bar and Dynamic Island).
+  await page.addInitScript(() => document.addEventListener("DOMContentLoaded", () => document.documentElement.style.setProperty("--safe-top", "59px")));
+  await page.goto("/");
+  await expect(page.locator(".overview-page")).toBeVisible();
+  const strip = await page.locator(".market-overview-strip").boundingBox();
+  expect(strip!.y).toBeGreaterThanOrEqual(50);
+  expect(strip!.y).toBeLessThanOrEqual(53);
+  // Scrolled, the top edge shows page content rather than a fixed band.
+  await page.evaluate(() => window.scrollTo(0, 300));
+  const covered = await page.evaluate(() => {
+    let node = document.elementFromPoint(innerWidth / 2, 20) as HTMLElement | null;
+    while (node && !["fixed", "sticky"].includes(getComputedStyle(node).position)) node = node.parentElement;
+    return node?.className ?? null;
+  });
+  expect(covered).toBeNull();
+});

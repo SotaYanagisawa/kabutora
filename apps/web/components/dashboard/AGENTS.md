@@ -11,6 +11,8 @@ The dashboard is one coordinator component composed from feature hooks, plus mem
 | `use-portfolio.ts` | The engine wiring: book, valuation per filter/currency, holdings, daily and intraday history, dividends, notifications, detail page, diagnostics |
 | `use-touch-gestures.ts` | Swipe navigation, pull-to-refresh (touch and wheel), keyboard-aware viewport sizing |
 | `use-trade-editor.ts` | Trade modal state and submit, transaction deletion, account removal |
+| `use-modal-focus.ts` | Dialog behavior: Escape closes the top dialog, Tab stays inside, focus returns to the opener |
+| `use-incremental-list.ts` | `useMediaQuery`, and paged rendering for long lists (the ledger renders one layout, 120 rows at a time) |
 | `types.ts` / `constants.ts` / `helpers.ts` | Shared view models / labels, keys and ranges / pure formatting helpers |
 
 ## Invariants

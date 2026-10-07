@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle, Trash2 } from "lucide-react";
+import { useModalFocus } from "./use-modal-focus";
 import type { Seed } from "./types";
 
 export type RemoveAccountDialogProps = {
@@ -18,6 +19,7 @@ export function RemoveAccountDialog({
   onConfirm,
   onCancel,
 }: RemoveAccountDialogProps) {
+  const dialogRef = useModalFocus<HTMLElement>(Boolean(accountId && accountMap.get(accountId)), onCancel);
   if (!accountId) return null;
   const account = accountMap.get(accountId);
   if (!account) return null;
@@ -33,6 +35,8 @@ export function RemoveAccountDialog({
     >
       <section
         className="delete-confirm account-remove-confirm"
+        ref={dialogRef}
+        tabIndex={-1}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="remove-account-title"

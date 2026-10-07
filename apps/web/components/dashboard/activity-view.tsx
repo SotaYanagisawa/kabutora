@@ -1,7 +1,7 @@
 import { memo, useMemo, useState } from "react";
 import type { TradeRow } from "@kabutora/domain/portfolio";
 import { BarChart3, CalendarDays, List, Pencil, Plus, Trash2 } from "lucide-react";
-import { HIDDEN_AMOUNT } from "./constants";
+import { HIDDEN_AMOUNT, MOBILE_LAYOUT_QUERY } from "./constants";
 import {
   compactMoney,
   dateJa,
@@ -19,6 +19,7 @@ import type {
   DisplayCurrency,
   SecurityLookup,
 } from "./types";
+import { useIncrementalList, useMediaQuery } from "./use-incremental-list";
 
 type LedgerTypeTone = "buy" | "sell" | "neutral";
 
@@ -85,6 +86,9 @@ export function Ledger({
     () => [...rows].sort((a, b) => b.tradeDate.localeCompare(a.tradeDate) || b.id.localeCompare(a.id)),
     [rows],
   );
+  const compact = useMediaQuery(MOBILE_LAYOUT_QUERY);
+  const list = useIncrementalList(ordered.length);
+  const shown = list.visible < ordered.length ? ordered.slice(0, list.visible) : ordered;
 
   if (!ordered.length) {
     return (
@@ -103,39 +107,11 @@ export function Ledger({
 
   return (
     <div className="holdings-table-wrap ledger-table-wrap panel">
-      {/* Mobile Card List (Structured & Spacious, No Overflow) */}
-      <div className="ledger-mobile-cards mobile-only">
-        {ordered.map((transaction) => (
-          <FastLedgerCard
-            key={transaction.id}
-            transaction={transaction}
-            security={transaction.securityId ? securityMap.get(transaction.securityId) : null}
-            account={accountMap.get(transaction.accountId)}
-            position={tradeRows?.get(transaction.id)}
-            onEdit={onEdit}
-            onDelete={onDelete}
-            amountsVisible={amountsVisible}
-          />
-        ))}
-      </div>
-
-      {/* Desktop Table View */}
-      <table className="holdings-table ledger-table desktop-only">
-        <thead>
-          <tr>
-            <th className="ledger-date-col">日付</th>
-            <th className="ledger-type-col">種別</th>
-            <th className="ledger-security-col">銘柄 / 口座</th>
-            <th className="ledger-quantity-col">数量</th>
-            <th className="ledger-position-col">保有数推移</th>
-            <th className="ledger-unit-price-col">約定単価</th>
-            <th className="ledger-gross-col">約定金額</th>
-            <th className="ledger-action-col">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {ordered.map((transaction) => (
-            <FastLedgerTableRow
+      {/* One layout at a time, rendered in pages: a ledger can hold thousands of rows. */}
+      {compact ? (
+        <div className="ledger-mobile-cards">
+          {shown.map((transaction) => (
+            <FastLedgerCard
               key={transaction.id}
               transaction={transaction}
               security={transaction.securityId ? securityMap.get(transaction.securityId) : null}
@@ -146,8 +122,44 @@ export function Ledger({
               amountsVisible={amountsVisible}
             />
           ))}
-        </tbody>
-      </table>
+        </div>
+      ) : (
+        <table className="holdings-table ledger-table">
+          <thead>
+            <tr>
+              <th className="ledger-date-col">日付</th>
+              <th className="ledger-type-col">種別</th>
+              <th className="ledger-security-col">銘柄 / 口座</th>
+              <th className="ledger-quantity-col">数量</th>
+              <th className="ledger-position-col">保有数推移</th>
+              <th className="ledger-unit-price-col">約定単価</th>
+              <th className="ledger-gross-col">約定金額</th>
+              <th className="ledger-action-col">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((transaction) => (
+              <FastLedgerTableRow
+                key={transaction.id}
+                transaction={transaction}
+                security={transaction.securityId ? securityMap.get(transaction.securityId) : null}
+                account={accountMap.get(transaction.accountId)}
+                position={tradeRows?.get(transaction.id)}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                amountsVisible={amountsVisible}
+              />
+            ))}
+          </tbody>
+        </table>
+      )}
+      {list.hasMore && (
+        <div ref={list.sentinelRef} className="ledger-more">
+          <button type="button" className="text-button" onClick={list.showAll}>
+            残り{ordered.length - list.visible}件を表示
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -280,10 +292,11 @@ export function ActivityTradeSummary({ transactions }: { transactions: Dashboard
 
   if (!transactions.length) return null;
 
+  /** One line per currency: a joined "¥… / $…" string did not fit a phone-width chip. */
   const formatCurrencyMap = (map: Record<string, number>, fallbackZero = true) => {
     const entries = Object.entries(map).filter(([, val]) => val !== 0 || fallbackZero);
     if (!entries.length) return fallbackZero ? "¥0" : "—";
-    return entries.map(([curr, val]) => compactMoney(val, curr as DisplayCurrency, true)).join(" / ");
+    return entries.map(([curr, val]) => <span key={curr}>{compactMoney(val, curr as DisplayCurrency, true)}</span>);
   };
 
   return (
