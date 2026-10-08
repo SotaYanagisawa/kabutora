@@ -6,6 +6,12 @@
  */
 export const THEME_COLORS = { light: "#f4f4f3", dark: "#000000" } as const;
 
+/**
+ * The last applied theme, kept outside any account's preference namespace so the startup script
+ * (which runs before sign-in) can paint the startup screen in it. Holds only "dark" or "light".
+ */
+export const BOOT_THEME_KEY = "kabutora-boot-theme";
+
 export function applyThemeColor(theme: keyof typeof THEME_COLORS) {
   let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
   if (!meta) {
@@ -14,4 +20,5 @@ export function applyThemeColor(theme: keyof typeof THEME_COLORS) {
     document.head.append(meta);
   }
   if (meta.content !== THEME_COLORS[theme]) meta.content = THEME_COLORS[theme];
+  try { window.localStorage.setItem(BOOT_THEME_KEY, theme); } catch { /* Storage is optional. */ }
 }

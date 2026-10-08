@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatWidgetFetchedTime, quoteTradeSourceLabel } from "./helpers";
+import { compactQuoteTime, compactSignedPercent, formatWidgetFetchedTime, quoteSessionLabel, quoteTradeSourceLabel } from "./helpers";
 import type { DisplayQuote } from "./types";
 
 describe("dashboard helpers", () => {
@@ -76,6 +76,36 @@ describe("dashboard helpers", () => {
 
     it("returns null if neither timestamp is available", () => {
       expect(formatWidgetFetchedTime(null, null)).toBeNull();
+    });
+  });
+
+  describe("card quote labels", () => {
+    it("shows the time on the exchange's current day and only the date otherwise", () => {
+      const now = Date.parse("2026-10-08T04:30:00Z"); // 13:30 JST, 00:30 EDT
+      expect(compactQuoteTime("2026-10-08T03:00:00Z", "Asia/Tokyo", now)).toBe("12:00");
+      expect(compactQuoteTime("2026-10-07T06:30:00Z", "Asia/Tokyo", now)).toBe("10/7");
+      expect(compactQuoteTime("2026-10-07T20:00:00Z", "America/New_York", now)).toBe("10/7");
+      expect(compactQuoteTime("2026-10-08T04:20:00Z", "America/New_York", now)).toBe("00:20");
+      expect(compactQuoteTime(null, "Asia/Tokyo", now)).toBeNull();
+      expect(compactQuoteTime("bad", "Asia/Tokyo", now)).toBeNull();
+    });
+
+    it("names the session a price comes from", () => {
+      expect(quoteSessionLabel({ venueCode: "JNX", session: "pts_night" })).toBe("PTS");
+      expect(quoteSessionLabel({ venueCode: "US", session: "after_hours" })).toBe("時間外");
+      expect(quoteSessionLabel({ venueCode: "US", session: "pre_market" })).toBe("プレ");
+      expect(quoteSessionLabel({ venueCode: "TSE", session: "regular" })).toBe("取引中");
+      expect(quoteSessionLabel({ venueCode: "TSE", session: "closed" })).toBe("終値");
+      expect(quoteSessionLabel({ venueCode: "FUND", session: "closed" })).toBe("基準価額");
+    });
+
+    it("drops decimals from returns of 100% and more", () => {
+      expect(compactSignedPercent(0.1234)).toBe("+12.3%");
+      expect(compactSignedPercent(0.999)).toBe("+99.9%");
+      expect(compactSignedPercent(9.288)).toBe("+929%");
+      expect(compactSignedPercent(11.567)).toBe("+1,157%");
+      expect(compactSignedPercent(-0.5)).toBe("-50.0%");
+      expect(compactSignedPercent(null)).toBe("—");
     });
   });
 

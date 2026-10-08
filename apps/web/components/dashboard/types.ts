@@ -70,6 +70,11 @@ export type DisplayQuote = {
   brandName?: string;
   price: number;
   previousRegularClose: number | null;
+  /** Regular-session price (US close / TSE close) when `price` is a pre-market, after-hours or PTS trade. */
+  regularPrice?: number;
+  regularTimestamp?: string;
+  /** `price` against `regularPrice`: the move in the extended session. */
+  extendedChangeRatio?: number;
   dayHigh?: number;
   dayLow?: number;
   dayVolume?: number;

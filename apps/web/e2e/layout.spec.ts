@@ -64,3 +64,24 @@ test("content starts just below the Dynamic Island and scrolls up under it", asy
   });
   expect(covered).toBeNull();
 });
+
+test("the startup screen is black by default and follows the last theme used", async ({ page }) => {
+  await installDemo(page);
+  // Hold the ledger so the startup screen stays up long enough to inspect.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/local/bootstrap", async (route) => { await held; await route.fallback(); });
+  await page.goto("/");
+  const loading = page.locator(".app-loading-screen");
+  await expect(loading).toBeVisible();
+  expect(await loading.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(0, 0, 0)");
+  release();
+  await expect(page.locator(".overview-page")).toBeVisible();
+
+  // The app's own setting is light here; the next startup uses it.
+  await page.unroute("**/api/local/bootstrap");
+  await page.reload();
+  await expect(page.locator(".overview-page")).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("kabutora-boot-theme"))).toBe("light");
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("light");
+});

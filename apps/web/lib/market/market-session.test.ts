@@ -3,6 +3,7 @@ import {
   eligibleJapanTradingDates,
   eligibleUsTradingDates,
   japanMarketSession,
+  marketSessionWindows,
   portfolioMarketSessions,
   selectReliableMarketSessions,
   usMarketSession,
@@ -96,5 +97,40 @@ describe("market session diagnostics", () => {
     const server = portfolioMarketSessions("ALL", new Date("2026-08-12T12:00:00Z"));
     expect(selectReliableMarketSessions("ALL", failed, server).map((status) => status.session)).toEqual(["pts_night", "pre_market"]);
     expect(selectReliableMarketSessions("US", failed, server)).toEqual([expect.objectContaining({ market: "US", session: "pre_market" })]);
+  });
+});
+
+describe("session windows for intraday charts", () => {
+  const iso = (ms: number) => new Date(ms).toISOString().slice(0, 16);
+  it("lists the TSE sessions, lunch break and Japannext sessions in UTC", () => {
+    // Wed 2026-10-07 00:00 JST .. Thu 2026-10-08 00:00 JST
+    const windows = marketSessionWindows("JP", Date.parse("2026-10-06T15:00:00Z"), Date.parse("2026-10-07T15:00:00Z"));
+    expect(windows.map((item) => [item.kind, iso(item.start), iso(item.end)])).toEqual([
+      ["pts", "2026-10-06T15:00", "2026-10-06T21:00"], // Tuesday's night session until 06:00 JST
+      ["pts", "2026-10-06T23:20", "2026-10-07T00:00"],
+      ["regular", "2026-10-07T00:00", "2026-10-07T02:30"],
+      ["lunch", "2026-10-07T02:30", "2026-10-07T03:30"],
+      ["regular", "2026-10-07T03:30", "2026-10-07T06:30"],
+      ["pts", "2026-10-07T06:30", "2026-10-07T07:30"],
+      ["pts", "2026-10-07T08:00", "2026-10-07T15:00"],
+    ]);
+  });
+
+  it("lists US pre-market, regular and after-hours in New York time, with early closes", () => {
+    const normal = marketSessionWindows("US", Date.parse("2026-10-07T00:00:00Z"), Date.parse("2026-10-08T00:00:00Z"));
+    expect(normal.map((item) => [item.kind, iso(item.start), iso(item.end)])).toEqual([
+      ["pre_market", "2026-10-07T08:00", "2026-10-07T13:30"],
+      ["regular", "2026-10-07T13:30", "2026-10-07T20:00"],
+      ["after_hours", "2026-10-07T20:00", "2026-10-08T00:00"],
+    ]);
+    const thanksgivingFriday = marketSessionWindows("US", Date.parse("2026-11-27T12:00:00Z"), Date.parse("2026-11-28T02:00:00Z"));
+    expect(thanksgivingFriday.map((item) => [item.kind, iso(item.end)])).toEqual([
+      ["pre_market", "2026-11-27T14:30"], ["regular", "2026-11-27T18:00"], ["after_hours", "2026-11-27T22:00"],
+    ]);
+  });
+
+  it("has nothing on weekends and holidays", () => {
+    expect(marketSessionWindows("JP", Date.parse("2026-10-10T00:00:00Z"), Date.parse("2026-10-11T00:00:00Z"))).toEqual([]);
+    expect(marketSessionWindows("JP", Date.parse("2026-10-12T00:00:00Z"), Date.parse("2026-10-12T10:00:00Z"))).toEqual([]); // スポーツの日
   });
 });

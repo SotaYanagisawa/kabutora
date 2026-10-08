@@ -308,3 +308,54 @@ export function selectReliableMarketSessions(
   const server = serverCalculated.filter(wanted);
   return server.length === expectedCount && server.every((status) => status.session !== "unknown") ? server : local;
 }
+
+export type SessionWindowKind = "regular" | "pre_market" | "after_hours" | "pts" | "lunch";
+
+/** One trading-session interval in unix ms, for drawing session bands on an intraday chart. */
+export type SessionWindow = { market: MarketRegion; kind: SessionWindowKind; start: number; end: number };
+
+/** [start minute, end minute (may pass 24:00), kind] of one business day, local exchange time. */
+const JP_DAY: Array<[number, number, SessionWindowKind]> = [
+  [8 * 60 + 20, 9 * 60, "pts"],
+  [9 * 60, 11 * 60 + 30, "regular"],
+  [11 * 60 + 30, 12 * 60 + 30, "lunch"],
+  [12 * 60 + 30, 15 * 60 + 30, "regular"],
+  [15 * 60 + 30, 16 * 60 + 30, "pts"],
+  [17 * 60, 30 * 60, "pts"], // Japannext night session until 06:00 the next morning
+];
+
+function usDay(ymd: string): Array<[number, number, SessionWindowKind]> {
+  const early = Boolean(NYSE_EARLY_CLOSES[ymd]);
+  return [
+    [4 * 60, 9 * 60 + 30, "pre_market"],
+    [9 * 60 + 30, early ? 13 * 60 : 16 * 60, "regular"],
+    [early ? 13 * 60 : 16 * 60, early ? 17 * 60 : 20 * 60, "after_hours"],
+  ];
+}
+
+/**
+ * Session intervals of `market` overlapping [fromMs, toMs]: JP pre-open PTS, TSE morning, lunch break,
+ * TSE afternoon, post-close PTS and the Japannext night session; US pre-market, regular and
+ * after-hours. Weekends and exchange holidays have none; US early closes are shortened.
+ */
+export function marketSessionWindows(market: MarketRegion, fromMs: number, toMs: number): SessionWindow[] {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) return [];
+  const zone = market === "JP" ? "Asia/Tokyo" : "America/New_York";
+  // Start a day early: the previous evening's night session can reach into the range.
+  let ymd = shiftedYmd(localClock(new Date(fromMs), zone), -1);
+  const last = localClock(new Date(toMs), zone).ymd;
+  const windows: SessionWindow[] = [];
+  for (let guard = 0; ymd <= last && guard < 40; guard += 1) {
+    if (isBusinessDay(ymd, market)) {
+      const midnight = Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10)));
+      const offset = market === "JP" ? 9 * 60 : newYorkUtcOffset(new Date(midnight + 12 * 3_600_000));
+      for (const [startMinute, endMinute, kind] of market === "JP" ? JP_DAY : usDay(ymd)) {
+        const start = Math.max(fromMs, midnight + (startMinute - offset) * 60_000);
+        const end = Math.min(toMs, midnight + (endMinute - offset) * 60_000);
+        if (end > start) windows.push({ market, kind, start, end });
+      }
+    }
+    ymd = shiftedYmd(clockAtUtcOffset(utcDateFromYmd(ymd), 0), 1);
+  }
+  return windows;
+}

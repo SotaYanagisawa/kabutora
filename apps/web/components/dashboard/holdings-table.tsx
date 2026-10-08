@@ -3,14 +3,17 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { companyDisplayName, shortSecurityDisplayName } from "@/lib/ui/company-name";
 import { marketDisplayName } from "@/lib/market/market-label";
 import { isUsSecurity } from "@/lib/portfolio/portfolio-filter";
+import { exchangeTimeZone, marketDateTimeLabel } from "@/lib/charts/market-time";
 import { freshnessLabel, HIDDEN_AMOUNT } from "./constants";
 import {
   compactMoney,
   compactPrice,
-  formatWidgetFetchedTime,
+  compactQuoteTime,
+  compactSignedPercent,
   isFundSecurity,
   maybeMoney,
   maybeSignedMoney,
+  quoteSessionLabel,
   quoteTradeSourceLabel,
   signedPercent,
 } from "./helpers";
@@ -197,14 +200,20 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
     ? (secDisplaySymbol && !secDisplaySymbol.startsWith("fund-") && !secDisplaySymbol.startsWith("JP") ? secDisplaySymbol : "投資信託")
     : `${secDisplaySymbol}${mktLabel ? ` · ${mktLabel}` : ""}`;
 
-  const fetchedTime = formatWidgetFetchedTime(
-    quote?.fetchedAt,
-    quote?.marketTimestamp,
-    stockMic,
-    stockTz,
-    stockCurrency,
-    sec?.country,
-  );
+  const timeZone = exchangeTimeZone(stockMic, stockTz, stockCurrency, sec?.country);
+  const fetchedTime = compactQuoteTime(quote?.marketTimestamp ?? quote?.fetchedAt, timeZone);
+  const sessionLabel = quote ? quoteSessionLabel(quote) : null;
+  const extended = quote?.extendedChangeRatio;
+  // The full source, date, time and zone (and the regular close an extended trade moved from) live in the title.
+  const statusTitle = quote
+    ? [
+      `${quoteTradeSourceLabel(quote)} ${marketDateTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency, sec?.country)}`,
+      quote.regularPrice != null && quote.regularTimestamp
+        ? `${quote.venueCode === "JNX" ? "東証終値" : quote.session === "pre_market" ? "前日終値" : "終値"} ${maybeMoney(quote.regularPrice, rowCurrency)}（${marketDateTimeLabel(quote.regularTimestamp, stockMic, stockTz, stockCurrency, sec?.country)}）`
+        : "",
+      quote.freshness === "near_live" ? "" : freshnessLabel[quote.freshness],
+    ].filter(Boolean).join(" · ")
+    : "価格未取得";
 
   return (
     <tr
@@ -220,62 +229,52 @@ const FastHoldingsTableRow = memo(function FastHoldingsTableRow({
       aria-label={onSelect ? `${secName}の詳細を開く` : undefined}
     >
       <td className="widget-card-cell" colSpan={7}>
-        {/* Row 1: Primary Name (JP company short name / US ticker) + Fetched Time (top right) */}
+        {/* Left edge, top to bottom: name, code, price, day change, gain. Right edge: extended-hours move, time, gain amount. */}
         <div className="widget-card-row widget-row-header">
-          <div className="security-col widget-ticker-wrap">
-            <strong className="widget-ticker" title={secLegalName}>{primaryName}</strong>
-          </div>
-          <div
-            className="widget-time-group"
-            title={
-              quote
-                ? `${quote.freshness === "near_live" ? "" : `${freshnessLabel[quote.freshness]} · `}${fetchedTime ? `${quoteTradeSourceLabel(quote)} ${fetchedTime}` : ""}`
-                : "価格未取得"
-            }
-          >
-            <span className={`quote-dot ${quote?.freshness ?? "missing"}`} />
-            <span className="widget-fetched-time">
-              {fetchedTime ?? "未取得"}
-            </span>
-          </div>
+          <strong className="widget-ticker" title={secLegalName}>{primaryName}</strong>
         </div>
 
-        {/* Row 2: Secondary line (JP: ticker/exchange, US: company name, Fund: type) */}
+        {/* Code · market and the update time; during PTS / after-hours the session move replaces the time. */}
         <div className="widget-card-row widget-row-sub">
-          <span className="widget-sec-name" title={secLegalName}>
-            {secondarySubtitle}
-          </span>
+          <span className="widget-sec-name" title={secLegalName}>{extended != null && sessionLabel ? (isUs ? "" : secDisplaySymbol) : secondarySubtitle}</span>
+          {extended != null && sessionLabel ? (
+            <span className="widget-row-status extended" title={statusTitle}>
+              <b className="widget-status-label">{sessionLabel}</b>
+              <span className={`widget-status-change ${extended > 0 ? "up" : extended < 0 ? "down" : ""}`}>{signedPercent(extended)}</span>
+            </span>
+          ) : (
+            <span className="widget-row-time" title={statusTitle}>
+              <span className={`quote-dot ${quote?.freshness ?? "missing"}`} aria-hidden="true" />
+              <span className="widget-fetched-time">{fetchedTime ?? "未取得"}</span>
+            </span>
+          )}
         </div>
 
-        {/* Row 3: Current Stock Price (left, smaller) + Daily Change % (right, HERO metric, bold) */}
+        {/* The price has the whole card width to itself. */}
         <div className="widget-card-row widget-row-price">
           <div className="price-col widget-price">
             <strong title={maybeMoney(holding.price, rowCurrency)}>
               {compactPrice(holding.price, rowCurrency)}
             </strong>
           </div>
-          <div className={`day-col widget-day-val ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
-            <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
-          </div>
         </div>
 
-        {/* Row 4: Total Gain/Loss (return % + compact currency amount) */}
-        <div className="widget-card-row widget-row-gain">
-          <div className={`gain-col widget-total-gain ${gain == null ? "" : gain >= 0 ? "up" : "down"}`}>
-            <div className="widget-gain-left">
-              <span className="widget-gain-label">損益</span>
-              <strong className="widget-gain-percent">
-                {gainPercent == null ? "—" : signedPercent(gainPercent, 1)}
-              </strong>
-            </div>
-            <small
-              className="widget-gain-amount"
-              aria-label={amountsVisible ? undefined : "金額非表示"}
-              title={amountsVisible ? (gain == null ? undefined : maybeSignedMoney(gain, rowCurrency)) : undefined}
-            >
-              {amountsVisible ? (gain == null ? "" : compactMoney(gain, rowCurrency, true)) : HIDDEN_AMOUNT}
-            </small>
-          </div>
+        <div className={`widget-card-row widget-row-day day-col widget-day-val ${day == null ? "" : day >= 0 ? "up" : "down"}`}>
+          <strong>{dayPercent == null ? "—" : signedPercent(dayPercent)}</strong>
+        </div>
+
+        <div className={`widget-card-row widget-row-gain gain-col widget-total-gain ${gain == null ? "" : gain >= 0 ? "up" : "down"}`}>
+          <span className="widget-gain-left">
+            <span className="widget-gain-label">損益</span>
+            <strong className="widget-gain-percent">{compactSignedPercent(gainPercent)}</strong>
+          </span>
+          <small
+            className="widget-gain-amount"
+            aria-label={amountsVisible ? undefined : "金額非表示"}
+            title={amountsVisible ? (gain == null ? undefined : maybeSignedMoney(gain, rowCurrency)) : undefined}
+          >
+            {amountsVisible ? (gain == null ? "" : compactMoney(gain, rowCurrency, true)) : HIDDEN_AMOUNT}
+          </small>
         </div>
       </td>
     </tr>

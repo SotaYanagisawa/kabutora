@@ -12,6 +12,10 @@ import { marketKey, splitFactorAfter, type DailyHistory, type IntradaySeries, ty
  * 3. Money is converted with USD/JPY on the trade date for cost and on the valuation date for value.
  *
  * Plain float64 throughout; values are rounded only for display. Quantities below 1e-9 are zero.
+ *
+ * Speed: a price poll changes quotes only. `withQuotes` re-prices a book without rebuilding it, and the
+ * quote-independent results (dividend receipts, every past day of the value history) are cached on the
+ * book's trades, so a poll recomputes today's numbers alone.
  */
 
 export type Currency = "JPY" | "USD";
@@ -165,6 +169,39 @@ export function buildBook<T extends LedgerTransaction>(
 
 const compare = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
+/** The same book priced with newer quotes and intraday series. Trades and history are shared, so cached results stay valid. */
+export function withQuotes<T extends LedgerTransaction>(book: Book<T>, market: Pick<MarketData, "quotes" | "intraday">): Book<T> {
+  return { ...book, market: { ...book.market, quotes: market.quotes, intraday: market.intraday } };
+}
+
+// ---- Cache ---------------------------------------------------------------------------------------
+
+type CacheEntry = { deps: readonly unknown[]; value: unknown };
+const caches = new WeakMap<object, Map<string, CacheEntry[]>>();
+const CACHE_ENTRIES = 4;
+const includeAll = () => true;
+
+/**
+ * Memoizes a pure result on `owner` (a book's trade list). An entry is reused only while every
+ * dependency is identical (Object.is); a few entries per name are kept, most recent first.
+ */
+function memo<V>(owner: object, name: string, deps: readonly unknown[], compute: () => V): V {
+  let byName = caches.get(owner);
+  if (!byName) caches.set(owner, byName = new Map());
+  const entries = byName.get(name) ?? [];
+  const index = entries.findIndex((entry) => entry.deps.length === deps.length && entry.deps.every((dep, position) => Object.is(dep, deps[position])));
+  if (index >= 0) {
+    const [hit] = entries.splice(index, 1);
+    entries.unshift(hit);
+    return hit.value as V;
+  }
+  const value = compute();
+  entries.unshift({ deps, value });
+  if (entries.length > CACHE_ENTRIES) entries.length = CACHE_ENTRIES;
+  byName.set(name, entries);
+  return value;
+}
+
 // ---- Currency ------------------------------------------------------------------------------------
 
 export function fxRateOn(fx: Fx, date: string): number | null {
@@ -227,6 +264,15 @@ export type Holding = {
   dayGain: number | null;
   /** Price change of one unit since the previous close. */
   dayChangeRatio: number | null;
+  /**
+   * Present when the price is a pre-market, after-hours or PTS trade (`quote.regularPrice`): the day
+   * splits into the regular session (previous close → regular price) and the extended session
+   * (regular price → latest price). `extendedGain` + `regularGain` = `dayGain`.
+   */
+  regularChangeRatio?: number;
+  extendedChangeRatio?: number;
+  regularGain?: number;
+  extendedGain?: number;
   /** Any trade of this security was converted by a split. */
   splitAdjusted: boolean;
   quote?: Quote;
@@ -362,6 +408,8 @@ export function valuePortfolio<T extends LedgerTransaction>(book: Book<T>, optio
     const previousClose = quote && previousNative != null ? convert(previousNative, quote.currency, currency, fx.previous ?? fx.now) : null;
     const marketValue = price == null ? null : (quantity * price) / unit;
     const dayGain = marketValue != null && previousClose != null ? marketValue - (quantityBefore * previousClose) / unit - flowsToday : null;
+    const regularPrice = quote?.regularPrice != null ? convert(quote.regularPrice, quote.currency, currency, fx.now) : null;
+    const extendedGain = marketValue != null && regularPrice != null ? marketValue - (quantity * regularPrice) / unit : null;
     holdings.push({
       securityId,
       key: trades[0].key,
@@ -377,6 +425,12 @@ export function valuePortfolio<T extends LedgerTransaction>(book: Book<T>, optio
       dividendIncome,
       dayGain,
       dayChangeRatio: quote && previousNative ? quote.price / previousNative - 1 : null,
+      ...(quote?.regularPrice != null ? {
+        extendedChangeRatio: quote.price / quote.regularPrice - 1,
+        ...(previousNative ? { regularChangeRatio: quote.regularPrice / previousNative - 1 } : {}),
+        ...(extendedGain != null ? { extendedGain } : {}),
+        ...(extendedGain != null && dayGain != null ? { regularGain: dayGain - extendedGain } : {}),
+      } : {}),
       splitAdjusted: trades.some((trade) => trade.splitFactor !== 1),
       ...(quote ? { quote } : {}),
     });
@@ -420,9 +474,18 @@ export type DividendReceipt = {
   currency: string;
 };
 
-/** Units held per account at the end of the day before each ex-date, times the per-unit amount. */
+/**
+ * Units held per account at the end of the day before each ex-date, times the per-unit amount.
+ * Independent of quotes, so cached per book (see `withQuotes`); treat the result as read-only.
+ */
 export function dividendReceipts<T extends LedgerTransaction>(book: Book<T>, options: Pick<ValuationOptions<T>, "target" | "fx" | "today" | "include">): DividendReceipt[] {
-  const include = options.include ?? (() => true);
+  const include = options.include ?? includeAll;
+  return memo(book.trades, `receipts:${options.target}`, [options.today, include, options.fx.dates, options.fx.closes, book.market.history, book.securities],
+    () => computeDividendReceipts(book, { ...options, include }));
+}
+
+function computeDividendReceipts<T extends LedgerTransaction>(book: Book<T>, options: Pick<ValuationOptions<T>, "target" | "fx" | "today"> & { include: (trade: Trade<T>) => boolean }): DividendReceipt[] {
+  const { include } = options;
   const receipts: DividendReceipt[] = [];
   for (const [securityId, allTrades] of book.bySecurity) {
     const trades = allTrades.filter(include);
@@ -479,6 +542,7 @@ export type HistoryPoint = {
 };
 
 type SecurityCursor = {
+  key: string;
   dates: readonly string[];
   closes: readonly number[];
   index: number;
@@ -486,83 +550,112 @@ type SecurityCursor = {
   fallback: number | null;
   unit: number;
   native: string;
-  quote?: Quote;
 };
 
-/**
- * Daily portfolio value from the first included trade until `today`. The last point uses live quotes,
- * so it equals `valuePortfolio(...).summary.totalValue`.
- */
-export function portfolioHistory<T extends LedgerTransaction>(book: Book<T>, options: ValuationOptions<T>): HistoryPoint[] {
-  const { target, fx, today } = options;
-  const include = options.include ?? (() => true);
+/** Running state of the daily value walk: positions, cumulative dividends and per-security close cursors. */
+type HistoryState<T extends LedgerTransaction> = {
+  trades: Trade<T>[];
+  receipts: DividendReceipt[];
+  groups: Map<string, PositionState>;
+  quantities: Map<string, number>;
+  cursors: Map<string, SecurityCursor>;
+  tradeIndex: number;
+  receiptIndex: number;
+  dividends: number;
+  capital: number;
+};
+
+const cloneHistoryState = <T extends LedgerTransaction>(state: HistoryState<T>): HistoryState<T> => ({
+  ...state,
+  groups: new Map([...state.groups].map(([key, value]) => [key, { ...value }])),
+  quantities: new Map(state.quantities),
+  cursors: new Map([...state.cursors].map(([key, value]) => [key, { ...value }])),
+});
+
+/** Applies the trades and dividends up to `date` and values the positions; `quotes` prices today's point. */
+function historyPoint<T extends LedgerTransaction>(state: HistoryState<T>, date: string, target: Target, fx: Fx, quotes?: ReadonlyMap<string, Quote>): HistoryPoint {
+  const { trades, receipts, groups, quantities, cursors } = state;
+  while (state.tradeIndex < trades.length && trades[state.tradeIndex].date <= date) {
+    const trade = trades[state.tradeIndex++];
+    const cursor = cursors.get(trade.securityId)!;
+    const currency = targetCurrency(target, cursor.native);
+    const tradeRate = fxRateOn(fx, trade.date);
+    const amount = convert(trade.amount, trade.currency, currency, tradeRate);
+    const execution = convert(trade.amount / trade.quantity, trade.currency, cursor.native, tradeRate);
+    if (execution != null && Number.isFinite(execution)) cursor.fallback = execution * cursor.unit;
+    if (amount == null) continue;
+    const positionKey = `${trade.securityId}\u0000${trade.group}`;
+    let position = groups.get(positionKey);
+    if (!position) groups.set(positionKey, position = { quantity: 0, cost: 0, realized: 0 });
+    const quantityBefore = position.quantity;
+    state.capital -= position.cost;
+    applyTrade(position, trade.side, trade.quantity, amount);
+    state.capital += position.cost;
+    quantities.set(trade.securityId, (quantities.get(trade.securityId) ?? 0) + position.quantity - quantityBefore);
+  }
+  while (state.receiptIndex < receipts.length && receipts[state.receiptIndex].recognitionDate <= date) {
+    state.dividends += receipts[state.receiptIndex++].amount ?? 0;
+  }
+  let value = 0;
+  const rate = fxRateOn(fx, date);
+  for (const [securityId, cursor] of cursors) {
+    while (cursor.index + 1 < cursor.dates.length && cursor.dates[cursor.index + 1] <= date) cursor.index += 1;
+    const quantity = quantities.get(securityId) ?? 0;
+    if (quantity <= EPSILON) continue;
+    const quote = quotes?.get(cursor.key);
+    const close = quote ? quote.price : cursor.index >= 0 ? cursor.closes[cursor.index] : cursor.fallback;
+    if (close == null) continue;
+    const nativeValue = (quantity * close) / cursor.unit;
+    const converted = convert(nativeValue, quote ? quote.currency : cursor.native, targetCurrency(target, cursor.native), quote ? fx.now : rate);
+    if (converted != null) value += converted;
+  }
+  return { date, value, capital: state.capital, dividendAdjustedValue: value + state.dividends };
+}
+
+/** Every daily point before `today` and the state after it. Quote-independent, so cached per book. */
+function pastHistory<T extends LedgerTransaction>(book: Book<T>, options: ValuationOptions<T> & { include: (trade: Trade<T>) => boolean }) {
+  const { target, fx, today, include } = options;
   const trades = book.trades.filter(include);
-  if (!trades.length) return [];
+  if (!trades.length || trades[0].date > today) return null;
   const first = trades[0].date;
-  const dates = new Set<string>([today]);
+  const dates = new Set<string>();
   const cursors = new Map<string, SecurityCursor>();
   for (const trade of trades) {
     dates.add(trade.date);
     if (cursors.has(trade.securityId)) continue;
     const history = book.market.history.get(trade.key);
     const security = book.securities.get(trade.securityId);
-    for (const date of history?.dates ?? []) if (date >= first && date <= today) dates.add(date);
+    for (const date of history?.dates ?? []) if (date >= first && date < today) dates.add(date);
     cursors.set(trade.securityId, {
+      key: trade.key,
       dates: history?.dates ?? [],
       closes: history?.closes ?? [],
       index: -1,
       fallback: null,
       unit: priceUnitOf(security),
       native: nativeCurrencyOf(security, trade.securityId),
-      quote: book.market.quotes.get(trade.key),
     });
   }
-  const axis = [...dates].filter((date) => date >= first && date <= today).sort();
-  const receipts = dividendReceipts(book, options);
-  const groups = new Map<string, PositionState>();
-  const quantities = new Map<string, number>();
-  let tradeIndex = 0;
-  let receiptIndex = 0;
-  let dividends = 0;
-  let capital = 0;
-  const points: HistoryPoint[] = [];
-  for (const date of axis) {
-    while (tradeIndex < trades.length && trades[tradeIndex].date <= date) {
-      const trade = trades[tradeIndex++];
-      const cursor = cursors.get(trade.securityId)!;
-      const currency = targetCurrency(target, cursor.native);
-      const amount = convert(trade.amount, trade.currency, currency, fxRateOn(fx, trade.date));
-      const execution = convert(trade.amount / trade.quantity, trade.currency, cursor.native, fxRateOn(fx, trade.date));
-      if (execution != null && Number.isFinite(execution)) cursor.fallback = execution * cursor.unit;
-      if (amount == null) continue;
-      const positionKey = `${trade.securityId}\u0000${trade.group}`;
-      let state = groups.get(positionKey);
-      if (!state) groups.set(positionKey, state = { quantity: 0, cost: 0, realized: 0 });
-      const quantityBefore = state.quantity;
-      capital -= state.cost;
-      applyTrade(state, trade.side, trade.quantity, amount);
-      capital += state.cost;
-      quantities.set(trade.securityId, (quantities.get(trade.securityId) ?? 0) + state.quantity - quantityBefore);
-    }
-    while (receiptIndex < receipts.length && receipts[receiptIndex].recognitionDate <= date) {
-      dividends += receipts[receiptIndex++].amount ?? 0;
-    }
-    let value = 0;
-    const rate = fxRateOn(fx, date);
-    for (const [securityId, cursor] of cursors) {
-      while (cursor.index + 1 < cursor.dates.length && cursor.dates[cursor.index + 1] <= date) cursor.index += 1;
-      const quantity = quantities.get(securityId) ?? 0;
-      if (quantity <= EPSILON) continue;
-      const live = date === today && cursor.quote;
-      const close = live ? cursor.quote!.price : cursor.index >= 0 ? cursor.closes[cursor.index] : cursor.fallback;
-      if (close == null) continue;
-      const nativeValue = (quantity * close) / cursor.unit;
-      const converted = convert(nativeValue, live ? cursor.quote!.currency : cursor.native, targetCurrency(target, cursor.native), live ? fx.now : rate);
-      if (converted != null) value += converted;
-    }
-    points.push({ date, value, capital, dividendAdjustedValue: value + dividends });
-  }
-  return points;
+  const state: HistoryState<T> = {
+    trades, receipts: dividendReceipts(book, options), groups: new Map(), quantities: new Map(), cursors,
+    tradeIndex: 0, receiptIndex: 0, dividends: 0, capital: 0,
+  };
+  const points = [...dates].filter((date) => date < today).sort().map((date) => historyPoint(state, date, target, fx));
+  return { points, state };
+}
+
+/**
+ * Daily portfolio value from the first included trade until `today`. The last point uses live quotes,
+ * so it equals `valuePortfolio(...).summary.totalValue`. Past days are cached per book; a call with
+ * new quotes (see `withQuotes`) computes only today's point.
+ */
+export function portfolioHistory<T extends LedgerTransaction>(book: Book<T>, options: ValuationOptions<T>): HistoryPoint[] {
+  const { target, fx, today } = options;
+  const include = options.include ?? includeAll;
+  const past = memo(book.trades, `history:${target}`, [today, include, fx.dates, fx.closes, book.market.history, book.securities],
+    () => pastHistory(book, { ...options, include }));
+  if (!past) return [];
+  return [...past.points, historyPoint(cloneHistoryState(past.state), today, target, fx, book.market.quotes)];
 }
 
 /**
@@ -609,24 +702,32 @@ export function intradayHistory<T extends LedgerTransaction>(book: Book<T>, opti
   const dividendTotal = valuation.summary.dividendIncome;
   const points: HistoryPoint[] = [];
   const cursors = series.map(() => -1);
+  // Axis times ascend, so each series' trade-date step only moves forward.
+  const steps = series.map(() => -1);
+  const zoneDates = new Map<string, string[]>();
+  for (const item of series) if (!zoneDates.has(item.zone)) zoneDates.set(item.zone, axis.map((time) => dateInZone(time * 1000, item.zone)));
+  const tokyoDates = zoneDates.get("Asia/Tokyo") ?? axis.map((time) => dateInZone(time * 1000, "Asia/Tokyo"));
   let fxCursor = -1;
-  for (const time of axis) {
+  for (let at = 0; at < axis.length; at += 1) {
+    const time = axis[at];
     while (fxCursor + 1 < fxTimes.length && fxTimes[fxCursor + 1] <= time) fxCursor += 1;
-    const rate = fxCursor >= 0 ? fxPrices[fxCursor] : fxRateOn(fx, dateInZone(time * 1000, "Asia/Tokyo")) ?? fx.now;
+    const rate = fxCursor >= 0 ? fxPrices[fxCursor] : fxRateOn(fx, tokyoDates[at]) ?? fx.now;
     let value = 0;
-    series.forEach((item, index) => {
+    for (let index = 0; index < series.length; index += 1) {
+      const item = series[index];
       const prices = item.prices;
       if (!prices?.times.length) {
         value += item.holding.marketValue ?? 0;
-        return;
+        continue;
       }
       while (cursors[index] + 1 < prices.times.length && prices.times[cursors[index] + 1] <= time) cursors[index] += 1;
       const price = prices.prices[Math.max(0, cursors[index])];
-      const step = lastIndexAtOrBefore(item.stepDates, dateInZone(time * 1000, item.zone));
-      const quantity = step >= 0 ? item.stepQuantities[step] : 0;
+      const date = zoneDates.get(item.zone)![at];
+      while (steps[index] + 1 < item.stepDates.length && item.stepDates[steps[index] + 1] <= date) steps[index] += 1;
+      const quantity = steps[index] >= 0 ? item.stepQuantities[steps[index]] : 0;
       const converted = convert((quantity * price) / item.unit, item.native, targetCurrency(target, item.native), rate);
       value += converted ?? 0;
-    });
+    }
     points.push({ date: new Date(time * 1000).toISOString(), value, capital: valuation.summary.costBasis, dividendAdjustedValue: value + dividendTotal });
   }
   points.push({

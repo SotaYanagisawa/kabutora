@@ -19,6 +19,11 @@ const HISTORY_KEY = MARKET_HISTORY_KEY;
 const CLOSED_MARKET_POLL_MS = 5 * 60_000;
 const HISTORY_RETRY_MS = 5_000;
 const HISTORY_MAX_RETRIES = 8;
+/** The server answers from memory and refreshes behind the answer; older quotes are re-read soon after. */
+const STALE_QUOTES_SECONDS = 10;
+const STALE_FOLLOW_UP_MS = 1_500;
+const NO_DATES: readonly string[] = [];
+const NO_CLOSES: readonly number[] = [];
 
 type StoredSnapshot = { savedAt: number; etag: string | null; payload: SnapshotPayload; intraday: Record<string, PackedSeries> };
 type StoredHistory = { savedAt: number; etag: string | null; payload: HistoryPayload };
@@ -89,6 +94,7 @@ export function useMarketData(options: MarketDataOptions) {
   const historyRef = useRef({ etag: initialHistory?.etag ?? null as string | null, revision: initialHistory?.payload.revision ?? "", from: initialHistory?.payload.from ?? "", retries: 0, inFlight: null as Promise<void> | null });
   const intradayRef = useRef(initialSnapshot?.intraday ?? {});
   const snapshotInFlight = useRef<Promise<MarketLoadResult> | null>(null);
+  const followUp = useRef({ timer: null as number | null, at: 0 });
   const historyFromRef = useRef(historyFrom);
   historyFromRef.current = historyFrom;
 
@@ -144,6 +150,19 @@ export function useMarketData(options: MarketDataOptions) {
     return payload.quotes.length >= payload.catalog.length ? "updated" as const : "partial" as const;
   }, [loadHistory, persist]);
 
+  // Quotes the server had not refreshed yet (it refreshes after answering): read again shortly, once.
+  const scheduleFollowUp = (payload: SnapshotPayload) => {
+    let newest = 0;
+    for (const quote of payload.quotes) if (quote.fetchedAt > newest) newest = quote.fetchedAt;
+    const now = Date.now();
+    if (!newest || payload.generatedAt - newest <= STALE_QUOTES_SECONDS || followUp.current.timer != null || now - followUp.current.at < 30_000) return;
+    followUp.current.at = now;
+    followUp.current.timer = window.setTimeout(() => {
+      followUp.current.timer = null;
+      if (document.visibilityState === "visible") void loadSnapshotRef.current();
+    }, STALE_FOLLOW_UP_MS);
+  };
+
   const loadSnapshot = useCallback((force = false): Promise<MarketLoadResult> => {
     if (snapshotInFlight.current && !force) return snapshotInFlight.current;
     const task = (async (): Promise<MarketLoadResult> => {
@@ -155,6 +174,7 @@ export function useMarketData(options: MarketDataOptions) {
         if (result.status === 200) {
           // A prefetched response may lack intraday for our revision; it always carries quotes.
           outcome = applySnapshot(result.payload, result.etag);
+          scheduleFollowUp(result.payload);
         } else setUpdatedAt(Date.now());
         setQuoteStatus(outcome === "updated" ? "ready" : "partial");
         setMarketError("");
@@ -167,7 +187,10 @@ export function useMarketData(options: MarketDataOptions) {
     })().finally(() => { if (snapshotInFlight.current === task) snapshotInFlight.current = null; });
     snapshotInFlight.current = task;
     return task;
-  }, [applySnapshot]);
+  }, [applySnapshot]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadSnapshotRef = useRef(loadSnapshot);
+  loadSnapshotRef.current = loadSnapshot;
+  useEffect(() => () => { if (followUp.current.timer != null) window.clearTimeout(followUp.current.timer); }, []);
 
   // First load: snapshot (possibly prefetched) and history in parallel.
   useEffect(() => {
@@ -247,7 +270,8 @@ export function useMarketData(options: MarketDataOptions) {
     const usdJpy = snapshot?.benchmarks.find((item) => item.id === "usd-jpy");
     const now = quote?.price ?? usdJpy?.value ?? daily?.closes.at(-1) ?? null;
     const previous = quote?.previousClose ?? (usdJpy?.changeRatio != null && now ? now / (1 + usdJpy.changeRatio) : null) ?? now;
-    return { now, previous, dates: daily?.dates ?? [], closes: daily?.closes ?? [], ...(intradaySeries.get(FX_KEY) ? { intraday: intradaySeries.get(FX_KEY) } : {}) };
+    // Same arrays across polls: the engine caches past results by their identity.
+    return { now, previous, dates: daily?.dates ?? NO_DATES, closes: daily?.closes ?? NO_CLOSES, ...(intradaySeries.get(FX_KEY) ? { intraday: intradaySeries.get(FX_KEY) } : {}) };
   }, [histories, intradaySeries, quotes, snapshot?.benchmarks]);
   const benchmarks: Benchmark[] = useMemo(() => snapshot?.benchmarks ?? [], [snapshot?.benchmarks]);
 

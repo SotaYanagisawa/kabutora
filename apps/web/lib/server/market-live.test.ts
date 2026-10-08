@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { unpackHistory } from "../market/market-wire";
 import { MarketService, MemoryMarketStore } from "./market-service";
 import { searchSecurities } from "./market-search";
+import { Budget, ptsWindowAt } from "./market-upstream";
 
 /** Real providers (network). Run with `pnpm check:live`. */
 const live = process.env.KABUTORA_LIVE === "1";
@@ -34,6 +35,15 @@ describe.skipIf(!live)("live market providers", () => {
     started = performance.now();
     const warm = await service.snapshot({ intradayRevision: snapshot.intradayRevision });
     console.log(`warm snapshot ${Math.round(performance.now() - started)} ms, intraday ${warm.intraday ? "resent" : "omitted"}`);
+
+    // During a Japannext night session, heavily traded Japanese stocks are quoted from PTS against the TSE close.
+    if (ptsWindowAt(Date.now())?.venue === "night") {
+      await service.tick(new Budget(45));
+      const pts = (await service.snapshot()).quotes.filter((quote) => quote.venue === "JNX");
+      console.log(`PTS quotes: ${pts.map((quote) => `${quote.key} ${quote.price} (TSE ${quote.regularPrice})`).join(", ")}`);
+      expect(pts.length).toBeGreaterThan(0);
+      for (const quote of pts) expect(quote).toMatchObject({ session: "pts_night", regularPrice: expect.any(Number) });
+    }
 
     const response = await searchSecurities(new Request("http://local/search", { method: "POST", body: JSON.stringify({ q: "キオクシア" }) }));
     const { results } = await response.json() as { results: Array<{ id: string }> };

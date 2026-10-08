@@ -13,6 +13,8 @@ export type FakeSecurity = {
   price: number;
   previousClose: number;
   name?: string;
+  /** Unix seconds of the last regular-session trade; defaults to two minutes ago. */
+  time?: number;
 };
 
 export type FakeFund = { name: string; closes: Array<[date: string, close: number]>; distributions?: Array<[date: string, amount: number]> };
@@ -21,8 +23,10 @@ export type FakeUpstreamOptions = {
   now: () => number;
   securities: Record<string, FakeSecurity>;
   funds?: Record<string, FakeFund>;
-  /** Japannext last prices by 4-character code. */
-  pts?: Record<string, number>;
+  /** Japannext last prices (or last price and cumulative volume) by 4-character code. Read on every request. */
+  pts?: Record<string, number | { last: number; volume: number }>;
+  /** Last-Modified of the Japannext file, unix ms; defaults to 30 s ago. */
+  ptsModifiedAt?: () => number;
   latencyMs?: number;
 };
 
@@ -32,7 +36,7 @@ const HOSTS = new Set(["query1.finance.yahoo.com", "query2.finance.yahoo.com", "
 const barTime = (date: string, zone: FakeSecurity["zone"]) => Date.parse(`${date}T${zone === "Asia/Tokyo" ? "00:00" : "13:30"}:00Z`) / 1000;
 
 export function createFakeUpstream(options: FakeUpstreamOptions) {
-  const state = { calls: 0, fail: false, byPath: new Map<string, number>() };
+  const state = { calls: 0, fail: false, latencyMs: options.latencyMs ?? 0, byPath: new Map<string, number>() };
   const count = (key: string) => state.byPath.set(key, (state.byPath.get(key) ?? 0) + 1);
 
   function spark(symbols: string[], range: string) {
@@ -44,7 +48,8 @@ export function createFakeUpstream(options: FakeUpstreamOptions) {
           if (!security) return [];
           const step = range === "5d" ? 900 : 300;
           const points = range === "5d" ? 40 : 12;
-          const timestamp = Array.from({ length: points }, (_, index) => now - 120 - (points - 1 - index) * step);
+          const last = security.time ?? now - 120;
+          const timestamp = Array.from({ length: points }, (_, index) => last - (points - 1 - index) * step);
           return [{
             symbol,
             response: [{
@@ -52,7 +57,7 @@ export function createFakeUpstream(options: FakeUpstreamOptions) {
                 currency: security.currency,
                 shortName: security.name ?? symbol,
                 regularMarketPrice: security.price,
-                regularMarketTime: now - 120,
+                regularMarketTime: last,
                 previousClose: security.previousClose,
                 chartPreviousClose: security.previousClose,
                 exchangeTimezoneName: security.zone,
@@ -133,8 +138,11 @@ export function createFakeUpstream(options: FakeUpstreamOptions) {
     }
     if (url.hostname === "www.japannext.co.jp") {
       count("pts");
-      const rows = Object.entries(options.pts ?? {}).map(([code, last], index) => `mdata[ ${index} ] = [ "${code}", "", "", "", "${last}", "${last}", "${last}", "${last}", "1200" ];`);
-      return new Response(rows.join("\n"), { headers: { "Last-Modified": new Date(options.now() - 30_000).toUTCString() } });
+      const rows = Object.entries(options.pts ?? {}).map(([code, value], index) => {
+        const { last, volume } = typeof value === "number" ? { last: value, volume: 1_200 } : value;
+        return `mdata[ ${index} ] = [ "${code}", "", "", "", "${last}", "${last}", "${last}", "${last}", "${volume}" ];`;
+      });
+      return new Response(rows.join("\n"), { headers: { "Last-Modified": new Date(options.ptsModifiedAt?.() ?? options.now() - 30_000).toUTCString() } });
     }
     return new Response("not found", { status: 404 });
   }
@@ -143,7 +151,7 @@ export function createFakeUpstream(options: FakeUpstreamOptions) {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (!HOSTS.has(url.hostname)) throw new Error(`unexpected upstream ${url.hostname}`);
     state.calls += 1;
-    if (options.latencyMs) await new Promise((resolve) => setTimeout(resolve, options.latencyMs));
+    if (state.latencyMs) await new Promise((resolve) => setTimeout(resolve, state.latencyMs));
     if (init?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     if (state.fail) throw new Error("synthetic_upstream_outage");
     return handle(url);

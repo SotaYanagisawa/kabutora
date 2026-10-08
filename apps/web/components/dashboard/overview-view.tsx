@@ -1,5 +1,5 @@
-import { memo, useState } from "react";
-import type { MarketSessionStatus } from "@/lib/market/market-session";
+import { memo, useMemo, useState } from "react";
+import type { MarketRegion, MarketSessionStatus } from "@/lib/market/market-session";
 import { shiftCalendarMonths } from "@/lib/ui/calendar-time";
 import type { PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
 import { AlertTriangle, CalendarDays, Eye, EyeOff, X } from "lucide-react";
@@ -260,6 +260,12 @@ export function Overview({
   const effectiveCostBasis = summary.costBasis;
   const effectiveTotalGain = priced ? summary.totalGain : null;
   const effectiveTotalReturn = priced ? summary.totalReturn : null;
+  // 1D chart: shade the sessions of the markets whose stocks are shown (funds and indexes have none).
+  const sessionMarkets = useMemo<MarketRegion[] | undefined>(() => {
+    if (range !== "1D") return undefined;
+    const venues = new Set(holdings.map((holding) => holding.quote?.venue));
+    return [...(venues.has("TSE") || venues.has("JNX") ? ["JP" as const] : []), ...(venues.has("US") ? ["US" as const] : [])];
+  }, [holdings, range]);
 
   return (
     <div className={`overview-page ${isExpanded ? "chart-expanded" : ""}`}>
@@ -359,6 +365,7 @@ export function Overview({
                   amountsVisible={amountsVisible}
                   detailsEnabled
                   valueMode={chartValueMode}
+                  sessionMarkets={sessionMarkets}
                 />
               </div>
               <div className="daily-allocation-divider" />
@@ -405,6 +412,7 @@ export function Overview({
                 currency={activeSummaryCurrency}
                 amountsVisible={amountsVisible}
                 valueMode={chartValueMode}
+                sessionMarkets={sessionMarkets}
               />
             </div>
           )}

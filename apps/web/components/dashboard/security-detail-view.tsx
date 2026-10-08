@@ -17,6 +17,7 @@ import {
   maybeSignedMoney,
   money,
   number,
+  quoteSessionLabel,
   quoteTradeSourceLabel,
   securityPriceBasis,
   securityPriceUnit,
@@ -101,6 +102,7 @@ export function SecurityDetailView({
   const gain = holding.unrealizedGain == null && !holding.realizedGain ? null : (holding.unrealizedGain ?? 0) + holding.realizedGain;
   const gainPercent = gain != null && holding.costBasis ? gain / holding.costBasis : null;
   const hasPosition = transactions.length > 0 && holding.quantity > 0;
+  const tone = (value: number | null | undefined) => (value == null || value === 0 ? "" : value > 0 ? "up" : "down");
   const detailSecurityMap = new Map([[holding.securityId, sec]]);
 
   const performanceHistory = useMemo(() => filterDatedHistory(detail.positionHistory, detailRange, detailCustomRange), [detail.positionHistory, detailCustomRange, detailRange]);
@@ -214,6 +216,41 @@ export function SecurityDetailView({
               </div>
             </div>
           </div>
+
+          {quote && holding.extendedChangeRatio != null && quote.regularPrice != null && (
+            <div className="detail-session-split" role="group" aria-label="通常取引と時間外の値動き">
+              <div className="detail-session-cell">
+                <span className="daily-stat-label">{quote.venueCode === "JNX" ? "東証" : "通常取引"}{quote.session === "pre_market" ? "（前日）" : ""}</span>
+                <div className="daily-stat-inline">
+                  <strong className={`daily-stat-val ${tone(holding.regularChangeRatio)}`}>{holding.regularChangeRatio != null ? signedPercent(holding.regularChangeRatio) : "—"}</strong>
+                  {hasPosition && holding.regularGain != null && (
+                    <small className={`daily-stat-sub ${tone(holding.regularGain)}`} aria-label={amountsVisible ? undefined : "金額非表示"}>
+                      ({amountsVisible ? maybeSignedMoney(holding.regularGain, activeCurrency) : HIDDEN_AMOUNT})
+                    </small>
+                  )}
+                </div>
+                <small className="detail-session-price">
+                  <span>{quote.venueCode === "JNX" ? "東証終値" : quote.session === "pre_market" ? "前日終値" : "終値"} {maybeMoney(quote.regularPrice, activeCurrency)}</span>
+                  {quote.regularTimestamp && <span>{marketDateTimeLabel(quote.regularTimestamp, stockMic, stockTz, stockCurrency)}</span>}
+                </small>
+              </div>
+              <div className="detail-session-cell extended">
+                <span className="daily-stat-label"><b className="detail-session-chip">{quoteSessionLabel(quote)}</b>{quote.venueCode === "JNX" ? "東証終値比" : "終値比"}</span>
+                <div className="daily-stat-inline">
+                  <strong className={`daily-stat-val ${tone(holding.extendedChangeRatio)}`}>{signedPercent(holding.extendedChangeRatio)}</strong>
+                  {hasPosition && holding.extendedGain != null && (
+                    <small className={`daily-stat-sub ${tone(holding.extendedGain)}`} aria-label={amountsVisible ? undefined : "金額非表示"}>
+                      ({amountsVisible ? maybeSignedMoney(holding.extendedGain, activeCurrency) : HIDDEN_AMOUNT})
+                    </small>
+                  )}
+                </div>
+                <small className="detail-session-price">
+                  <span>{quoteTradeSourceLabel(quote)} {maybeMoney(holding.price, activeCurrency)}</span>
+                  <span>{marketDateTimeLabel(quote.marketTimestamp, stockMic, stockTz, stockCurrency)}</span>
+                </small>
+              </div>
+            </div>
+          )}
 
           <div className="daily-summary-divider" aria-hidden="true" />
 
