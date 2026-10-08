@@ -13,6 +13,7 @@
 - Cost basis: moving average (移動平均法) per security and cost-basis group; sales clamp to the units held and are reported in `book.issues`.
 - Money: float64, rounded only for display. USD/JPY on the trade date for cost, on the valuation date for value, on the recognition date for dividends.
 - Keep calculations deterministic and side-effect free; order trades by date, original timestamp, creation time and id.
+- Price polls must stay cheap: callers build the book from ledger + history once and re-price it with `withQuotes`. Quote-independent results (`dividendReceipts`, past days of `portfolioHistory`) are memoized on `book.trades` by identity of their inputs, so never mutate a book, its history map, FX arrays or a returned result.
 - Market data is looked up by `marketKey(securityId)`; ledger ids are never rewritten.
 - Cover splits/reverse splits, partial sales, cost-basis groups, funds quoted per 10,000 units, currencies, missing quotes and dividends when relevant.
 

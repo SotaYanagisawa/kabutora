@@ -16,6 +16,13 @@ export type Quote = {
   previousClose: number | null;
   /** Unix seconds of `price`. */
   time: number;
+  /**
+   * Regular-session price (US close, TSE close) when `price` is a pre-market, after-hours or PTS
+   * trade. Absent while `price` is itself a regular-session price.
+   */
+  regularPrice?: number;
+  /** Unix seconds of `regularPrice`. */
+  regularTime?: number;
   session: Session;
   venue: Venue;
   currency: string;

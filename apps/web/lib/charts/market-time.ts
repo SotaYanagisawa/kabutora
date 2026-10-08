@@ -97,11 +97,22 @@ function timeFormatter(timeZone: string) {
   return formatter;
 }
 
+const zoneNameFormatters = new Map<string, Intl.DateTimeFormat>();
+const zoneNameFormatter = (locale: string, timeZone: string) => {
+  const key = `${locale}|${timeZone}`;
+  let formatter = zoneNameFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(locale, { timeZone, timeZoneName: "short" });
+    zoneNameFormatters.set(key, formatter);
+  }
+  return formatter;
+};
+
 export function exchangeTimeZoneCode(date: Date, timeZone: string): string {
   if (timeZone === "Asia/Tokyo") return "JST";
   if (timeZone === "America/New_York" || timeZone === "America/Toronto") {
     try {
-      const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" }).formatToParts(date);
+      const parts = zoneNameFormatter("en-US", timeZone).formatToParts(date);
       const name = parts.find((p) => p.type === "timeZoneName")?.value;
       if (name && (name === "EDT" || name === "EST")) return name;
     } catch {}
@@ -109,7 +120,7 @@ export function exchangeTimeZoneCode(date: Date, timeZone: string): string {
   }
   if (timeZone === "Europe/London") {
     try {
-      const parts = new Intl.DateTimeFormat("en-GB", { timeZone, timeZoneName: "short" }).formatToParts(date);
+      const parts = zoneNameFormatter("en-GB", timeZone).formatToParts(date);
       const name = parts.find((p) => p.type === "timeZoneName")?.value;
       if (name && (name === "BST" || name === "GMT")) return name;
     } catch {}
@@ -122,7 +133,7 @@ export function exchangeTimeZoneCode(date: Date, timeZone: string): string {
   if (timeZone === "Asia/Kolkata") return "IST";
   if (timeZone === "Australia/Sydney") {
     try {
-      const parts = new Intl.DateTimeFormat("en-AU", { timeZone, timeZoneName: "short" }).formatToParts(date);
+      const parts = zoneNameFormatter("en-AU", timeZone).formatToParts(date);
       const name = parts.find((p) => p.type === "timeZoneName")?.value;
       if (name && (name === "AEST" || name === "AEDT")) return name;
     } catch {}
@@ -130,14 +141,14 @@ export function exchangeTimeZoneCode(date: Date, timeZone: string): string {
   }
   if (["Europe/Berlin", "Europe/Paris", "Europe/Amsterdam", "Europe/Zurich", "Europe/Frankfurt"].includes(timeZone)) {
     try {
-      const parts = new Intl.DateTimeFormat("en-GB", { timeZone, timeZoneName: "short" }).formatToParts(date);
+      const parts = zoneNameFormatter("en-GB", timeZone).formatToParts(date);
       const name = parts.find((p) => p.type === "timeZoneName")?.value;
       if (name && (name === "CEST" || name === "CET")) return name;
     } catch {}
     return "CET";
   }
   try {
-    const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" }).formatToParts(date);
+    const parts = zoneNameFormatter("en-US", timeZone).formatToParts(date);
     const name = parts.find((p) => p.type === "timeZoneName")?.value;
     if (name) return name;
   } catch {}
@@ -159,6 +170,8 @@ export function marketTimeWithZoneLabel(
   return `${time} ${tzCode}`;
 }
 
+const dateTimeFormatters = new Map<string, Intl.DateTimeFormat>();
+
 export function marketDateTimeLabel(
   value: string,
   exchangeMic?: string | null,
@@ -170,13 +183,11 @@ export function marketDateTimeLabel(
   if (!Number.isFinite(date.getTime())) return "—";
   const tz = exchangeTimeZone(exchangeMic, explicitTimeZone, currency, country);
   const tzCode = exchangeTimeZoneCode(date, tz);
-  const formatted = new Intl.DateTimeFormat("ja-JP", {
-    timeZone: tz,
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(date);
+  let formatter = dateTimeFormatters.get(tz);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("ja-JP", { timeZone: tz, month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    dateTimeFormatters.set(tz, formatter);
+  }
+  const formatted = formatter.format(date);
   return `${formatted} ${tzCode}`;
 }

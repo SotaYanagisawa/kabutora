@@ -78,13 +78,13 @@ flowchart TB
 flowchart LR
     Client["Client UI"] -->|"snapshot (ETag + intraday revision)"| Edge["Worker router (auth)"]
     Client -->|"history?from=YYYY-01-01 (ETag)"| Edge
-    Edge --> Service["Market object\n15 s quotes · history records"]
+    Edge --> Service["Market object\nquotes from memory · history records"]
     Service --> Yahoo["Yahoo spark / chart"]
     Service --> Pages["Fund NAV / TOPIX / Japannext\n(background)"]
     Cron["1-minute Cron"] --> Service
 ```
 
-- **Prices:** quotes, benchmarks and 15-minute series for the whole shared catalog (max 200 symbols) in one response, refreshed on read when older than 15 seconds. Unchanged intraday series are not resent.
+- **Prices:** quotes, benchmarks and 15-minute series for the whole shared catalog (max 200 symbols) in one response, answered from memory and refreshed behind the answer when older than 8 seconds (see [market backend](market-backend.md)). Pre-market, after-hours and Japannext PTS trades carry the regular-session price they moved from. Unchanged intraday series are not resent.
 - **History:** one record per security with split-adjusted closes, splits and dividends from one upstream response. The client refetches only when the snapshot reports a new history revision.
 - **Engine:** the browser computes everything synchronously from the ledger and these records (a few milliseconds), so filters and currencies switch instantly without requests.
 - **Caching:** the object keeps data in memory and SQLite; the browser keeps the last snapshot and history in localStorage so a reopened app renders prices on the first frame.

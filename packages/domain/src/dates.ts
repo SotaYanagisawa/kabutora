@@ -10,10 +10,21 @@ const formatter = (timeZone: string) => {
   return value;
 };
 
+// Every real UTC offset is a multiple of 15 minutes, so one date per zone and quarter hour is exact.
+const QUARTER_HOUR_MS = 900_000;
+const zoneDates = new Map<string, string>();
+
 /** YYYY-MM-DD of an instant in a market's time zone. */
 export function dateInZone(unixMs: number, timeZone: string): string {
   if (timeZone === "Asia/Tokyo") return new Date(unixMs + 9 * 3_600_000).toISOString().slice(0, 10);
-  return formatter(timeZone).format(new Date(unixMs));
+  const key = `${timeZone}|${Math.floor(unixMs / QUARTER_HOUR_MS)}`;
+  let date = zoneDates.get(key);
+  if (date === undefined) {
+    if (zoneDates.size > 50_000) zoneDates.clear();
+    date = formatter(timeZone).format(new Date(unixMs));
+    zoneDates.set(key, date);
+  }
+  return date;
 }
 
 export const tokyoDate = (unixMs = Date.now()) => dateInZone(unixMs, "Asia/Tokyo");

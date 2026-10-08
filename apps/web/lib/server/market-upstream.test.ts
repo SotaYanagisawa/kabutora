@@ -73,7 +73,19 @@ describe("spark quotes", () => {
   }).get("AAPL")!;
 
   it("uses a newer extended-hours trade and labels it", () => {
-    expect(quoteFromSpark("sec-us-aapl", security, row({}), 2_000)).toMatchObject({ price: 101, time: 1_000, previousClose: 99, session: "after_hours", venue: "US" });
+    expect(quoteFromSpark("sec-us-aapl", security, row({}), 2_000)).toMatchObject({ price: 101, time: 1_000, previousClose: 99, session: "after_hours", venue: "US", regularPrice: 100, regularTime: 900 });
+  });
+
+  it("keeps the previous close as the regular price of a pre-market trade", () => {
+    const pre = row({ currentTradingPeriod: { pre: { start: 950, end: 1_500 }, regular: { start: 1_500, end: 2_500 } } });
+    expect(quoteFromSpark("sec-us-aapl", security, pre, 1_100)).toMatchObject({ price: 101, session: "pre_market", regularPrice: 100, regularTime: 900 });
+  });
+
+  it("has no regular price during the regular session", () => {
+    const regular = row({ regularMarketTime: 1_000, regularMarketPrice: 101, currentTradingPeriod: { regular: { start: 500, end: 2_500 } } });
+    const quote = quoteFromSpark("sec-us-aapl", security, regular, 1_100);
+    expect(quote).toMatchObject({ price: 101, session: "regular" });
+    expect(quote).not.toHaveProperty("regularPrice");
   });
 
   it("ignores an isolated bad tick", () => {
@@ -92,13 +104,14 @@ describe("provider pages", () => {
 
   it("parses Japannext rows traded this session without evaluating the file", () => {
     const source = 'mdata[ 0 ] = [ "285A", "", "", "", "18800", "18900", "18700", "18850", "1200" ];\nmdata[ 1 ] = [ "7203", "", "", "", "", "", "", "3000", "0" ];\nalert(1);';
-    expect([...parsePtsSource(source)]).toEqual([["285A", 18_850]]);
+    expect([...parsePtsSource(source)]).toEqual([["285A", { price: 18_850, volume: 1_200 }]]);
   });
 
   it("knows the Japannext windows", () => {
-    expect(ptsWindowAt(Date.parse("2026-10-05T13:00:00Z"))).toEqual({ venue: "night", session: "pts_night", sessionKey: "2026-10-05" });
-    expect(ptsWindowAt(Date.parse("2026-10-05T16:00:00Z"))).toEqual({ venue: "night", session: "pts_night", sessionKey: "2026-10-05" });
-    expect(ptsWindowAt(Date.parse("2026-10-05T23:30:00Z"))).toEqual({ venue: "day", session: "pts_day", sessionKey: "2026-10-06" });
+    const night = { venue: "night", session: "pts_night", sessionKey: "2026-10-05", start: Date.parse("2026-10-05T08:00:00Z") / 1000 };
+    expect(ptsWindowAt(Date.parse("2026-10-05T13:00:00Z"))).toEqual(night);
+    expect(ptsWindowAt(Date.parse("2026-10-05T16:00:00Z"))).toEqual(night);
+    expect(ptsWindowAt(Date.parse("2026-10-05T23:30:00Z"))).toEqual({ venue: "day", session: "pts_day", sessionKey: "2026-10-06", start: Date.parse("2026-10-05T23:20:00Z") / 1000 });
     expect(ptsWindowAt(Date.parse("2026-10-03T03:00:00Z"))).toBeNull();
   });
 

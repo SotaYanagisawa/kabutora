@@ -1,7 +1,8 @@
 import { useCallback, useMemo } from "react";
 import { dynamicChartDomain } from "@/lib/charts/chart-domain";
 import { compactNumber } from "@/lib/ui/compact-number";
-import { LightweightAreaChart, LightweightDonutChart } from "@/components/charts/lightweight-charts";
+import { LightweightAreaChart, LightweightDonutChart, type ChartBand } from "@/components/charts/lightweight-charts";
+import { marketSessionWindows, type MarketRegion, type SessionWindowKind } from "@/lib/market/market-session";
 import { RefreshCw } from "lucide-react";
 import { ALLOCATION_COLORS, HIDDEN_AMOUNT } from "./constants";
 import { compactMoney, money, shortDateTimeJa, shortMoney, timeJa } from "./helpers";
@@ -68,6 +69,32 @@ export function PriceTooltip({
   );
 }
 
+const SESSION_BAND: Record<SessionWindowKind, { emphasis: ChartBand["emphasis"]; priority: number; label: (market: MarketRegion) => string }> = {
+  regular: { emphasis: "strong", priority: 0, label: (market) => (market === "JP" ? "東証" : "米国") },
+  pts: { emphasis: "soft", priority: 1, label: () => "PTS" },
+  pre_market: { emphasis: "soft", priority: 1, label: () => "プレ" },
+  after_hours: { emphasis: "soft", priority: 1, label: () => "時間外" },
+  lunch: { emphasis: "none", priority: 2, label: () => "昼" },
+};
+
+/** Trading sessions of the given markets between two instants, as chart bands (JP warm, US blue). */
+export function sessionBands(markets: readonly MarketRegion[], fromMs: number, toMs: number): ChartBand[] {
+  return markets.flatMap((market) => marketSessionWindows(market, fromMs, toMs).map((window) => {
+    const style = SESSION_BAND[window.kind];
+    return {
+      start: window.start,
+      end: window.end,
+      color: market === "JP" ? "var(--session-jp)" : "var(--session-us)",
+      emphasis: style.emphasis,
+      priority: style.priority,
+      label: style.label(market),
+    };
+  }));
+}
+
+const pointTime = (point: { date: string }) => Date.parse(point.date);
+const compactAxisNumber = new Intl.NumberFormat("ja-JP", { maximumSignificantDigits: 3 });
+
 export function PortfolioChart({
   history,
   historyStatus,
@@ -78,8 +105,11 @@ export function PortfolioChart({
   amountsVisible = true,
   detailsEnabled = false,
   valueMode = "market",
+  sessionMarkets,
 }: {
   history: Array<{ date: string; value: number; dividendAdjustedValue?: number; capital: number }>;
+  /** Intraday history only: x becomes proportional to time, with these markets' sessions shaded. */
+  sessionMarkets?: readonly MarketRegion[];
   historyStatus: MarketStatus;
   compact?: boolean;
   zeroBased?: boolean;
@@ -111,7 +141,8 @@ export function PortfolioChart({
   const axisSpread = yDomain[1] - yDomain[0];
   const yTickLabel = (value: number) => {
     const absolute = Math.abs(value);
-    const roundedUnit = (scaledValue: number) => new Intl.NumberFormat("ja-JP", { maximumSignificantDigits: 2 }).format(scaledValue);
+    // Three significant digits: two made neighbouring ticks of a narrow range read the same ("240万", "240万").
+    const roundedUnit = (scaledValue: number) => compactAxisNumber.format(scaledValue);
     if (compact && currency === "JPY" && absolute >= 100_000_000) return `${roundedUnit(value / 100_000_000)}億`;
     if (compact && currency === "JPY" && absolute >= 10_000) return `${roundedUnit(value / 10_000)}万`;
     if (compact && currency === "USD" && absolute >= 1_000_000) return `${roundedUnit(value / 1_000_000)}M`;
@@ -123,6 +154,11 @@ export function PortfolioChart({
     if (currency === "USD" && absolute >= 1_000) return `${compactNumber(value / 1_000)}K`;
     return new Intl.NumberFormat("ja-JP", { maximumFractionDigits: currency === "USD" || axisSpread < 100 ? 2 : 0 }).format(value);
   };
+  const timeAxis = Boolean(sessionMarkets && history.length > 1 && history[0].date.includes("T"));
+  const bands = useMemo(
+    () => (timeAxis ? sessionBands(sessionMarkets!, pointTime(history[0]), pointTime(history.at(-1)!)) : undefined),
+    [history, sessionMarkets, timeAxis],
+  );
   const chartSeries = useMemo(
     () => [
       ...(showCapital
@@ -152,6 +188,8 @@ export function PortfolioChart({
   return history.length ? (
     <LightweightAreaChart
       data={history}
+      xTime={timeAxis ? pointTime : undefined}
+      bands={bands}
       domain={yDomain}
       series={chartSeries}
       xValue={(point) => point.date}
@@ -162,7 +200,8 @@ export function PortfolioChart({
       xAxisHeight={compact ? 24 : 30}
       tickMargin={compact ? 4 : 5}
       minTickGap={compact ? 40 : 50}
-      top={compact ? 6 : 16}
+      // Room above the line for the session labels.
+      top={(compact ? 6 : 16) + (bands?.length ? 12 : 0)}
       right={compact ? 6 : 8}
       minHeight={compact ? 120 : 220}
       showYAxis={amountsVisible}

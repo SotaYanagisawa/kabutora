@@ -141,7 +141,8 @@ function validQuote(value: unknown): value is Quote {
   if (!isObject(value)) return false;
   return typeof value.key === "string" && positive(value.price) && (value.previousClose === null || positive(value.previousClose))
     && finite(value.time) && SESSIONS.has(value.session as Session) && VENUES.has(value.venue as Venue)
-    && typeof value.currency === "string" && finite(value.fetchedAt);
+    && typeof value.currency === "string" && finite(value.fetchedAt)
+    && (value.regularPrice === undefined || (positive(value.regularPrice) && finite(value.regularTime)));
 }
 
 function validBenchmark(value: unknown): value is Benchmark {

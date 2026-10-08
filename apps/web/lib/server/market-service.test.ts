@@ -20,7 +20,7 @@ const kioxia = (splitApplied: boolean): FakeSecurity => ({
   name: "KIOXIA HOLDINGS CORP",
 });
 
-function setup(options: { splitApplied?: boolean; pts?: Record<string, number> } = {}) {
+function setup(options: { splitApplied?: boolean; pts?: Record<string, number | { last: number; volume: number }>; ptsModifiedAt?: () => number } = {}) {
   let now = START;
   const securities: Record<string, FakeSecurity> = {
     "285A.T": kioxia(options.splitApplied ?? true),
@@ -33,6 +33,7 @@ function setup(options: { splitApplied?: boolean; pts?: Record<string, number> }
     securities,
     funds: { "02311886": { name: "インデックスファンド225", closes: weekdays("2026-09-01", "2026-10-05").map((date, index) => [date, 20_000 + index]), distributions: [["2026-06-16", 0], ["2025-06-16", 130]] } },
     pts: options.pts,
+    ptsModifiedAt: options.ptsModifiedAt,
   });
   vi.stubGlobal("fetch", upstream.fetch);
   const continuation = vi.fn();
@@ -89,7 +90,77 @@ describe("MarketService snapshot", () => {
     await service.tick(new Budget(45));
     const snapshot = await service.snapshot();
     const quote = snapshot.quotes.find((item) => item.key === "sec-285a")!;
-    expect(quote).toMatchObject({ price: 18_900, venue: "JNX", session: "pts_night", previousClose: 19_120 });
+    expect(quote).toMatchObject({ price: 18_900, venue: "JNX", session: "pts_night", previousClose: 19_120, regularPrice: 18_735 });
+    expect(quote.regularTime).toBeLessThan(quote.time);
+  });
+
+  it("keeps a night PTS trade into the morning and ignores a day-session trade until it trades again", async () => {
+    const pts: Record<string, { last: number; volume: number }> = { "285A": { last: 18_900, volume: 100 } };
+    const { service, setNow, advance, securities } = setup({ pts });
+    securities["285A.T"].time = Date.parse("2026-10-05T06:30:00Z") / 1000; // TSE close 15:30 JST
+    setNow(Date.parse("2026-10-05T13:00:00Z")); // 22:00 JST: night session
+    await service.register(["sec-285a"]);
+    await service.snapshot();
+    await service.tick(new Budget(45));
+    // 08:30 JST: the day session has opened, but this symbol has not traded in it yet.
+    pts["285A"] = { last: 18_850, volume: 0 };
+    setNow(Date.parse("2026-10-05T23:30:00Z"));
+    await service.tick(new Budget(45));
+    expect((await service.snapshot()).quotes.find((item) => item.key === "sec-285a")).toMatchObject({ price: 18_900, session: "pts_night" });
+
+    // A day-session file first seen after the TSE close may hold trades from before it.
+    pts["285A"] = { last: 18_700, volume: 500 };
+    securities["285A.T"].time = Date.parse("2026-10-06T06:30:00Z") / 1000;
+    setNow(Date.parse("2026-10-06T06:40:00Z")); // 15:40 JST
+    await service.tick(new Budget(45));
+    const unchanged = (await service.snapshot()).quotes.find((item) => item.key === "sec-285a")!;
+    expect(unchanged.venue).toBe("TSE");
+    // It trades again after the close: now it is the quote.
+    pts["285A"] = { last: 18_780, volume: 600 };
+    advance(60_000);
+    await service.tick(new Budget(45));
+    expect((await service.snapshot()).quotes.find((item) => item.key === "sec-285a")).toMatchObject({ price: 18_780, venue: "JNX", session: "pts_day" });
+  });
+
+  it("ignores a Japannext file left over from the previous session", async () => {
+    let modified = Date.parse("2026-10-05T07:00:00Z"); // 16:00 JST, day session
+    const { service, setNow } = setup({ pts: { "285A": 18_900 }, ptsModifiedAt: () => modified });
+    setNow(Date.parse("2026-10-05T08:05:00Z")); // 17:05 JST: night session, file not rewritten yet
+    await service.register(["sec-285a"]);
+    await service.snapshot();
+    await service.tick(new Budget(45));
+    expect((await service.snapshot()).quotes.find((item) => item.key === "sec-285a")?.venue).toBe("TSE");
+    modified = Date.parse("2026-10-05T08:06:00Z");
+    setNow(Date.parse("2026-10-05T08:07:00Z"));
+    await service.tick(new Budget(45));
+    expect((await service.snapshot()).quotes.find((item) => item.key === "sec-285a")).toMatchObject({ price: 18_900, venue: "JNX" });
+  });
+
+  it("answers from memory while a background refresh runs, and waits only for old quotes", async () => {
+    const { service, upstream, advance } = setup();
+    await service.register(["sec-285a"]);
+    await service.snapshot();
+    expect(upstream.state.byPath.get("spark:1d")).toBe(1);
+    upstream.state.latencyMs = 1_500;
+    advance(10_000);
+    const started = performance.now();
+    await service.snapshot();
+    expect(performance.now() - started).toBeLessThan(500);
+    
+    await new Promise((resolve) => setTimeout(resolve, 1_600));
+    expect(upstream.state.byPath.get("spark:1d")).toBe(2);
+  });
+
+  it("keeps quotes warm from the cron only while someone reads", async () => {
+    const { service, upstream, advance } = setup();
+    await service.register(["sec-285a"]);
+    await service.snapshot();
+    advance(60_000);
+    await service.tick(new Budget(45));
+    expect(upstream.state.byPath.get("spark:1d")).toBe(2);
+    advance(20 * 60_000);
+    await service.tick(new Budget(45));
+    expect(upstream.state.byPath.get("spark:1d")).toBe(2);
   });
 });
 

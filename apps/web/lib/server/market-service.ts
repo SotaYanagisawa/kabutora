@@ -22,22 +22,30 @@ import {
 /**
  * The market backend: one shared catalog of at most 200 public securities.
  *
- * - Quotes and benchmarks refresh on read when older than 15 s (3 s when forced); readers share one refresh.
+ * - Quotes and benchmarks are served from memory at once. A read older than 8 s starts one shared
+ *   background refresh; a read waits for upstream only when forced or when quotes are over a minute
+ *   old (cold object, long idle). The cron keeps quotes warm while anyone has read in the last 15 min.
  * - Intraday 15-minute series (5 days), fund NAVs, TOPIX and Japannext PTS refresh in the background.
+ * - Pre-market, after-hours and PTS quotes carry the regular-session price they moved away from.
  * - Daily history is one record per security built from ONE upstream response: split-adjusted closes,
  *   splits and dividends together. A refresh either appends to a record whose overlapping closes still
  *   match, or replaces the whole record. Records from different sources are never merged.
  */
 
 export const MAX_CATALOG = 200;
-const QUOTE_TTL_MS = 15_000;
+const QUOTE_TTL_MS = 8_000;
 const FORCED_TTL_MS = 3_000;
+/** Older quotes are not served without first waiting for a refresh. */
+const QUOTE_SERVE_STALE_MS = 60_000;
 const QUOTE_WAIT_MS = 6_000;
+/** The cron refreshes quotes while a snapshot was read this recently. */
+const READER_ACTIVE_MS = 15 * 60_000;
 const COLD_WAIT_MS = 3_000;
 const WEEK_TTL_MS = 5 * 60_000;
 const FUND_TTL_MS = 30 * 60_000;
 const TOPIX_TTL_MS = 5 * 60_000;
-const PTS_TTL_MS = 60_000;
+// Japannext rewrites its files once a minute; slightly less keeps a once-a-minute cron from skipping one.
+const PTS_TTL_MS = 50_000;
 const PTS_OVERLAY_MS = 12 * 3_600_000;
 const PTS_KEEP_SECONDS = 3 * 86_400;
 const RETRY_MS = 30 * 60_000;
@@ -71,6 +79,18 @@ type StoredHistory = DailyHistory & {
 };
 
 type Security = RequestedSecurity & { key: string };
+
+/** The latest Japannext trade seen for one security. */
+type PtsTrade = {
+  price: number;
+  /** Cumulative session volume; a change means a new trade. */
+  volume: number;
+  /** Unix seconds: when the trade was first seen (file time), or the session start when unknown. */
+  at: number;
+  session: "pts_day" | "pts_night";
+  /** `day:YYYY-MM-DD` or `night:YYYY-MM-DD`. */
+  sessionKey: string;
+};
 
 const parseJson = <T>(value: string | undefined): T | undefined => {
   if (!value) return undefined;
@@ -150,13 +170,15 @@ export class MarketService {
   private topix?: { at: number; failedAt?: number };
   private week = { at: 0, revision: "0", series: new Map<string, IntradaySeries>() };
   private weekFlight?: Promise<void>;
-  private pts = { at: 0, observedAt: 0, session: "pts_night" as Quote["session"], prices: new Map<string, number>(), series: new Map<string, IntradaySeries>() };
+  /** `revision` moves only when a PTS series changed, so unchanged intraday series are not resent. */
+  private pts = { at: 0, revision: 0, trades: new Map<string, PtsTrade>(), series: new Map<string, IntradaySeries>() };
   private ptsFlight?: Promise<void>;
   private histories = new Map<string, StoredHistory>();
   private historyFlight?: Promise<void>;
   private fundFlight?: Promise<void>;
   private historyRevision = "";
   private persisted = { at: 0, size: 0 };
+  private readAt = 0;
 
   constructor(private store: MarketStore, private options: MarketServiceOptions = {}) {}
 
@@ -181,8 +203,9 @@ export class MarketService {
       const saved = parseJson<{ at: number; quotes: Quote[]; benchmarks: Benchmark[] }>(await this.store.get("q4"));
       for (const quote of saved?.quotes ?? []) this.quotes.set(quote.key, quote);
       for (const benchmark of saved?.benchmarks ?? []) this.benchmarks.set(benchmark.id, benchmark);
-      const pts = parseJson<{ series: Record<string, [number[], number[]]> }>(await this.store.get("pts4"));
+      const pts = parseJson<{ series: Record<string, [number[], number[]]>; trades?: Record<string, PtsTrade> }>(await this.store.get("pts4"));
       for (const [key, [times, prices]] of Object.entries(pts?.series ?? {})) this.pts.series.set(key, { times, prices });
+      for (const [key, trade] of Object.entries(pts?.trades ?? {})) this.pts.trades.set(key, trade);
       this.updateHistoryRevision();
     })();
     return this.loaded;
@@ -261,38 +284,53 @@ export class MarketService {
     if (!window || now - this.pts.at < PTS_TTL_MS) return;
     this.pts.at = now;
     const result = await fetchPts(window, budget, now).catch(() => null);
-    if (!result) return;
-    this.pts.observedAt = result.at;
-    this.pts.session = window.session;
-    this.pts.prices = new Map();
+    // A file last written before this session opened still holds the previous session.
+    if (!result || result.at < window.start) return;
+    const sessionKey = `${window.venue}:${window.sessionKey}`;
     const cutoff = result.at - PTS_KEEP_SECONDS;
     let changed = false;
+    let seriesChanged = false;
     for (const key of this.catalog) {
       const symbol = /^sec-([0-9]{4}|[0-9]{3}[a-z])$/u.exec(key)?.[1]?.toUpperCase();
-      const price = symbol ? result.last.get(symbol) : undefined;
-      if (!price) continue;
-      this.pts.prices.set(key, price);
+      const row = symbol ? result.rows.get(symbol) : undefined;
+      if (!row) continue;
+      const known = this.pts.trades.get(key);
+      if (known?.sessionKey === sessionKey && known.volume === row.volume) continue;
+      // A new trade is stamped with the file time. A day-session trade first seen now may predate the
+      // TSE close, so it counts from the session start until its volume changes again.
+      const at = known?.sessionKey === sessionKey || window.venue === "night" ? result.at : window.start;
+      this.pts.trades.set(key, { price: row.price, volume: row.volume, at, session: window.session, sessionKey });
+      changed = true;
+      if (at !== result.at) continue;
       const series = this.pts.series.get(key) ?? { times: [], prices: [] };
-      if (series.times.at(-1) !== result.at && (series.prices.at(-1) !== price || result.at - (series.times.at(-1) ?? 0) >= 600)) {
-        series.times.push(result.at);
-        series.prices.push(price);
-        changed = true;
+      if (series.times.at(-1) !== at && (series.prices.at(-1) !== row.price || at - (series.times.at(-1) ?? 0) >= 600)) {
+        series.times.push(at);
+        series.prices.push(row.price);
+        seriesChanged = true;
       }
       const start = series.times.findIndex((time) => time >= cutoff);
       this.pts.series.set(key, start <= 0 ? series : { times: series.times.slice(start), prices: series.prices.slice(start) });
     }
+    if (seriesChanged) this.pts.revision = result.at;
     if (changed) {
-      await this.store.put([["pts4", JSON.stringify({ series: Object.fromEntries([...this.pts.series].map(([key, series]) => [key, [series.times, series.prices]])) })]]);
+      for (const [key, trade] of this.pts.trades) if (trade.at < cutoff) this.pts.trades.delete(key);
+      await this.store.put([["pts4", JSON.stringify({
+        series: Object.fromEntries([...this.pts.series].map(([key, series]) => [key, [series.times, series.prices]])),
+        trades: Object.fromEntries(this.pts.trades),
+      })]]);
     }
   }
 
-  /** After the TSE close, a newer Japannext trade within ±20% of the TSE price becomes the quote. */
+  /**
+   * After the TSE close, a Japannext trade made after it (within ±20% of the TSE price) becomes the
+   * quote; the TSE close stays on the quote as its regular-session price.
+   */
   private withPts(quote: Quote): Quote {
     if (quote.venue !== "TSE" || quote.session === "regular") return quote;
-    const price = this.pts.prices.get(quote.key);
-    if (!price || this.pts.observedAt <= quote.time || this.now() - this.pts.observedAt * 1000 > PTS_OVERLAY_MS) return quote;
-    if (Math.abs(price / quote.price - 1) > 0.2) return quote;
-    return { ...quote, price, time: this.pts.observedAt, session: this.pts.session, venue: "JNX" };
+    const trade = this.pts.trades.get(quote.key);
+    if (!trade || trade.at <= quote.time || this.now() - trade.at * 1000 > PTS_OVERLAY_MS) return quote;
+    if (Math.abs(trade.price / quote.price - 1) > 0.2) return quote;
+    return { ...quote, price: trade.price, time: trade.at, session: trade.session, venue: "JNX", regularPrice: quote.price, regularTime: quote.time };
   }
 
   // ---- Intraday (5 days, 15 minutes) ------------------------------------------------------------
@@ -448,21 +486,35 @@ export class MarketService {
     ]).then(() => run(this.historyFlight, () => this.refreshHistory(budget), (value) => { this.historyFlight = value; }));
   }
 
-  /** Cron and alarm entry point: PTS, intraday, funds and history within one budget. */
+  /** Starts (or joins) the shared quote refresh. */
+  private refreshQuotesOnce(budget: Budget) {
+    this.quoteFlight ??= this.refreshQuotes(budget).catch(() => undefined).finally(() => { this.quoteFlight = undefined; });
+    return this.quoteFlight;
+  }
+
+  /** Cron and alarm entry point: quotes while someone is reading, then PTS, intraday, funds and history within one budget. */
   async tick(budget = new Budget(REQUEST_BUDGET)) {
     await this.load();
-    await this.background(budget);
+    const now = this.now();
+    await Promise.all([
+      now - this.readAt < READER_ACTIVE_MS && now - this.quotesAt > QUOTE_TTL_MS ? this.refreshQuotesOnce(budget) : undefined,
+      this.background(budget),
+    ]);
   }
 
   // ---- Responses ------------------------------------------------------------------------------------
 
-  async snapshot(options: { force?: boolean; intradayRevision?: string; budget?: Budget } = {}): Promise<SnapshotPayload> {
+  /** `reader: false` (health checks) does not keep the cron refreshing quotes. */
+  async snapshot(options: { force?: boolean; intradayRevision?: string; budget?: Budget; reader?: boolean } = {}): Promise<SnapshotPayload> {
     await this.load();
     const budget = options.budget ?? new Budget(REQUEST_BUDGET);
     const now = this.now();
-    if (now - this.quotesAt > (options.force ? FORCED_TTL_MS : QUOTE_TTL_MS)) {
-      this.quoteFlight ??= this.refreshQuotes(budget).catch(() => undefined).finally(() => { this.quoteFlight = undefined; });
-      await withTimeout(this.quoteFlight, QUOTE_WAIT_MS);
+    if (options.reader !== false) this.readAt = now;
+    const age = now - this.quotesAt;
+    if (age > (options.force ? FORCED_TTL_MS : QUOTE_TTL_MS)) {
+      const refresh = this.refreshQuotesOnce(budget);
+      // Recent quotes are answered at once; the refresh lands in the next poll.
+      if (options.force || age > QUOTE_SERVE_STALE_MS || !this.quotes.size) await withTimeout(refresh, QUOTE_WAIT_MS);
     }
     const background = this.background(budget);
     const securities = await this.securities();
@@ -473,7 +525,7 @@ export class MarketService {
       return quote ? [this.withPts(quote)] : [];
     });
     const benchmarks = [...this.benchmarks.values()];
-    const intradayRevision = `${this.week.revision}.${this.pts.observedAt}.${this.historyRevision}`;
+    const intradayRevision = `${this.week.revision}.${this.pts.revision}.${this.historyRevision}`;
     const payload: SnapshotPayload = {
       version: MARKET_WIRE_VERSION,
       generatedAt: Math.floor(now / 1000),
@@ -515,7 +567,7 @@ export class MarketService {
   }
 
   async health() {
-    const payload = await this.snapshot();
+    const payload = await this.snapshot({ reader: false });
     return { status: this.now() - this.quotesAt < 120_000 ? "ok" : "stale", quotes: payload.quotes.length, catalog: payload.catalog.length, ageSeconds: Math.round((this.now() - this.quotesAt) / 1000) };
   }
 }

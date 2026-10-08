@@ -29,8 +29,29 @@ type ChartSeries<T> = {
   fillOpacity?: number;
 };
 
+/** A shaded time interval behind an intraday series, e.g. a trading session. */
+export type ChartBand = {
+  /** Unix ms. */
+  start: number;
+  end: number;
+  color: string;
+  /** strong: tinted band with edge lines (regular session); soft: light tint (extended hours); none: label only (lunch break). */
+  emphasis: "strong" | "soft" | "none";
+  label?: string;
+  /** Lower draws its label first when labels would collide. */
+  priority: number;
+};
+
+const BAND_LABEL_SIZE = 9;
+/** Approximate rendered width: full-width glyphs ≈ 1em, others ≈ 0.6em. */
+const labelWidth = (text: string, fontSize: number) => [...text].reduce((width, char) => width + (/[\u3000-\u9fff\uff00-\uffef]/u.test(char) ? fontSize : fontSize * 0.6), 0);
+
 type LightweightAreaChartProps<T> = {
   data: T[];
+  /** Unix ms of a point. When given, x is proportional to time instead of to the point index. */
+  xTime?: (item: T) => number;
+  /** Shaded intervals behind the series; drawn only on a time axis. */
+  bands?: ChartBand[];
   domain: [number, number];
   series: Array<ChartSeries<T>>;
   xValue: (item: T) => string;
@@ -86,6 +107,8 @@ export function LightweightAreaChart<T>(props: LightweightAreaChartProps<T>) {
 
 function LightweightAreaChartView<T>({
   data,
+  xTime,
+  bands,
   domain,
   series,
   xValue,
@@ -112,7 +135,11 @@ function LightweightAreaChartView<T>({
   const bottom = xAxisHeight;
   const plotWidth = Math.max(1, size.width - left - right);
   const plotHeight = Math.max(1, size.height - top - bottom);
-  const xAt = (index: number) => left + (data.length <= 1 ? plotWidth / 2 : (index / (data.length - 1)) * plotWidth);
+  const times = useMemo(() => (xTime && data.length > 1 ? data.map(xTime) : null), [data, xTime]);
+  const timeStart = times?.[0] ?? 0;
+  const timeSpan = times ? Math.max(1, times.at(-1)! - timeStart) : 1;
+  const xOfTime = (time: number) => left + ((time - timeStart) / timeSpan) * plotWidth;
+  const xAt = (index: number) => times ? xOfTime(times[index]) : left + (data.length <= 1 ? plotWidth / 2 : (index / (data.length - 1)) * plotWidth);
   const yAt = (value: number) => top + ((domain[1] - value) / Math.max(Number.EPSILON, domain[1] - domain[0])) * plotHeight;
 
   const sampled = useMemo(
@@ -128,12 +155,56 @@ function LightweightAreaChartView<T>({
   const yTicks = useMemo(() => chartAxisTicks(domain, tickCount), [domain, tickCount]);
   const xTickCount = Math.min(data.length, Math.max(2, Math.min(4, Math.floor(plotWidth / Math.max(54, minTickGap + 28)))));
   const xTickIndexes = useMemo(() => [...new Set(Array.from({ length: xTickCount }, (_, index) => Math.round(((index + 1) * (data.length - 1)) / xTickCount)))], [data.length, xTickCount]);
+  // Time axis: ticks on whole Tokyo hours, as few as fit.
+  const timeTicks = useMemo(() => {
+    if (!times) return [];
+    const hour = 3_600_000;
+    const step = [1, 2, 3, 4, 6, 8, 12, 24].map((hours) => hours * hour).find((candidate) => timeSpan / candidate <= xTickCount + 0.5) ?? 24 * hour;
+    const tokyo = 9 * hour;
+    const ticks: number[] = [];
+    for (let time = Math.ceil((timeStart + tokyo) / step) * step - tokyo; time <= timeStart + timeSpan; time += step) ticks.push(time);
+    return ticks;
+  }, [timeSpan, timeStart, times, xTickCount]);
+
+  // Session bands clipped to the plotted time range, and labels placed by priority without overlap.
+  const bandShapes = useMemo(() => {
+    if (!times || !bands?.length) return { rects: [], labels: [] };
+    const end = timeStart + timeSpan;
+    const rects = bands.filter((band) => band.end > timeStart && band.start < end).map((band) => {
+      const x1 = xOfTime(Math.max(band.start, timeStart));
+      const x2 = xOfTime(Math.min(band.end, end));
+      return { ...band, x1, x2, startsInside: band.start >= timeStart, endsInside: band.end <= end };
+    });
+    const placed: Array<[number, number]> = [];
+    const labels: Array<{ key: string; x: number; text: string; color: string }> = [];
+    for (const rect of [...rects].sort((a, b) => a.priority - b.priority || a.x1 - b.x1)) {
+      if (!rect.label) continue;
+      const width = labelWidth(rect.label, BAND_LABEL_SIZE) + 4;
+      const x = Math.max(rect.x1, left) + 2;
+      if (x + width > rect.x2 + 1 || x + width > left + plotWidth) continue;
+      if (placed.some(([from, to]) => x < to + 3 && x + width > from - 3)) continue;
+      placed.push([x, x + width]);
+      labels.push({ key: `${rect.start}-${rect.color}-${rect.label}`, x, text: rect.label, color: rect.color });
+    }
+    return { rects, labels };
+  }, [bands, left, plotWidth, timeSpan, timeStart, times]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activateAt = (clientX: number, target: SVGSVGElement) => {
     if (!detailsEnabled || !data.length) return;
     const rect = target.getBoundingClientRect();
     const localX = Math.min(left + plotWidth, Math.max(left, clientX - rect.left));
-    setActiveIndex(Math.round(((localX - left) / plotWidth) * Math.max(0, data.length - 1)));
+    const fraction = (localX - left) / plotWidth;
+    if (!times) return setActiveIndex(Math.round(fraction * Math.max(0, data.length - 1)));
+    // Nearest point in time.
+    const time = timeStart + fraction * timeSpan;
+    let low = 0;
+    let high = times.length - 1;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if (times[middle] < time) low = middle + 1;
+      else high = middle;
+    }
+    setActiveIndex(low > 0 && time - times[low - 1] < times[low] - time ? low - 1 : low);
   };
   const handlePointerMove = (event: PointerEvent<SVGSVGElement>) => activateAt(event.clientX, event.currentTarget);
   const handleKeyDown = (event: KeyboardEvent<SVGSVGElement>) => {
@@ -168,9 +239,21 @@ function LightweightAreaChartView<T>({
           </linearGradient>)}
         </defs>
         <g aria-hidden="true">
+          {bandShapes.rects.map((band) => <g key={`band-${band.start}-${band.color}-${band.label ?? ""}`} className="chart-session-band">
+            {band.emphasis !== "none" && <rect x={band.x1} y={top} width={Math.max(0, band.x2 - band.x1)} height={plotHeight} fill={band.color} fillOpacity={band.emphasis === "strong" ? 0.11 : 0.05}/>}
+            {band.emphasis === "strong" && band.startsInside && <line x1={band.x1} x2={band.x1} y1={top} y2={top + plotHeight} stroke={band.color} strokeOpacity="0.55" strokeWidth="1"/>}
+            {band.emphasis === "strong" && band.endsInside && <line x1={band.x2} x2={band.x2} y1={top} y2={top + plotHeight} stroke={band.color} strokeOpacity="0.55" strokeWidth="1"/>}
+            {band.emphasis === "none" && band.startsInside && <line x1={band.x1} x2={band.x1} y1={top} y2={top + plotHeight} stroke={band.color} strokeOpacity="0.35" strokeWidth="1" strokeDasharray="2 3"/>}
+          </g>)}
+          {bandShapes.labels.map((label) => <text key={label.key} className="chart-session-label" x={label.x} y={top + 2} dy="0.8em" fill={label.color} fontSize={BAND_LABEL_SIZE} fontWeight="700">{label.text}</text>)}
           {yTicks.map((tick, index) => <line key={`grid-${index}`} x1={left} x2={left + plotWidth} y1={yAt(tick)} y2={yAt(tick)} stroke="var(--line)" strokeWidth="1"/>)}
           {showYAxis && yTicks.map((tick, index) => <text key={`y-${index}`} x={left - 6} y={yAt(tick)} dy="0.32em" textAnchor="end" fill="var(--muted)" fontSize={minHeight <= 125 ? 9.5 : 11}>{yTickFormatter(tick)}</text>)}
-          {xTickIndexes.map((index, tickIndex) => {
+          {times && timeTicks.map((time) => {
+            const x = xOfTime(time);
+            const anchor = x < left + 16 ? "start" : x > left + plotWidth - 16 ? "end" : "middle";
+            return <text key={`xt-${time}`} x={x} y={top + plotHeight + tickMargin} dy="0.8em" textAnchor={anchor} fill="var(--muted)" fontSize={minHeight <= 125 ? 9.5 : 11}>{xTickFormatter(new Date(time).toISOString())}</text>;
+          })}
+          {!times && xTickIndexes.map((index, tickIndex) => {
             const isFirst = tickIndex === 0;
             const isLast = tickIndex === xTickIndexes.length - 1;
             const anchor = isLast ? "end" : isFirst && !showYAxis ? "start" : "middle";

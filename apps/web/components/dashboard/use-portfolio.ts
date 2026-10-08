@@ -13,6 +13,7 @@ import {
   securityHistory,
   tradeRows,
   valuePortfolio,
+  withQuotes,
   type Currency,
   type HistoryPoint,
   type LedgerSecurity,
@@ -31,6 +32,7 @@ type Transaction = Seed["transactions"][number];
 type Account = Seed["accounts"][number];
 
 const DAY_SECONDS = 86_400;
+const NO_QUOTES: ReadonlyMap<string, Quote> = new Map();
 
 function freshnessOf(quote: Quote, nowSeconds: number): Freshness {
   const age = Math.max(0, nowSeconds - quote.time);
@@ -55,6 +57,13 @@ export function displayQuote(quote: Quote, security: { exchangeMic?: string } | 
     ...(quote.longName ? { longName: quote.longName } : {}),
     price,
     previousRegularClose: previous,
+    ...(quote.regularPrice != null && quote.regularTime != null
+      ? {
+        regularPrice: convert(quote.regularPrice, quote.currency, target, convertTo?.now ?? null) ?? undefined,
+        regularTimestamp: new Date(quote.regularTime * 1000).toISOString(),
+        extendedChangeRatio: quote.price / quote.regularPrice - 1,
+      }
+      : {}),
     ...(quote.dayHigh != null ? { dayHigh: convert(quote.dayHigh, quote.currency, target, convertTo?.now ?? null) ?? undefined } : {}),
     ...(quote.dayLow != null ? { dayLow: convert(quote.dayLow, quote.currency, target, convertTo?.now ?? null) ?? undefined } : {}),
     ...(quote.volume != null ? { dayVolume: quote.volume } : {}),
@@ -67,19 +76,18 @@ export function displayQuote(quote: Quote, security: { exchangeMic?: string } | 
   };
 }
 
-/** Field-wise equality for a security entry; the quote is compared one level deep. */
-function sameSecurity(left: MarketSecurity, right: MarketSecurity) {
-  const keys = Object.keys(right) as (keyof MarketSecurity)[];
-  if (Object.keys(left).length !== keys.length) return false;
-  return keys.every((key) => {
-    if (key !== "quote") return Object.is(left[key], right[key]);
-    const a = left.quote as Record<string, unknown> | undefined;
-    const b = right.quote as Record<string, unknown> | undefined;
-    if (!a || !b) return a === b;
-    const fields = Object.keys(b);
-    return Object.keys(a).length === fields.length && fields.every((field) => Object.is(a[field], b[field]));
-  });
+/** Field-wise equality of plain view-model objects, descending `depth` levels into nested objects. */
+function sameValue(left: unknown, right: unknown, depth: number): boolean {
+  if (Object.is(left, right)) return true;
+  if (depth <= 0 || !left || !right || typeof left !== "object" || typeof right !== "object" || Array.isArray(left) || Array.isArray(right)) return false;
+  const a = left as Record<string, unknown>;
+  const b = right as Record<string, unknown>;
+  const keys = Object.keys(b);
+  return Object.keys(a).length === keys.length && keys.every((key) => sameValue(a[key], b[key], depth - 1));
 }
+
+/** Field-wise equality for a security entry; the quote is compared one level deep. */
+const sameSecurity = (left: MarketSecurity, right: MarketSecurity) => sameValue(left, right, 2);
 
 type Options = {
   seed: Seed;
@@ -144,11 +152,15 @@ export function usePortfolio(o: Options) {
   const brokerOptions = useMemo(() => [...new Set([...accountMap.values()].filter((account) => !account.archivedAt).map((account) => account.broker).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ja")), [accountMap]);
 
   // ---- Book: every trade in today's share units ------------------------------------------------
-  const book = useMemo(
-    () => buildBook(transactions, ledgerSecurities, market.data, (transaction) => costBasisGroupForAccount(accountMap.get(transaction.accountId), transaction.accountId)),
-    [accountMap, ledgerSecurities, market.data, transactions],
+  // Built from the ledger and daily history only. A price poll re-prices it with `withQuotes`, so the
+  // engine's cached receipts and past history days are reused and only today's numbers are computed.
+  const historyMarket = useMemo(() => ({ quotes: NO_QUOTES, history: market.data.history }), [market.data.history]);
+  const ledgerBook = useMemo(
+    () => buildBook(transactions, ledgerSecurities, historyMarket, (transaction) => costBasisGroupForAccount(accountMap.get(transaction.accountId), transaction.accountId)),
+    [accountMap, historyMarket, ledgerSecurities, transactions],
   );
-  const rows = useMemo(() => tradeRows(book), [book]);
+  const book = useMemo(() => withQuotes(ledgerBook, market.data), [ledgerBook, market.data]);
+  const rows = useMemo(() => tradeRows(ledgerBook), [ledgerBook]);
   const include = useMemo(() => (trade: Trade<Transaction>) => {
     if (brokerFilter !== "ALL" && accountMap.get(trade.accountId)?.broker !== brokerFilter && trade.transaction.original?.broker !== brokerFilter) return false;
     return marketFilter === "ALL" || securityMatchesPortfolioFilter(filterSecurityMap.get(trade.securityId) ?? null, marketFilter, trade.securityId);
@@ -167,14 +179,21 @@ export function usePortfolio(o: Options) {
   const valuation = useMemo(() => valuePortfolio(book, { target: summaryCurrency, fx, today, include }), [book, fx, include, summaryCurrency, today]);
   const summary = valuation.summary;
 
+  // Rows whose numbers did not change keep their object, so a poll re-renders only the cards that moved.
+  const previousHoldings = useRef<Map<string, DashboardHolding>>(new Map());
   const holdings = useMemo<DashboardHolding[]>(() => {
     const base = displayCurrency === "NATIVE" ? native.holdings : valuation.holdings;
     const summaryValues = new Map(valuation.holdings.map((holding) => [holding.securityId, holding.marketValue]));
-    return base.map((holding) => {
+    const previous = previousHoldings.current;
+    const next = base.map((holding) => {
       const security = rawSecurityMap.get(holding.securityId) ?? { id: holding.securityId, displaySymbol: holding.securityId, name: holding.securityId, exchangeMic: "", currency: holding.currency };
       const quote = holding.quote ? displayQuote(holding.quote, security, nowSeconds, { currency: holding.currency, now: fx.now, previous: fx.previous }) : undefined;
-      return { ...holding, security: { ...security, ...(quote ? { quote } : {}) }, summaryMarketValue: summaryValues.get(holding.securityId) ?? null };
+      const entry: DashboardHolding = { ...holding, security: { ...security, ...(quote ? { quote } : {}) }, summaryMarketValue: summaryValues.get(holding.securityId) ?? null };
+      const before = previous.get(holding.securityId);
+      return before && sameValue(before, entry, 3) ? before : entry;
     });
+    previousHoldings.current = new Map(next.map((holding) => [holding.securityId, holding]));
+    return next;
   }, [displayCurrency, fx.now, fx.previous, native.holdings, nowSeconds, rawSecurityMap, valuation.holdings]);
 
   // ---- Charts ----------------------------------------------------------------------------------------
@@ -253,6 +272,10 @@ export function usePortfolio(o: Options) {
         price: converted?.price ?? null, previousClose: converted?.previousRegularClose ?? null, marketValue: null, unrealizedGain: null,
         realizedGain: closed?.realizedGain ?? 0, dividendIncome: closed?.dividendIncome ?? 0,
         dayGain: null, dayChangeRatio: quote?.previousClose ? quote.price / quote.previousClose - 1 : null, splitAdjusted: false,
+        ...(quote?.regularPrice != null ? {
+          extendedChangeRatio: quote.price / quote.regularPrice - 1,
+          ...(quote.previousClose ? { regularChangeRatio: quote.regularPrice / quote.previousClose - 1 } : {}),
+        } : {}),
         security: { ...security, ...(converted ? { quote: converted } : {}) },
       };
     return {

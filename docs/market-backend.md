@@ -38,10 +38,11 @@ Each security has one record: split-adjusted closes, the splits and the dividend
 
 ## Freshness and cost
 
-- Quotes refresh on read when older than 15 s (3 s when forced); concurrent readers share one refresh. Warm reads are served from memory (≈5 ms in workerd).
-- 15-minute intraday series (5 days), fund NAVs (30 min), TOPIX (5 min) and Japannext (1 min, during PTS sessions) refresh in the background. A cold object waits for them at most 3 s once.
+- Reads never wait for Yahoo while the quotes are under a minute old: the snapshot is answered from memory (≈5 ms in workerd) and a read older than 8 s starts one shared refresh behind the answer. A forced read (pull to refresh, 3 s) or older quotes (cold object, long idle) wait for the refresh. The cron also refreshes quotes every minute while anyone has read a snapshot in the last 15 minutes, so a reopened app gets recent quotes at once. When a snapshot's quotes are more than 10 s older than the answer, the browser reads once more 1.5 s later.
+- 15-minute intraday series (5 days), fund NAVs (30 min), TOPIX (5 min) and Japannext (each minute, during PTS sessions) refresh in the background. A cold object waits for them at most 3 s once.
 - The snapshot omits intraday series when the client already has the current revision, so a poll is a few kilobytes; unchanged snapshots and histories answer 304.
-- After the TSE close, a newer Japannext trade within ±20% of the TSE price becomes the Japanese quote and is appended to the intraday series.
+- Extended hours: a US pre-market or after-hours trade (from Yahoo's spark bars, `includePrePost`) becomes the quote with `regularPrice` = the regular-session price it moved from. After the TSE close, a Japannext trade made after it (day or night session, within ±20% of the TSE price) becomes the Japanese quote with `regularPrice` = the TSE close, and is appended to the intraday series. The UI shows the session (PTS / 時間外 / プレ) and the move from `regularPrice`; valuation uses the latest price.
+- Japannext trades are tracked per security by cumulative volume: a volume change is a new trade, stamped with the file time. A night trade stays the quote into the next morning until a newer trade (or the TSE open) replaces it. A day-session trade first seen after the TSE close may predate it, so it counts only once its volume changes again. A file last written before the current session opened is ignored.
 - Every invocation stays within Workers Free's **50 subrequests** (budget 45). History work that does not fit continues in a Durable Object alarm two seconds later.
 
 The browser polls at the user's interval (10–60 s) while visible and any market is open, every 5 minutes when all markets are closed, and immediately when the app returns after 30 s. A reopened app paints the last snapshot and history from localStorage on the first frame.
@@ -54,7 +55,7 @@ Every member downloads the same catalog-wide data; holdings are filtered in the 
 
 - **Deploy:** `pnpm --filter @kabutora/web deploy:cloudflare`, then `pnpm verify:prod`.
 - **Health:** `GET /api/market/health` (no auth, no symbols) returns quote and catalog counts and data age.
-- **Storage:** the object keeps `catalog`, `q4` (last quotes), `h4:<key>` (history records) and `pts4` in SQLite. The first run of this version removes the previous backend's caches and keeps the catalog.
+- **Storage:** the object keeps `catalog`, `q4` (last quotes), `h4:<key>` (history records) and `pts4` (Japannext series and latest trades) in SQLite. The first run of this version removes the previous backend's caches and keeps the catalog.
 - **Rollback:** `wrangler rollback` to the previous Worker version; the previous version rebuilds its caches from upstream.
 
 ## What the checks prove

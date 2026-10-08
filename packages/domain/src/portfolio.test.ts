@@ -10,6 +10,7 @@ import {
   securityHistory,
   tradeRows,
   valuePortfolio,
+  withQuotes,
   type Fx,
   type LedgerSecurity,
   type LedgerTransaction,
@@ -216,6 +217,56 @@ describe("history", () => {
       ["2026-10-05", 1_000, 900], [TODAY, 1_200, 900],
     ]);
     expect(intradayHistory(book, { target: "JPY", fx: NO_FX, today: TODAY, since: 0, now: 1_791_252_000 }).map((point) => point.value)).toEqual([1_050, 1_100, 1_200]);
+  });
+});
+
+describe("extended sessions", () => {
+  it("splits the day into the regular session and the PTS move", () => {
+    const pts = quote("sec-285a", 18_900, 18_000, { session: "pts_night", venue: "JNX", regularPrice: 18_700, regularTime: Date.parse("2026-10-06T06:30:00Z") / 1000, time: Date.parse("2026-10-06T12:00:00Z") / 1000 });
+    const book = buildBook([tx("t", "sec-285a", "BUY", "2026-09-01", 10, 15_000)], securities(jp("sec-285a")), market([pts]));
+    const holding = valuePortfolio(book, { target: "JPY", fx: NO_FX, today: TODAY }).holdings[0];
+    expect(holding.dayGain).toBe(9_000);
+    expect(holding.extendedGain).toBe(2_000);
+    expect(holding.regularGain).toBe(7_000);
+    expect(holding.extendedChangeRatio).toBeCloseTo(18_900 / 18_700 - 1, 12);
+    expect(holding.regularChangeRatio).toBeCloseTo(18_700 / 18_000 - 1, 12);
+    expect((1 + holding.regularChangeRatio!) * (1 + holding.extendedChangeRatio!) - 1).toBeCloseTo(holding.dayChangeRatio!, 12);
+  });
+});
+
+describe("re-pricing with new quotes", () => {
+  it("matches a freshly built book while reusing the past days", () => {
+    const usd: LedgerSecurity = { id: "sec-us-aapl", currency: "USD" };
+    const fx: Fx = { now: 150, previous: 149, dates: ["2026-09-01", "2026-10-05"], closes: [140, 148] };
+    const histories = [
+      history("sec-285a", [["2026-09-25", 18_000], ["2026-09-29", 17_880], ["2026-10-05", 19_120]], { splits: [{ date: "2026-09-29", ratio: 3 }], dividends: [{ date: "2026-09-29", amount: 10 }] }),
+      history("sec-us-aapl", [["2026-09-25", 250], ["2026-10-05", 255]], { currency: "USD" }),
+    ];
+    const transactions = [
+      tx("t1", "sec-285a", "BUY", "2026-09-25", 10, 54_000),
+      tx("t2", "sec-us-aapl", "BUY", "2026-09-25", 4, 250, { tradeCurrency: "USD" }),
+      tx("t3", "sec-285a", "SELL", TODAY, 5, 18_800),
+    ];
+    const ledger = securities(jp("sec-285a"), usd);
+    const first = market([quote("sec-285a", 18_735, 19_120), quote("sec-us-aapl", 256, 255, { venue: "US", currency: "USD" })], histories);
+    const book = buildBook(transactions, ledger, first);
+    for (const target of ["JPY", "USD"] as const) portfolioHistory(book, { target, fx, today: TODAY });
+
+    const later: MarketData = { ...first, quotes: market([quote("sec-285a", 18_900, 19_120), quote("sec-us-aapl", 251, 255, { venue: "US", currency: "USD" })]).quotes };
+    const repriced = withQuotes(book, later);
+    const fresh = buildBook(transactions, ledger, later);
+    const laterFx = { ...fx, now: 151 };
+    for (const target of ["JPY", "USD", "NATIVE"] as const) {
+      expect(portfolioHistory(repriced, { target: target === "NATIVE" ? "JPY" : target, fx: laterFx, today: TODAY }))
+        .toEqual(portfolioHistory(fresh, { target: target === "NATIVE" ? "JPY" : target, fx: laterFx, today: TODAY }));
+      expect(valuePortfolio(repriced, { target, fx: laterFx, today: TODAY })).toEqual(valuePortfolio(fresh, { target, fx: laterFx, today: TODAY }));
+      expect(dividendReceipts(repriced, { target, fx: laterFx, today: TODAY })).toEqual(dividendReceipts(fresh, { target, fx: laterFx, today: TODAY }));
+    }
+    const points = portfolioHistory(repriced, { target: "JPY", fx: laterFx, today: TODAY });
+    expect(points.at(-1)!.value).toBeCloseTo(valuePortfolio(repriced, { target: "JPY", fx: laterFx, today: TODAY }).summary.totalValue, 6);
+    // A filter is part of the cache key.
+    const onlyApple = (trade: { securityId: string }) => trade.securityId === "sec-us-aapl";
+    expect(portfolioHistory(repriced, { target: "USD", fx: laterFx, today: TODAY, include: onlyApple }).at(-1)!.value).toBe(4 * 251);
   });
 });
 

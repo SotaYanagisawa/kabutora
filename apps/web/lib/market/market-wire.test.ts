@@ -21,10 +21,12 @@ describe("market wire format", () => {
     const good = { key: "sec-1", price: 1, previousClose: null, time: 1, session: "closed", venue: "TSE", currency: "JPY", fetchedAt: 1 };
     const parsed = parseSnapshotPayload({
       version: MARKET_WIRE_VERSION, generatedAt: 1, revision: "r", catalog: ["sec-1"], benchmarks: [], historyRevision: "h", intradayRevision: "i",
-      quotes: [good, { ...good, price: -1 }, { ...good, session: "lunch" }],
+      quotes: [good, { ...good, price: -1 }, { ...good, session: "lunch" }, { ...good, regularPrice: 0, regularTime: 1 }, { ...good, regularPrice: 2 }],
       intraday: { "sec-1": { t: [1], p: [1] }, "sec-2": { t: [1, 2], p: [1] } },
     });
     expect(parsed?.quotes).toEqual([good]);
+    const extended = { ...good, session: "pts_night", venue: "JNX", regularPrice: 2, regularTime: 1 };
+    expect(parseSnapshotPayload({ version: MARKET_WIRE_VERSION, generatedAt: 1, revision: "r", catalog: [], benchmarks: [], quotes: [extended] })?.quotes).toEqual([extended]);
     expect(Object.keys(parsed?.intraday ?? {})).toEqual(["sec-1"]);
     expect(parseSnapshotPayload({ version: 3 })).toBeNull();
     expect(parseHistoryPayload({ version: MARKET_WIRE_VERSION, revision: "r", records: { a: { c: "JPY", d: "2026-01-01", g: [0], p: [0], s: [], v: [], f: 1 } } })?.records).toEqual({});

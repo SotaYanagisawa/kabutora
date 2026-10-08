@@ -231,6 +231,47 @@ export const formatWidgetFetchedTime = (
   return `${dateStr} ${timeStr} ${tzCode}`;
 };
 
+type QuoteTimeFormats = { day: Intl.DateTimeFormat; time: Intl.DateTimeFormat; monthDay: Intl.DateTimeFormat };
+const quoteTimeFormats = new Map<string, QuoteTimeFormats>();
+const quoteTimeFormatsFor = (timeZone: string) => {
+  let formats = quoteTimeFormats.get(timeZone);
+  if (!formats) {
+    formats = {
+      day: new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }),
+      time: new Intl.DateTimeFormat("ja-JP", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
+      monthDay: new Intl.DateTimeFormat("ja-JP", { timeZone, month: "numeric", day: "numeric" }),
+    };
+    quoteTimeFormats.set(timeZone, formats);
+  }
+  return formats;
+};
+
+/**
+ * Card-sized quote time in the exchange's time zone: "15:30" on the exchange's current day, otherwise
+ * the date alone ("10/6"). The full date, time and zone belong in the card's title.
+ */
+export function compactQuoteTime(timestamp: string | null | undefined, timeZone: string, now: number | Date = Date.now()) {
+  if (!timestamp) return null;
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return null;
+  const formats = quoteTimeFormatsFor(timeZone);
+  return formats.day.format(date) === formats.day.format(now) ? formats.time.format(date) : formats.monthDay.format(date);
+}
+
+/** Short session label for a quote card. */
+export function quoteSessionLabel(quote: Pick<DisplayQuote, "venueCode" | "session">) {
+  if (quote.venueCode === "FUND") return "基準価額";
+  if (quote.venueCode === "INDEX") return "指数";
+  if (quote.venueCode === "JNX" || quote.session === "pts_day" || quote.session === "pts_night") return "PTS";
+  if (quote.session === "pre_market") return "プレ";
+  if (quote.session === "after_hours") return "時間外";
+  return quote.session === "regular" ? "取引中" : "終値";
+}
+
+/** "+12.3%", or "+929%" / "+1,157%" from 100%: no decimals once three digits would crowd a card. */
+export const compactSignedPercent = (value: number | null, digits = 1) =>
+  value == null ? "—" : Math.abs(value) >= 1 ? `${value >= 0 ? "+" : "-"}${number.format(Math.round(Math.abs(value) * 100))}%` : signedPercent(value, digits);
+
 export const formatDayGainMoney = (value: number, currency: DisplayCurrency | string) => {
   const sign = value < 0 ? "−" : value > 0 ? "+" : "";
   const absolute = Math.abs(value);

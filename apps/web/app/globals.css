@@ -43,6 +43,9 @@
   --accent: #3f4854;
   --accent-hover: #28313c;
   --header: #ffffff;
+  /* Trading-session bands on the 1D chart: neither gain green nor loss red. */
+  --session-jp: #b4532a;
+  --session-us: #2f6db5;
 }
 
 :root[data-accent="blue"] { --accent: #315f91; --accent-hover: #23496f; }
@@ -64,6 +67,8 @@
   --accent: #a8adb5;
   --accent-hover: #d2d5d9;
   --header: #050506;
+  --session-jp: #e08a5f;
+  --session-us: #6fa3e0;
 }
 
 :root[data-theme="dark"][data-accent="blue"] { --accent: #7da7d0; --accent-hover: #a7c4df; }
@@ -703,7 +708,10 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
   display: none;
 }
 
-/* Holdings Widget Grid Mode */
+/* Holdings Widget Grid Mode — three cards per row on an iPhone in portrait.
+   Left edge, top to bottom: name, code, price, day change, gain.
+   Right edge: time (or the PTS / 時間外 move), gain amount.
+   Price and day change have full rows and scale with the card, with room to spare for wider device fonts. */
 .holdings-table.grid-view {
   background: var(--panel);
 }
@@ -717,9 +725,9 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
 }
 .holdings-grid-body {
   display: grid !important;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  padding: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 6px;
+  padding: 6px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -736,7 +744,7 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
   overflow: hidden;
   box-sizing: border-box;
   content-visibility: auto;
-  contain-intrinsic-size: auto 92px;
+  contain-intrinsic-size: auto 96px;
 }
 .holding-widget-card.selectable {
   cursor: pointer;
@@ -756,23 +764,20 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
 }
 
 .widget-card-cell {
+  container-type: inline-size;
   display: flex !important;
   flex-direction: column;
-  justify-content: space-between;
+  gap: 1px;
   width: 100% !important;
   height: auto !important;
-  min-height: 84px;
-  padding: 8px 10px !important;
-  gap: 3px;
+  padding: 7px 8px 6px !important;
   border: 0 !important;
   text-align: left !important;
   box-sizing: border-box;
 }
-
-/* Common Row Layout */
 .widget-card-row {
   display: flex !important;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: 4px;
   min-width: 0;
@@ -780,168 +785,158 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
   flex-wrap: nowrap !important;
 }
 
-/* Row 1: Header (Ticker on left, Fetched Time on top right) */
-.widget-row-header {
-  line-height: 1.15;
-}
-.widget-ticker-wrap {
-  display: flex !important;
-  align-items: baseline;
-  min-width: 0;
-  overflow: hidden;
-}
+/* Name */
 .widget-ticker {
-  font-size: 13.5px !important;
-  font-weight: 800 !important;
-  color: var(--text);
-  letter-spacing: -0.01em;
-  line-height: 1.15;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.widget-time-group {
-  display: inline-flex !important;
-  align-items: center;
-  gap: 3.5px;
   min-width: 0;
-  flex-shrink: 0;
-  margin-left: auto;
-  line-height: 1;
-}
-.widget-time-group .quote-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.widget-fetched-time {
-  font-size: 9px;
-  color: var(--muted);
-  font-weight: 500;
-  letter-spacing: 0.01em;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  font-variant-numeric: tabular-nums;
 }
 
-/* Row 2: Sub-header (Security Name) */
+/* Code · market | PTS / 時間外 move */
 .widget-row-sub {
-  line-height: 1.1;
-  margin-top: -1px;
+  line-height: 1.2;
 }
 .widget-sec-name {
-  font-size: 10px;
-  font-weight: 500;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
+  font-size: 9.5px;
+  font-weight: 500;
   text-overflow: ellipsis;
-  min-width: 0;
-  width: 100%;
-}
-
-/* Row 3: Current Stock Price (left, smaller) + Daily Change % (right, HERO metric, bold) */
-.widget-row-price {
-  margin: 3px 0 2px 0;
-  line-height: 1.15;
-  align-items: baseline !important;
-}
-.widget-price {
-  display: flex !important;
-  align-items: baseline;
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-}
-.widget-price strong {
-  font-size: 12px !important;
-  font-weight: 700 !important;
-  color: var(--text);
-  letter-spacing: -0.01em;
-  line-height: 1.15;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.widget-day-val {
-  display: inline-flex !important;
-  align-items: baseline;
-  justify-content: flex-end;
-  text-align: right;
-  flex: 0 0 auto;
-  margin-left: auto;
-  line-height: 1.15;
-}
-.widget-day-val strong {
-  font-size: 14.5px !important;
-  font-weight: 900 !important;
-  letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.widget-day-val.up,
-.widget-day-val.up strong {
-  color: var(--up);
-}
-.widget-day-val.down,
-.widget-day-val.down strong {
-  color: var(--down);
-}
-
-/* Row 4: Total Gain/Loss */
-.widget-row-gain {
-  line-height: 1.15;
-}
-.widget-total-gain {
-  display: flex !important;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 4px;
-  width: 100%;
-  min-width: 0;
-  white-space: nowrap;
-  flex-wrap: nowrap !important;
-}
-.widget-gain-left {
+.widget-row-status {
+  flex: none;
   display: inline-flex;
   align-items: baseline;
   gap: 2px;
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+.widget-status-label {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 700;
+}
+.widget-status-change {
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.widget-status-change.up { color: var(--up); }
+.widget-status-change.down { color: var(--down); }
+
+/* Price */
+.widget-row-price {
+  margin-top: 2px;
+}
+.widget-price {
+  flex: 1 1 auto;
   min-width: 0;
-  flex-shrink: 0;
+  overflow: hidden;
 }
-.widget-gain-label {
-  font-size: 8.5px;
-  color: var(--muted);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-.widget-gain-percent {
-  font-size: 10.5px !important;
+.holding-widget-card .widget-price strong {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: clamp(12.5px, 12.5cqi, 16px) !important;
   font-weight: 750 !important;
   letter-spacing: -0.01em;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.widget-row-time {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.widget-total-gain.up .widget-gain-percent,
-.widget-total-gain.up .widget-gain-amount {
-  color: var(--up);
+.widget-row-time .quote-dot {
+  flex: none;
+  margin: 0 !important;
 }
-.widget-total-gain.down .widget-gain-percent,
-.widget-total-gain.down .widget-gain-amount {
-  color: var(--down);
+
+/* Day change: the largest number, on the same left edge as the price */
+.widget-row-day {
+  justify-content: flex-start;
+  line-height: 1.1;
+}
+.holding-widget-card .widget-row-day strong {
+  font-size: clamp(16px, 16.5cqi, 21px) !important;
+  font-weight: 900 !important;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.holding-widget-card .widget-day-val.up strong { color: var(--up); }
+.holding-widget-card .widget-day-val.down strong { color: var(--down); }
+
+/* Gain % | gain amount */
+.widget-row-gain {
+  margin-top: 1px;
+  line-height: 1.2;
+}
+.widget-gain-left {
+  flex: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+}
+.widget-gain-label {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
+}
+.holding-widget-card .widget-gain-percent {
+  font-size: 10.5px !important;
+  font-weight: 750 !important;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .widget-gain-amount {
-  font-size: 9.5px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
+  font-size: 10px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
-  text-align: right;
-  margin-left: auto;
-  flex-shrink: 1;
+  white-space: nowrap;
+}
+.holding-widget-card .widget-total-gain.up .widget-gain-percent,
+.widget-total-gain.up .widget-gain-amount { color: var(--up); }
+.holding-widget-card .widget-total-gain.down .widget-gain-percent,
+.widget-total-gain.down .widget-gain-amount { color: var(--down); }
+
+/* iPhone mini / SE (375 px) and narrower cards: drop the 損益 label first. */
+@container (max-width: 130px) {
+  .widget-gain-label { display: none; }
+  .holding-widget-card .widget-gain-percent { font-size: 10px !important; }
+  .widget-gain-amount { font-size: 9.5px; }
+}
+@container (max-width: 112px) {
+  /* iPhone SE / mini: the gain row tightens before anything would be cut. */
+  .holding-widget-card .widget-gain-percent { font-size: 9.5px !important; }
+  .widget-gain-amount { font-size: 9px; }
+}
+@container (max-width: 96px) {
+  .widget-gain-amount { display: none; }
 }
 
 .holdings-table table { width: 100%; table-layout: fixed; border-collapse: collapse; }
@@ -1628,8 +1623,10 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
 
 .detail-live-tag {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 1px 4px;
+  min-width: 0;
 }
 
 .detail-live-dot {
@@ -1643,6 +1640,7 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
 .detail-dot-sep {
   color: var(--line-strong);
 }
+
 
 .detail-meta-text {
   color: var(--muted);
@@ -1659,6 +1657,48 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
   min-height: 62px;
 }
 
+/* Regular session vs. after-hours / PTS: the day change split in two */
+.detail-session-split {
+  flex: 0 1 360px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  align-self: stretch;
+}
+.detail-session-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-alt);
+}
+.detail-session-cell.extended {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel-alt));
+}
+.detail-session-cell .daily-stat-label { display: inline-flex; align-items: center; gap: 4px; }
+.detail-session-cell .daily-stat-val { font-size: 17px; }
+.detail-session-chip {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+  font-weight: 750;
+}
+.detail-session-price {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
+.detail-session-price > span { white-space: nowrap; }
+
 .detail-summary-metrics {
   grid-template-columns: repeat(5, auto);
   column-gap: 20px;
@@ -1667,6 +1707,7 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
 /* Between phone and wide desktop the five metrics move under the price instead of clipping. */
 @media (min-width: 841px) and (max-width: 1180px) {
   .detail-summary { flex-direction: column; align-items: stretch; gap: 8px; padding-block: 8px; }
+  .detail-session-split { flex: none; }
   .detail-summary .daily-summary-divider { display: none; }
   .detail-summary-metrics { justify-content: start; border-top: 1px solid var(--line); padding-top: 8px; }
 }
@@ -3613,88 +3654,19 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
     border-radius: 3px !important;
   }
 
-  /* Mobile Widget Grid Overrides - 3 Columns with increased card height */
+  /* Phones: three cards per row, tight gutters (iPhone portrait 375–440 px) */
   .holdings-table.grid-view tbody.holdings-grid-body {
-    display: grid !important;
     grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
     gap: 4px !important;
     padding: 4px !important;
   }
   .holdings-table.grid-view tr.holding-widget-card {
-    display: flex !important;
-    flex-direction: column !important;
-    grid-template-columns: none !important;
-    grid-template-rows: none !important;
-    height: auto !important;
-    min-height: 82px !important;
-    padding: 0 !important;
-    border: 1px solid var(--line) !important;
     border-radius: 8px !important;
-    background: var(--panel-alt) !important;
-    contain-intrinsic-size: auto 86px;
+    contain-intrinsic-size: auto 90px;
   }
   .holdings-table.grid-view .widget-card-cell {
-    padding: 6px 7px !important;
-    gap: 2px !important;
-    min-height: 80px !important;
-    justify-content: space-between !important;
+    padding: 6px 7px 5px !important;
   }
-  .holdings-table.grid-view .widget-ticker {
-    font-size: 11.5px !important;
-    font-weight: 800 !important;
-  }
-  .holdings-table.grid-view .widget-time-group .quote-dot {
-    width: 4px !important;
-    height: 4px !important;
-  }
-  .holdings-table.grid-view .widget-fetched-time {
-    font-size: 9px !important;
-  }
-  .holdings-table.grid-view .widget-sec-name {
-    font-size: 9.5px !important;
-  }
-  .holdings-table.grid-view .widget-row-price {
-    margin: 2px 0 1px 0 !important;
-  }
-  .holdings-table.grid-view .widget-price {
-    flex: 1 1 auto !important;
-    min-width: 0 !important;
-  }
-  .holdings-table.grid-view .widget-price strong {
-    font-size: 11px !important;
-    font-weight: 700 !important;
-  }
-  .holdings-table.grid-view .widget-day-val {
-    flex: 0 0 auto !important;
-    margin-left: auto !important;
-  }
-  .holdings-table.grid-view .widget-day-val strong {
-    font-size: 13.5px !important;
-    font-weight: 900 !important;
-  }
-  .holdings-table.grid-view .widget-gain-label {
-    font-size: 9px !important;
-  }
-  .holdings-table.grid-view .widget-gain-percent {
-    font-size: 10px !important;
-  }
-  .holdings-table.grid-view .widget-gain-amount {
-    font-size: 9.5px !important;
-  }
-  /* Three cards per row leave ~110px per card: numbers scale with the card and wrap to a second
-     line instead of being cut to "¥28,…". */
-  .holdings-table.grid-view .widget-card-cell { container-type: inline-size; }
-  .holdings-table.grid-view .widget-ticker { font-size: clamp(11.5px, 10.5cqi, 13px) !important; }
-  .holdings-table.grid-view .widget-price strong { font-size: clamp(10px, 9.4cqi, 12.5px) !important; }
-  .holdings-table.grid-view .widget-day-val strong { font-size: clamp(11px, 10.4cqi, 14px) !important; }
-  @container (max-width: 125px) {
-    .holdings-table.grid-view .widget-gain-label { display: none; }
-  }
-  .holdings-table.grid-view .widget-row-price,
-  .holdings-table.grid-view .widget-total-gain { flex-wrap: wrap !important; column-gap: 4px; row-gap: 1px; }
-  .holdings-table.grid-view .widget-price,
-  .holdings-table.grid-view .widget-price strong,
-  .holdings-table.grid-view .widget-gain-amount { overflow: visible; text-overflow: clip; }
 
   .ticker-sparkline-wrap { height: 44px; max-width: 68px !important; display: flex !important; flex-direction: column; justify-content: space-between; margin-block: auto; }
   .compact-number { display: inline !important; }
@@ -3932,6 +3904,7 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
     border-inline: 0;
     border-radius: 0;
   }
+  .detail-session-split { flex: none; }
   .detail-summary-metrics {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -4290,11 +4263,11 @@ html[data-page-visibility="hidden"] .app-loading-logo { animation-play-state: pa
 }
 
 @media (max-width: 360px) {
+  .holdings-table.grid-view tbody.holdings-grid-body { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
   .market-overview-strip { grid-template-columns: 90px 96px minmax(0,1fr); }
   .market-session-panel { padding-inline: 5px; }
   .market-fx-panel { padding-inline: 6px; }
   .holdings-mobile-header { grid-template-columns: minmax(105px,1.4fr) minmax(70px,1fr) minmax(80px,1.1fr); column-gap: 0; padding-inline: 3px; }
-  .holdings-table.grid-view tbody.holdings-grid-body { grid-template-columns: minmax(0, 1fr) !important; gap: 6px !important; padding: 4px !important; }
 }
 
 /* ===== SECTION: dividends — Dividends page ===== */

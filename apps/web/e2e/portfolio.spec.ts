@@ -2,6 +2,7 @@ import { expect, test } from "./strict-fixture";
 import { yen } from "./market-fixture";
 import demo from "../data/demo-seed.json";
 import { demoMarket, installDemo, openView } from "./demo-portfolio";
+import { marketSessionWindows } from "../lib/market/market-session";
 
 const total = (page: import("@playwright/test").Page) => page.locator(".overview-page .daily-stat-item.primary .daily-stat-val");
 
@@ -41,6 +42,94 @@ test("startup shows the latest price from a single market request", async ({ pag
   // Nothing loops in the background while the page sits idle.
   await page.waitForTimeout(3_000);
   expect(snapshots).toHaveLength(1);
+});
+
+test("holding cards keep the whole name and show PTS and after-hours trades against the regular close", async ({ page }) => {
+  const seed = structuredClone(demo) as typeof demo;
+  const mufg = { ...demo.securities[0], id: "sec-8306-xtks", canonicalSymbol: "8306", displaySymbol: "8306", providerSymbols: { yahoo: "8306.T" }, name: "三菱ＵＦＪフィナンシャル・グループ" };
+  seed.securities.push(mufg);
+  seed.transactions.push({ ...demo.transactions[0], id: "demo-mufg-buy", securityId: mufg.id, original: { ...demo.transactions[0].original, ticker: "8306.T", name: mufg.name } });
+  const now = Math.floor(Date.now() / 1000);
+  const market = demoMarket();
+  market.quotes = [
+    // A close from three days ago: the long name must not be cut by the date.
+    { key: "sec-8306", price: 2_120, previousClose: 2_100, time: now - 3 * 86_400, session: "closed" },
+    { key: "sec-7203", price: 3_030, previousClose: 2_950, time: now - 60, session: "pts_night", venue: "JNX", regularPrice: 3_000, regularTime: now - 6 * 3_600 },
+    { key: "sec-us-aapl", price: 221.1, previousClose: 215, time: now - 60, session: "after_hours", venue: "US", currency: "USD", regularPrice: 220, regularTime: now - 3 * 3_600 },
+    ...market.quotes!.filter((quote) => quote.key === "sec-fx-usdjpy"),
+  ];
+  await installDemo(page, market, seed);
+  await page.goto("/");
+  const card = (text: string) => page.locator("tr.holding-widget-card").filter({ hasText: text });
+  await expect(card("三菱").locator(".widget-ticker")).toHaveText("三菱ＵＦＪFG");
+  for (const name of await page.locator(".widget-ticker").all()) {
+    expect(await name.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
+  // A close from another day shows only its date, so it never pushes the name aside.
+  await expect(card("三菱").locator(".widget-fetched-time")).toHaveText(/^\d{1,2}\/\d{1,2}$/u);
+  await expect(card("三菱").locator(".widget-sec-name")).toHaveText("8306 · 東証");
+  await expect(card("トヨタ").locator(".widget-row-status")).toContainText("PTS+1.00%");
+  await expect(card("トヨタ").locator(".price-col strong")).toHaveText("¥3,030");
+  await expect(card("AAPL").locator(".widget-row-status")).toContainText("時間外+0.50%");
+  // No price, day change or gain is cut off — also with every glyph ~10% wider, as on a device whose font runs wider.
+  const clipped = () => page.locator(".widget-card-row, .widget-price strong, .widget-row-day strong, .widget-gain-amount").evaluateAll((items) =>
+    items.filter((item) => item.scrollWidth > item.clientWidth + 1).map((item) => item.textContent));
+  expect(await clipped()).toEqual([]);
+  await page.addStyleTag({ content: ".holding-widget-card * { letter-spacing: 0.06em !important; }" });
+  expect(await clipped()).toEqual([]);
+  await card("トヨタ").click();
+  const split = page.locator(".detail-session-split");
+  await expect(split.locator(".detail-session-cell").first()).toContainText("+1.69%");
+  await expect(split.locator(".detail-session-cell").first().locator(".detail-session-price span").first()).toHaveText(new RegExp(`東証終値 ${yen("3,000").source}`, "u"));
+  await expect(split.locator(".detail-session-cell.extended")).toContainText("PTS東証終値比+1.00%");
+  await expect(split.locator(".detail-session-cell.extended")).toContainText(yen("3,000")); // +¥3,000 on 100 shares
+});
+
+test("the 1D chart shades the trading sessions of the markets shown", async ({ page }) => {
+  // Thu 07:30 JST / Wed 18:30 EDT: the last 24 hours hold a full TSE day, PTS and a US day.
+  const now = Date.parse("2026-10-07T22:30:00Z");
+  await page.clock.setFixedTime(now);
+  const series = (market: "JP" | "US", base: number) => {
+    const times: number[] = [];
+    for (const window of marketSessionWindows(market, now - 30 * 3_600_000, now)) {
+      if (window.kind !== "lunch") for (let time = window.start; time < window.end; time += 1_800_000) times.push(Math.floor(time / 1000));
+    }
+    return { times, prices: times.map((_, index) => base * (1 + 0.001 * (index % 7))) };
+  };
+  const market = demoMarket({ generatedAt: new Date(now).toISOString(), intraday: { "sec-7203": series("JP", 3_000), "sec-us-aapl": series("US", 220) } });
+  market.quotes = market.quotes!.map((quote) => ({ ...quote, time: Math.floor(now / 1000) - 60, fetchedAt: Math.floor(now / 1000) }));
+  await installDemo(page, market);
+  await page.goto("/");
+  await expect(total(page)).toBeVisible();
+  const labels = page.locator(".daily-chart .chart-session-label");
+  await page.locator(".daily-range .chart-range-presets").getByRole("button", { name: "1D", exact: true }).click();
+  await expect(labels.filter({ hasText: "東証" }).first()).toBeVisible();
+  await expect(labels.filter({ hasText: "米国" })).toHaveCount(1);
+  await page.locator('select[aria-label="資産区分と国で絞り込み"]:visible, select[aria-label="資産区分で絞り込み"]:visible').first().selectOption("JP");
+  await expect(labels.filter({ hasText: "米国" })).toHaveCount(0);
+  await expect(labels.filter({ hasText: "東証" }).first()).toBeVisible();
+  await page.locator('select[aria-label="資産区分と国で絞り込み"]:visible, select[aria-label="資産区分で絞り込み"]:visible').first().selectOption("US");
+  await expect(labels.filter({ hasText: "東証" })).toHaveCount(0);
+  await expect(labels.filter({ hasText: "米国" })).toHaveCount(1);
+  // Daily ranges have no session bands.
+  await page.locator(".daily-range .chart-range-presets").getByRole("button", { name: "1M", exact: true }).click();
+  await expect(page.locator(".daily-chart .chart-session-band")).toHaveCount(0);
+});
+
+test("re-reads once soon after the server answered with quotes it had not refreshed yet", async ({ page }) => {
+  const market = demoMarket();
+  const stale = Math.floor(Date.now() / 1000) - 120;
+  market.quotes = market.quotes!.map((quote) => ({ ...quote, fetchedAt: stale }));
+  await installDemo(page, market);
+  const snapshots: number[] = [];
+  page.on("request", (request) => { if (new URL(request.url()).pathname === "/api/market/snapshot") snapshots.push(Date.now()); });
+  await page.goto("/");
+  await expect(total(page)).toHaveText(yen("630,000"));
+  await expect.poll(() => snapshots.length, { timeout: 4_000 }).toBe(2);
+  expect(snapshots[1] - snapshots[0]).toBeLessThan(3_000);
+  // Still stale (the fixture never refreshes): no loop.
+  await page.waitForTimeout(3_000);
+  expect(snapshots).toHaveLength(2);
 });
 
 test("trade entry, edit and delete update holdings and the saved ledger", async ({ page }) => {

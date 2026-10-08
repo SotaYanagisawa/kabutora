@@ -130,12 +130,15 @@ export function quoteFromSpark(key: string, security: RequestedSecurity, row: Sp
     time = metaTime ?? time;
   }
   if (price === undefined || time === undefined) return null;
-  if (session === "closed" && metaTime !== undefined && time > metaTime && security.venueCode === "US") session = "after_hours";
+  const extended = metaPrice !== undefined && metaTime !== undefined && time > metaTime;
+  if (session === "closed" && extended && security.venueCode === "US") session = "after_hours";
   return {
     key,
     price,
     previousClose,
     time,
+    // Pre-market and after-hours trades keep the regular-session price they move away from.
+    ...(extended && (session === "pre_market" || session === "after_hours") ? { regularPrice: metaPrice, regularTime: metaTime } : {}),
     session,
     venue: venueOf(security),
     currency: meta.currency?.toUpperCase() || security.currency,
@@ -387,7 +390,13 @@ export function fundQuote(key: string, history: DailyHistory, nowSeconds: number
 
 // ---- Japannext PTS ---------------------------------------------------------------------------------
 
-export type PtsWindow = { venue: "day" | "night"; session: "pts_day" | "pts_night"; sessionKey: string };
+export type PtsWindow = {
+  venue: "day" | "night";
+  session: "pts_day" | "pts_night";
+  sessionKey: string;
+  /** Unix seconds when this session opened. */
+  start: number;
+};
 
 /** Japannext windows (JST): day 08:20–16:30, night 17:00–06:00 (after midnight belongs to the previous date). */
 export function ptsWindowAt(unixMs: number): PtsWindow | null {
@@ -395,19 +404,23 @@ export function ptsWindowAt(unixMs: number): PtsWindow | null {
   const minute = tokyo.getUTCHours() * 60 + tokyo.getUTCMinutes();
   const date = tokyo.toISOString().slice(0, 10);
   const weekday = tokyo.getUTCDay();
-  if (minute >= 8 * 60 + 20 && minute <= 16 * 60 + 30 && weekday >= 1 && weekday <= 5) return { venue: "day", session: "pts_day", sessionKey: date };
-  if (minute >= 17 * 60 && weekday >= 1 && weekday <= 5) return { venue: "night", session: "pts_night", sessionKey: date };
+  const at = (day: string, time: string) => Date.parse(`${day}T${time}:00+09:00`) / 1000;
+  if (minute >= 8 * 60 + 20 && minute <= 16 * 60 + 30 && weekday >= 1 && weekday <= 5) return { venue: "day", session: "pts_day", sessionKey: date, start: at(date, "08:20") };
+  if (minute >= 17 * 60 && weekday >= 1 && weekday <= 5) return { venue: "night", session: "pts_night", sessionKey: date, start: at(date, "17:00") };
   if (minute < 6 * 60 && weekday >= 2 && weekday <= 6) {
     const previous = new Date(tokyo);
     previous.setUTCDate(previous.getUTCDate() - 1);
-    return { venue: "night", session: "pts_night", sessionKey: previous.toISOString().slice(0, 10) };
+    const day = previous.toISOString().slice(0, 10);
+    return { venue: "night", session: "pts_night", sessionKey: day, start: at(day, "17:00") };
   }
   return null;
 }
 
+export type PtsRow = { price: number; volume: number };
+
 /** Japannext's assignment-form batch file, parsed as data (never evaluated). Symbols traded this session only. */
-export function parsePtsSource(source: string): Map<string, number> {
-  const rows = new Map<string, number>();
+export function parsePtsSource(source: string): Map<string, PtsRow> {
+  const rows = new Map<string, PtsRow>();
   for (const line of source.split(/\r?\n/u)) {
     const match = /^mdata\[\s*\d+\s*\]\s*=\s*(\[.*\]);\s*$/u.exec(line.trim());
     if (!match) continue;
@@ -417,7 +430,8 @@ export function parsePtsSource(source: string): Map<string, number> {
     const [symbol, , , , , , , last, volume] = row as unknown[];
     if (typeof symbol !== "string" || !/^(?:\d{4}|\d{3}[A-Z])$/u.test(symbol)) continue;
     const price = Number(last);
-    if (Number.isFinite(price) && price > 0 && Number(volume) > 0) rows.set(symbol, price);
+    const traded = Number(volume);
+    if (Number.isFinite(price) && price > 0 && Number.isFinite(traded) && traded > 0) rows.set(symbol, { price, volume: traded });
   }
   return rows;
 }
@@ -432,7 +446,7 @@ export async function fetchPts(window: PtsWindow, budget: Budget, nowMs: number)
   const text = await response.text();
   if (text.length > 600_000) throw new UpstreamError("pts_source_too_large");
   const modified = Date.parse(response.headers.get("Last-Modified") ?? "");
-  return { at: Math.floor(Math.min(Number.isFinite(modified) ? modified : nowMs, nowMs) / 1000), last: parsePtsSource(text) };
+  return { at: Math.floor(Math.min(Number.isFinite(modified) ? modified : nowMs, nowMs) / 1000), rows: parsePtsSource(text) };
 }
 
 // ---- TOPIX (Yahoo! ファイナンス index board) -------------------------------------------------------
