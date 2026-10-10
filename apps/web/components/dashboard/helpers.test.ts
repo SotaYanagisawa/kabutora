@@ -1,8 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { compactQuoteTime, compactSignedPercent, formatWidgetFetchedTime, quoteSessionLabel, quoteTradeSourceLabel } from "./helpers";
+import { compactQuoteTime, compactSignedPercent, formatWidgetFetchedTime, lastTradingDay, quoteSessionLabel, quoteTradeSourceLabel } from "./helpers";
 import type { DisplayQuote } from "./types";
 
 describe("dashboard helpers", () => {
+  describe("lastTradingDay", () => {
+    const at = (iso: string, value: number) => ({ date: new Date(iso).toISOString(), value });
+    it("keeps the last 24 hours while markets trade", () => {
+      const points = [at("2026-10-07T23:00:00Z", 1), at("2026-10-08T01:00:00Z", 2), at("2026-10-08T23:30:00Z", 3), at("2026-10-09T00:00:00Z", 4)];
+      expect(lastTradingDay(points).map((point) => point.value)).toEqual([2, 3, 4]);
+    });
+
+    it("ends at the last trade once markets have been idle, with the live value standing in for it", () => {
+      // Saturday 14:00 JST: the last trade was US after-hours, Saturday 08:45 JST.
+      const points = [at("2026-10-08T23:00:00Z", 1), at("2026-10-09T00:00:00Z", 2), at("2026-10-09T14:00:00Z", 3), at("2026-10-09T23:45:00Z", 4), at("2026-10-10T05:00:00Z", 5)];
+      expect(lastTradingDay(points)).toEqual([at("2026-10-09T00:00:00Z", 2), at("2026-10-09T14:00:00Z", 3), at("2026-10-09T23:45:00Z", 5)]);
+    });
+
+    it("leaves a history without trades alone", () => {
+      expect(lastTradingDay([])).toEqual([]);
+      expect(lastTradingDay([at("2026-10-10T05:00:00Z", 1)])).toEqual([at("2026-10-10T05:00:00Z", 1)]);
+    });
+  });
+
   describe("formatWidgetFetchedTime", () => {
     it("formats today's US stock market trade time in ET/EDT", () => {
       // 05:44 AM EDT on 2026-09-15

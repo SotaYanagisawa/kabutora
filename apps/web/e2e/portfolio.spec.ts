@@ -116,6 +116,59 @@ test("the 1D chart shades the trading sessions of the markets shown", async ({ p
   await expect(page.locator(".daily-chart .chart-session-band")).toHaveCount(0);
 });
 
+test("the 1D chart labels a session that just opened and stays flat while the market is closed", async ({ page }) => {
+  // Thu 09:05 JST: the TSE opened five minutes ago, after the night PTS ended at 06:00.
+  const now = Date.parse("2026-10-08T00:05:00Z");
+  await page.clock.setFixedTime(now);
+  const times: number[] = [];
+  for (const window of marketSessionWindows("JP", now - 30 * 3_600_000, now)) {
+    if (window.kind !== "lunch") for (let time = window.start; time < window.end; time += 1_800_000) times.push(Math.floor(time / 1000));
+  }
+  const market = demoMarket({ generatedAt: new Date(now).toISOString(), intraday: { "sec-7203": { times, prices: times.map((_, index) => 3_000 * (1 + 0.002 * (index % 5))) } } });
+  market.quotes = market.quotes!.map((quote) => ({ ...quote, time: Math.floor(now / 1000) - 60, fetchedAt: Math.floor(now / 1000) }));
+  await installDemo(page, market);
+  await page.goto("/");
+  await expect(total(page)).toBeVisible();
+  await page.locator('select[aria-label="資産区分と国で絞り込み"]:visible, select[aria-label="資産区分で絞り込み"]:visible').first().selectOption("JP");
+  await page.locator(".daily-range .chart-range-presets").getByRole("button", { name: "1D", exact: true }).click();
+  const chart = page.locator(".daily-chart .lightweight-chart-surface").first();
+  // The TSE band is a sliver at the right edge; its label still shows, kept inside the plot.
+  const labels = page.locator(".daily-chart .chart-session-label").filter({ hasText: "東証" });
+  await expect(labels.first()).toBeVisible();
+  const chartBox = (await chart.boundingBox())!;
+  const rightmost = Math.max(...(await labels.evaluateAll((items) => items.map((item) => item.getBoundingClientRect().right))));
+  expect(rightmost).toBeLessThanOrEqual(chartBox.x + chartBox.width);
+  expect(rightmost).toBeGreaterThan(chartBox.x + chartBox.width * 0.9);
+  // Straight segments only, with a flat-then-step stretch across the 06:00–08:20 closure.
+  const line = await chart.locator("path[fill='none']").last().getAttribute("d");
+  expect(line).not.toMatch(/C/u);
+  expect(line).toMatch(/ L([\d.]+),([\d.]+) L\1,(?!\2 )/u);
+});
+
+test("on a weekend the 1D chart shows the 24 hours up to the last trade", async ({ page }) => {
+  // Saturday 14:00 JST: US after-hours ended at 09:00, the TSE closed Friday 15:30.
+  const now = Date.parse("2026-10-10T05:00:00Z");
+  await page.clock.setFixedTime(now);
+  const series = (market: "JP" | "US", base: number) => {
+    const times: number[] = [];
+    for (const window of marketSessionWindows(market, now - 4 * 86_400_000, now)) {
+      if (window.kind !== "lunch") for (let time = window.start; time < window.end; time += 1_800_000) times.push(Math.floor(time / 1000));
+    }
+    return { times, prices: times.map((_, index) => base * (1 + 0.001 * (index % 7))) };
+  };
+  const market = demoMarket({ generatedAt: new Date(now).toISOString(), intraday: { "sec-7203": series("JP", 3_000), "sec-us-aapl": series("US", 220) } });
+  market.quotes = market.quotes!.map((quote) => ({ ...quote, time: Math.floor(now / 1000) - 5 * 3_600_000, fetchedAt: Math.floor(now / 1000) }));
+  await installDemo(page, market);
+  await page.goto("/");
+  await expect(total(page)).toBeVisible();
+  await page.locator(".daily-range .chart-range-presets").getByRole("button", { name: "1D", exact: true }).click();
+  const chart = page.locator(".daily-chart .lightweight-chart").first();
+  expect(Number(await chart.getAttribute("data-source-points"))).toBeGreaterThan(20);
+  const labels = page.locator(".daily-chart .chart-session-label");
+  await expect(labels.filter({ hasText: "東証" }).first()).toBeVisible();
+  await expect(labels.filter({ hasText: "米国" })).toHaveCount(1);
+});
+
 test("re-reads once soon after the server answered with quotes it had not refreshed yet", async ({ page }) => {
   const market = demoMarket();
   const stale = Math.floor(Date.now() / 1000) - 120;

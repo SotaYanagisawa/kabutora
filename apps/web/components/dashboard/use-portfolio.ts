@@ -24,7 +24,7 @@ import { useEffect, useMemo, useRef, type Dispatch, type SetStateAction } from "
 import { portfolioMarketSessions } from "@/lib/market/market-session";
 import { securityMatchesPortfolioFilter, type PortfolioFilter } from "@/lib/portfolio/portfolio-filter";
 import { companyDisplayName, companyLegalName } from "@/lib/ui/company-name";
-import { costBasisGroupForAccount, filterDatedHistory } from "./helpers";
+import { costBasisGroupForAccount, filterDatedHistory, lastTradingDay } from "./helpers";
 import type { CustomDateRange, DashboardHolding, DashboardSecurity, DisplayCurrency, DisplayQuote, Freshness, MarketDiagnostics, MarketSecurity, RangeKey, SearchSecurity, Seed, View } from "./types";
 import type { MarketDataState } from "./use-market-data";
 
@@ -199,11 +199,12 @@ export function usePortfolio(o: Options) {
   // ---- Charts ----------------------------------------------------------------------------------------
   const daily = useMemo(() => portfolioHistory(book, { target: summaryCurrency, fx, today, include }), [book, fx, include, summaryCurrency, today]);
   const intradayRange = o.range === "1D" || o.range === "1W";
+  // The whole week, so 1D can still show the last trading day on a weekend.
   const intraday = useMemo(() => (intradayRange
-    ? intradayHistory(book, { target: summaryCurrency, fx, today, include, since: nowSeconds - (o.range === "1D" ? DAY_SECONDS : 7 * DAY_SECONDS), now: nowSeconds })
-    : []), [book, fx, include, intradayRange, nowSeconds, o.range, summaryCurrency, today]);
+    ? intradayHistory(book, { target: summaryCurrency, fx, today, include, since: nowSeconds - 7 * DAY_SECONDS, now: nowSeconds })
+    : []), [book, fx, include, intradayRange, nowSeconds, summaryCurrency, today]);
   const history: HistoryPoint[] = useMemo(() => {
-    if (o.range === "1D") return intraday;
+    if (o.range === "1D") return lastTradingDay(intraday);
     if (o.range === "1W" && intraday.length > 5) return intraday;
     return filterDatedHistory(daily, o.range, o.customRange);
   }, [daily, intraday, o.customRange, o.range]);
