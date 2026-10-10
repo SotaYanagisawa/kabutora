@@ -41,40 +41,20 @@ export function downsampleChartPoints<T>(
   return [...selected].sort((a, b) => a - b).map((index) => ({ index, value: data[index] }));
 }
 
-export function monotoneSvgPath(points: SvgPoint[]): string {
-  const finite = points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
-  if (!finite.length) return "";
-  if (finite.length === 1) return `M${finite[0].x.toFixed(2)},${finite[0].y.toFixed(2)}`;
-
-  const slopes = finite.slice(0, -1).map((point, index) => {
-    const next = finite[index + 1];
-    return (next.y - point.y) / Math.max(Number.EPSILON, next.x - point.x);
-  });
-  const tangents = new Array<number>(finite.length);
-  tangents[0] = slopes[0];
-  tangents[finite.length - 1] = slopes.at(-1)!;
-  for (let index = 1; index < finite.length - 1; index += 1) {
-    const before = slopes[index - 1];
-    const after = slopes[index];
-    if (before === 0 || after === 0 || before * after <= 0) {
-      tangents[index] = 0;
-    } else {
-      const leftWidth = finite[index].x - finite[index - 1].x;
-      const rightWidth = finite[index + 1].x - finite[index].x;
-      const firstWeight = 2 * rightWidth + leftWidth;
-      const secondWeight = rightWidth + 2 * leftWidth;
-      tangents[index] = (firstWeight + secondWeight) / (firstWeight / before + secondWeight / after);
-    }
-  }
-
-  let path = `M${finite[0].x.toFixed(2)},${finite[0].y.toFixed(2)}`;
-  for (let index = 0; index < finite.length - 1; index += 1) {
-    const current = finite[index];
-    const next = finite[index + 1];
-    const width = next.x - current.x;
-    path += ` C${(current.x + width / 3).toFixed(2)},${(current.y + tangents[index] * width / 3).toFixed(2)}`;
-    path += ` ${(next.x - width / 3).toFixed(2)},${(next.y - tangents[index + 1] * width / 3).toFixed(2)}`;
-    path += ` ${next.x.toFixed(2)},${next.y.toFixed(2)}`;
+/**
+ * Straight segments through the points: no smoothing, so the line never shows a move the data does not have.
+ * A `hold` point is reached by a step: the previous value stays flat up to its x, then moves there.
+ */
+export function linearSvgPath(points: Array<SvgPoint & { hold?: boolean }>): string {
+  let path = "";
+  let previous: SvgPoint | null = null;
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+    const x = point.x.toFixed(2);
+    const y = point.y.toFixed(2);
+    if (!previous) path = `M${x},${y}`;
+    else path += point.hold ? ` L${x},${previous.y.toFixed(2)} L${x},${y}` : ` L${x},${y}`;
+    previous = point;
   }
   return path;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartAxisTicks, donutArcPath, downsampleChartPoints, monotoneSvgPath, niceChartAxis } from "./chart-geometry";
+import { chartAxisTicks, donutArcPath, downsampleChartPoints, linearSvgPath, niceChartAxis } from "./chart-geometry";
 
 describe("lightweight chart geometry", () => {
   it("keeps endpoints and bucket extrema while bounding rendered points", () => {
@@ -11,10 +11,10 @@ describe("lightweight chart geometry", () => {
     expect(sampled.length).toBeLessThanOrEqual(502);
   });
 
-  it("creates a smooth finite path without overshooting a monotone segment", () => {
-    const path = monotoneSvgPath([{ x: 0, y: 10 }, { x: 10, y: 8 }, { x: 20, y: 3 }]);
-    expect(path).toMatch(/^M0\.00,10\.00 C/u);
-    expect(path).not.toContain("NaN");
+  it("draws straight segments, and holds the value flat across a step", () => {
+    expect(linearSvgPath([{ x: 0, y: 10 }, { x: 10, y: 8 }, { x: 20, y: 3 }])).toBe("M0.00,10.00 L10.00,8.00 L20.00,3.00");
+    expect(linearSvgPath([{ x: 0, y: 10 }, { x: 50, y: 4, hold: true }, { x: Number.NaN, y: 1 }])).toBe("M0.00,10.00 L50.00,10.00 L50.00,4.00");
+    expect(linearSvgPath([])).toBe("");
   });
 
   it("matches the zero-based tick spacing used by the portfolio charts", () => {

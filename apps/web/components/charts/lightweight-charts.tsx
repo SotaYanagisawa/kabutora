@@ -1,6 +1,6 @@
 "use client";
 
-import { chartAxisTicks, donutArcPath, downsampleChartPoints, monotoneSvgPath, niceChartAxis, type SvgPoint } from "@/lib/charts/chart-geometry";
+import { chartAxisTicks, donutArcPath, downsampleChartPoints, linearSvgPath, niceChartAxis, type SvgPoint } from "@/lib/charts/chart-geometry";
 import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import ChartErrorBoundary from "./chart-error-boundary";
 
@@ -43,6 +43,8 @@ export type ChartBand = {
 };
 
 const BAND_LABEL_SIZE = 9;
+/** A time-axis gap longer than this (and than 3× the usual spacing) is drawn flat, then a step. */
+const GAP_MIN_MS = 15 * 60_000;
 /** Approximate rendered width: full-width glyphs ≈ 1em, others ≈ 0.6em. */
 const labelWidth = (text: string, fontSize: number) => [...text].reduce((width, char) => width + (/[\u3000-\u9fff\uff00-\uffef]/u.test(char) ? fontSize : fontSize * 0.6), 0);
 
@@ -142,16 +144,30 @@ function LightweightAreaChartView<T>({
   const xAt = (index: number) => times ? xOfTime(times[index]) : left + (data.length <= 1 ? plotWidth / 2 : (index / (data.length - 1)) * plotWidth);
   const yAt = (value: number) => top + ((domain[1] - value) / Math.max(Number.EPSILON, domain[1] - domain[0])) * plotHeight;
 
-  const sampled = useMemo(
-    () => downsampleChartPoints(data, Math.max(160, Math.floor(plotWidth * 1.5)), series.map((item) => item.read)),
-    [data, plotWidth, series],
-  );
+  // On a time axis, a gap well beyond the usual point spacing is a closed market: nothing traded, so the value
+  // holds flat across it and moves only at the next point.
+  const holdsBefore = useMemo(() => {
+    if (!times || times.length < 3) return null;
+    const spacing = times.slice(1).map((time, index) => time - times[index]).sort((a, b) => a - b);
+    const gap = Math.max(GAP_MIN_MS, spacing[spacing.length >> 1] * 3);
+    return times.map((time, index) => index > 0 && time - times[index - 1] > gap);
+  }, [times]);
+  const sampled = useMemo(() => {
+    const picked = downsampleChartPoints(data, Math.max(160, Math.floor(plotWidth * 1.5)), series.map((item) => item.read));
+    if (!holdsBefore || picked.length === data.length) return picked;
+    // Keep both ends of every gap so its flat stretch starts at the true last value.
+    const kept = new Set(picked.map((point) => point.index));
+    holdsBefore.forEach((hold, index) => {
+      if (hold) kept.add(index - 1).add(index);
+    });
+    return [...kept].sort((a, b) => a - b).map((index) => ({ index, value: data[index] }));
+  }, [data, holdsBefore, plotWidth, series]);
   const paths = useMemo(() => series.map((item) => {
-    const points: SvgPoint[] = sampled.map(({ index, value }) => ({ x: xAt(index), y: yAt(item.read(value)) }));
-    const line = monotoneSvgPath(points);
+    const points: Array<SvgPoint & { hold?: boolean }> = sampled.map(({ index, value }) => ({ x: xAt(index), y: yAt(item.read(value)), hold: holdsBefore?.[index] }));
+    const line = linearSvgPath(points);
     const area = points.length ? `${line} L${points.at(-1)!.x.toFixed(2)},${(top + plotHeight).toFixed(2)} L${points[0].x.toFixed(2)},${(top + plotHeight).toFixed(2)} Z` : "";
     return { ...item, points, line, area };
-  }), [plotHeight, sampled, series, size.width, domain, top]);
+  }), [plotHeight, sampled, series, size.width, domain, top, holdsBefore]);
   const yTicks = useMemo(() => chartAxisTicks(domain, tickCount), [domain, tickCount]);
   const xTickCount = Math.min(data.length, Math.max(2, Math.min(4, Math.floor(plotWidth / Math.max(54, minTickGap + 28)))));
   const xTickIndexes = useMemo(() => [...new Set(Array.from({ length: xTickCount }, (_, index) => Math.round(((index + 1) * (data.length - 1)) / xTickCount)))], [data.length, xTickCount]);
@@ -177,11 +193,16 @@ function LightweightAreaChartView<T>({
     });
     const placed: Array<[number, number]> = [];
     const labels: Array<{ key: string; x: number; text: string; color: string }> = [];
-    for (const rect of [...rects].sort((a, b) => a.priority - b.priority || a.x1 - b.x1)) {
+    // A session still running at the latest point is labelled first, newest first: one that just opened is only a
+    // sliver wide, so its label may reach left past the band's start instead of being dropped.
+    const live = (rect: (typeof rects)[number]) => rect.end >= end;
+    const order = [...rects].sort((a, b) => Number(live(b)) - Number(live(a)) || (live(a) ? b.start - a.start : 0) || a.priority - b.priority || a.x1 - b.x1);
+    for (const rect of order) {
       if (!rect.label) continue;
       const width = labelWidth(rect.label, BAND_LABEL_SIZE) + 4;
-      const x = Math.max(rect.x1, left) + 2;
-      if (x + width > rect.x2 + 1 || x + width > left + plotWidth) continue;
+      const plotEnd = left + plotWidth;
+      const x = live(rect) ? Math.max(left, Math.min(Math.max(rect.x1, left) + 2, plotEnd - width)) : Math.max(rect.x1, left) + 2;
+      if (!live(rect) && (x + width > rect.x2 + 1 || x + width > plotEnd)) continue;
       if (placed.some(([from, to]) => x < to + 3 && x + width > from - 3)) continue;
       placed.push([x, x + width]);
       labels.push({ key: `${rect.start}-${rect.color}-${rect.label}`, x, text: rect.label, color: rect.color });

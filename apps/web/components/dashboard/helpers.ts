@@ -65,6 +65,27 @@ export function resilientBrowserStorage(kind: "localStorage" | "sessionStorage" 
 }
 
 export const safeLocalStorage = resilientBrowserStorage("localStorage");
+
+/** After this long without a trade (weekend, holiday, overnight), the 1D chart ends at the last trade instead of now. */
+const MARKET_IDLE_MS = 3 * 3_600_000;
+const DAY_MS = 86_400_000;
+
+/**
+ * The 1D window of an intraday history whose final point is the live value at now: the 24 hours up to now or,
+ * once nothing has traded for a while, the 24 hours up to the last trade, which the live value then stands in for.
+ */
+export function lastTradingDay<T extends { date: string }>(points: T[]): T[] {
+  if (points.length < 2) return points;
+  const live = points.at(-1)!;
+  const now = Date.parse(live.date);
+  const lastTrade = Date.parse(points.at(-2)!.date);
+  const end = now - lastTrade > MARKET_IDLE_MS ? lastTrade : now;
+  const window = points.slice(0, -1).filter((point) => {
+    const time = Date.parse(point.date);
+    return time >= end - DAY_MS && time < end;
+  });
+  return [...window, end === now ? live : { ...live, date: new Date(end).toISOString() }];
+}
 export function filterDatedHistory<T extends { date: string }>(
   points: T[],
   range: RangeKey,
